@@ -111,12 +111,14 @@ export function electronsHtml(counts: MetalCount[]): string {
 const SUBS = '₀₁₂₃₄₅₆₇₈₉';
 const sub = (n: number) => String(n).replace(/\d/g, (d) => SUBS[Number(d)]);
 
-export function analysisHtml(r: FragmentResult, i: number, adductText: string, extras: { stereo?: string; unknown?: string[]; pubchem?: string; electrons?: string }): string {
+export function analysisHtml(r: FragmentResult, i: number, adductText: string, extras: { stereo?: string; unknown?: string[]; pubchem?: string; electrons?: string; rGroups?: string[] }): string {
   if (r.error) return `<div class="frag"><p class="warn">${esc(r.error)}</p></div>`;
-  const ion = ionInfo(r, adductText);
-  const ea = analysisPercents(r);
+  // with R groups only the core is known: no ion or elemental analysis for a compound not drawn
+  const core = !!extras.rGroups?.length;
+  const ion = core ? null : ionInfo(r, adductText);
+  const ea = core ? null : analysisPercents(r);
   const p = r.props;
-  const rows: string[] = [
+  const rows: string[] = core ? [] : [
     `<tr><th>Exact mass</th><td>${r.exact.toFixed(4)}</td></tr>`,
     `<tr><th>Mol. wt.</th><td>${r.mw.toFixed(2)}</td></tr>`,
   ];
@@ -153,12 +155,13 @@ export function analysisHtml(r: FragmentResult, i: number, adductText: string, e
       </table>${jb.missing ? `<p class="muted small">${esc(jb.missing)}</p>` : ''}</details>`;
   }
   const buttons = `<div class="an-buttons">
-      <button type="button" data-insert="formula:${i}" title="Attach the formula and masses under the structure: they follow it and update when it changes (choose what is shown in the Style panel)">Attach descriptors</button>
+      ${core ? '' : `<button type="button" data-insert="formula:${i}" title="Attach the formula and masses under the structure: they follow it and update when it changes (choose what is shown in the Style panel)">Attach descriptors</button>`}
       ${ion ? `<button type="button" data-insert="hrms:${i}" title="Put an HRMS line under the structure (ACS style); type the found value into it">HRMS text</button>` : ''}
       ${ea ? `<button type="button" data-insert="ea:${i}" title="Put an elemental analysis line under the structure (ACS style)">Anal. text</button>` : ''}
     </div>`;
   return `<div class="frag">
-    <div class="formula">${formulaHtml(r.formula)}</div>
+    <div class="formula">${formulaHtml(r.formula)}${core ? `·${extras.rGroups!.map(esc).join('·')} <span class="muted">(core only)</span>` : ''}</div>
+    ${core ? `<p class="muted small">${extras.rGroups!.map(esc).join(', ')} could be anything, so there are no masses. Chemistry ▸ R-Group Table works out each compound.</p>` : ''}
     <table>${rows.join('')}</table>
     ${extras.electrons ?? ''}${iso}${props}
     <div class="smiles" title="SMILES">${esc(r.smiles)}</div>

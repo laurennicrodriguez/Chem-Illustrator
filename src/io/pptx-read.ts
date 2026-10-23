@@ -11,26 +11,46 @@
 
 import type { PinnedComment } from '../document/comments';
 import { COMMENT_REL, readCommentAuthors, readLegacyComments, readModernComments } from './pptx-comments';
-import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureLook } from '../model';
+import { Doc, Caption, Shape, TextRun, ParaStyle, Arrow, Contents, Placeholder, Justify, stripBase, type TableCell, type TableData, type PictureFx, type BackgroundRemoval, type PictureLook, type Frame, type ShapeMath, type Media } from '../model';
 import { layoutTable, NOTE_SCALE } from '../table';
+import { PPT_STYLE_IDS, slideCellLook, unstyledRuns } from '../deck/table-styles';
 import { linesFromBorders, type Borders } from './cdxml-table';
-import { turnAbout, normDegrees, type Vec, type Rect } from '../geom';
+import { turnAbout, normDegrees, DEG, type Vec, type Rect } from '../geom';
+import { POINTS, rotation, snapshot, transform } from '../editor/arrange';
 import { PackageReader, NS, REL, kids, kid, rAttr, fromEmu } from './ooxml';
+import { linkFromTarget } from '../links';
 import { readCdxml } from './cdxml';
+import { drawingInEmf } from '../render/emf';
 import { dataUrl, imageSize } from '../render/images';
+import { knownShape, tidyFx } from '../render/picture-fx';
+import { readPictureFx } from './picture-xml';
 import { layoutText, ASCENT } from '../text/layout';
-import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideColours } from '../deck/deck';
-import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure } from './pptx-write';
+import { Master, SlideSize, LayoutId, defaultMaster, textStyles, slideDrawingStyle, slideBackground, slideColours, hasLayout, newLayoutId, deckLayouts, type LayoutDef, type PlaceholderBox, type SectionCount, type DeckSettings, type SlideHF, type DateFormat, showsNumber, showsFooter, showsDate } from '../deck/deck';
+import { backgroundColour, isPlain, sameBackground, type Background } from '../deck/background';
+import { readFill, readOneFill, type FillContext } from './pptx-background';
+import { TAG, PPT_ASCENT, MIME_EXT, arialMeasure, NS_A14, NS_M, swapBox } from './pptx-write';
+import { ommlToTex, toOmml } from '../document/math';
+import { shapeMathPicture, shapeMathSize } from '../deck/equation';
 import { GEOS } from '../design/geo';
-import { gluePoint } from '../objects';
-import { readTransition, readTiming, type Transition, type Anim, type AnimTarget } from '../deck/animation';
+import { cleanDiagram, textFromShapes } from '../design/diagrams';
+import { gluePoint, arrowPoints, boxOf as pointsBox } from '../objects';
+import { readEffects } from './pptx-effects';
+import { readViewProps } from '../deck/guides';
+import { readMasterHF } from '../deck/notes-pages';
+import { readShowPr, readCustShows } from '../deck/show-setup';
+import { NARRATION_NAME } from '../deck/narration';
+import { readTransition, readTiming, readMediaTiming, type Transition, type Anim, type AnimTarget } from '../deck/animation';
+import { mediaMime } from '../deck/media';
+import { readChart } from './office-chart';
+import { freshBox, sameBoxData, sizedBox, type ChartBox } from '../sheet/chart-box';
+import { chartBoxPng } from '../render/chart-box-paint';
 
 /** PowerPoint's shapes that are shapes in the library, by PowerPoint's name. */
 const GEO_BY_PRST = new Map(GEOS.filter((g) => g.prst).map((g) => [g.prst!, g.id]));
 /** PowerPoint shapes that come into slides as plain boxes and ovals (with their text beside them as text boxes). */
 const PLAIN_PRST = new Set(['rect', 'roundRect', 'ellipse', 'snip1Rect', 'flowChartProcess', 'flowChartAlternateProcess']);
 
-export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[] }
+export interface PptxSlide { layout: LayoutId; contents: Contents; notes: string; transition?: Transition; anims?: Anim[]; comments?: PinnedComment[]; background?: Background; hideGraphics?: boolean; hidden?: boolean; hf?: SlideHF }
 export interface PptxRead {
   size: SlideSize;
   master: Master;
@@ -39,6 +59,15 @@ export interface PptxRead {
   warnings: string[];
   /** Saved from Design mode (opens there again). */
   design: boolean;
+  /** The deck's sections, in order (none when the file has none). */
+  sections?: SectionCount[];
+  /** Set Up Show, and custom shows (naming their slides by their places in the deck). */
+  settings?: DeckSettings;
+}
+
+/** A plain box or oval that needs a design shape to keep its look: a picture or gradient fill, or effects past a shadow. */
+function fancyFill(spPr: Element | null): boolean {
+  return !!(kid(spPr, 'blipFill') || kid(spPr, 'gradFill') || kid(spPr, 'sp3d', 'bevelT') || kids(kid(spPr, 'effectLst')).some((k) => k.localName !== 'outerShdw'));
 }
 
 const EXT_MIME: Record<string, string> = Object.fromEntries(Object.entries(MIME_EXT).map(([m, e]) => [e, m]));
@@ -106,7 +135,7 @@ function fromHsl(h: number, s: number, l: number): [number, number, number] {
 }
 
 /** The colour in a fill or colour element (srgbClr, schemeClr…, with PowerPoint's lighter/darker changes). */
-function colorIn(el: Element | null, theme: Theme, clrMap: Record<string, string>): string | null {
+function colorIn(el: Element | null, theme: Theme, clrMap: Record<string, string>, ph: string | null = null): string | null {
   if (!el) return null;
   const c = kids(el).find((k) => /Clr$/.test(k.localName));
   if (!c) return null;
@@ -114,7 +143,8 @@ function colorIn(el: Element | null, theme: Theme, clrMap: Record<string, string
   let hex: string | null = null;
   switch (c.localName) {
     case 'srgbClr': hex = v; break;
-    case 'schemeClr': hex = theme.colors[clrMap[v] ?? v] ?? null; break;
+    // (phClr: the colour a theme's fill style is used with)
+    case 'schemeClr': hex = v === 'phClr' ? ph : theme.colors[clrMap[v] ?? v] ?? null; break;
     case 'prstClr': hex = PRESET[v] ?? '000000'; break;
     case 'sysClr': hex = c.getAttribute('lastClr') ?? (v === 'window' ? 'FFFFFF' : '000000'); break;
     case 'scrgbClr': hex = ['r', 'g', 'b'].map((k) => Math.round(Math.pow(Number(c.getAttribute(k) ?? 0) / 100000, 1 / 2.2) * 255).toString(16).padStart(2, '0')).join(''); break;
@@ -134,6 +164,18 @@ function colorIn(el: Element | null, theme: Theme, clrMap: Record<string, string
     }
   }
   return rgbHex(r, g, b);
+}
+
+/** A styled table read back: cell fills and text colours that only repeat its style are dropped. */
+function unstyle(t: TableData): TableData {
+  if (!slideCellLook(t, 0, 0)) return t;
+  const rows = t.rows.map((row, r) => row.map((cell, c) => {
+    const look = slideCellLook(t, r, c);
+    const out: TableCell = { ...cell, runs: unstyledRuns(cell.runs, look) };
+    if (out.fill && look?.fill && out.fill.toLowerCase() === look.fill.toLowerCase()) delete out.fill;
+    return out;
+  }));
+  return { ...t, rows };
 }
 
 // ---------------------------------------------------------------- text formatting, as PowerPoint inherits it
@@ -191,6 +233,9 @@ class Reader {
   private r: PackageReader;
   warnings = new Set<string>();
   private theme: Theme = { colors: {}, major: 'Arial', minor: 'Arial' };
+  /** The theme's fill styles (backgrounds can use them) and where the theme is (for its pictures). */
+  private themeFills: Element | null = null;
+  private themePath: string | null = null;
   private clrMap: Record<string, string> = { bg1: 'lt1', tx1: 'dk1', bg2: 'lt2', tx2: 'dk2' };
   private master!: Part;
   private defaultText: Element | null = null;
@@ -198,6 +243,10 @@ class Reader {
   /** The layout of the slide being read, when the file says (files saved here). */
   private curLayout: LayoutId | undefined;
   private design = false;
+  /** The slides' parts, the one being read, and the ids slides had here (files saved here), for links. */
+  private slidePaths: string[] = [];
+  private curPath = '';
+  private slideIds = new Map<number, number>();
   private masterOut!: Master;
   private size: SlideSize = { w: 960, h: 540 };
   /** The slide's tables, placed once their titles and footnotes (separate text boxes) are known. */
@@ -259,8 +308,26 @@ class Reader {
     this.master = master;
     this.readTheme();
     this.masterOut = this.readMaster(slidePaths);
+    if (!this.ourMaster) {
+      // notes pages' and handouts' header and footer, as PowerPoint's masters have them
+      const nm = this.r.relOfType(main, REL.notesMaster) ?? this.r.relOfType(main, REL.handoutMaster);
+      const hf = readMasterHF(nm ? this.r.xml(nm)?.documentElement : null);
+      if (hf && (hf.header || hf.footer || hf.date || !hf.pageNumbers)) this.masterOut.notesHF = hf;
+    }
+    this.slidePaths = slidePaths;
     const slides = slidePaths.map((p) => this.slide(p));
-    return { size: this.size, master: this.masterOut, slides, warnings: [...this.warnings], design: this.design };
+    placeSlideLinks(slides, this.slideIds);
+    // the slides' ids in the file (as PowerPoint's sections name them)
+    const sldIds = kids(kid(root, 'sldIdLst'), 'sldId').filter((x) => { const t = rels.get(rAttr(x, 'id') ?? '')?.target; return !!t && this.r.has(t); }).map((x) => x.getAttribute('id') ?? '');
+    const sections = readSections(root, sldIds);
+    // Set Up Show, and custom shows
+    const props = this.r.relOfType(main, REL.presProps);
+    const show = readShowPr(props ? this.r.xml(props)?.documentElement ?? null : null);
+    const customShows = readCustShows(root, (rid) => { const t = rels.get(rid)?.target; return t ? slidePaths.indexOf(t) : -1; }, (el) => rAttr(el, 'id'));
+    const vp = this.r.relOfType(main, REL.viewProps);
+    const view = readViewProps(vp ? this.r.xml(vp)?.documentElement : null);
+    const settings: DeckSettings = { ...(show ? { show } : {}), ...(customShows.length ? { customShows } : {}), ...(view ? { view } : {}) };
+    return { size: this.size, master: this.masterOut, slides, warnings: [...this.warnings], design: this.design, ...(sections ? { sections } : {}), ...(Object.keys(settings).length ? { settings } : {}) };
   }
 
   private readTheme(): void {
@@ -274,13 +341,16 @@ class Reader {
       if (!v) continue;
       this.theme.colors[c.localName] = v.localName === 'sysClr' ? v.getAttribute('lastClr') ?? '000000' : v.getAttribute('val') ?? '000000';
     }
+    this.themeFills = kid(el, 'fmtScheme');
+    this.themePath = themePath;
     const fonts = kid(el, 'fontScheme');
     this.theme.major = kid(fonts, 'majorFont', 'latin')?.getAttribute('typeface') || 'Arial';
     this.theme.minor = kid(fonts, 'minorFont', 'latin')?.getAttribute('typeface') || 'Arial';
   }
 
-  private color(el: Element | null): string | null {
-    return colorIn(el, this.theme, this.clrMap);
+  private color(el: Element | null, ph: Element | null = null): string | null {
+    const p = ph ? colorIn(ph, this.theme, this.clrMap)?.slice(1) ?? null : null;
+    return colorIn(el, this.theme, this.clrMap, p);
   }
 
   /** A typeface, with the theme's title and body fonts filled in. */
@@ -296,7 +366,17 @@ class Reader {
     const m = defaultMaster();
     const root = this.master.doc.documentElement;
     const logo = this.masterLogo();
-    if (this.ourMaster) return { ...m, ...this.ourMaster, logo, drawing: { ...m.drawing, ...(this.ourMaster.drawing ?? {}) } };
+    if (this.ourMaster) {
+      const out: Master = { ...m, ...this.ourMaster, logo, drawing: { ...m.drawing, ...(this.ourMaster.drawing ?? {}) } };
+      // gradients and pictures are PowerPoint's own backgrounds, on the master and the title slide's layout
+      const fill = this.background(this.master);
+      if (fill && !isPlain(fill)) out.fill = fill;
+      const title = out.titleSlide && this.layoutPart('title');
+      // (a title slide layout with no background of its own has the master's)
+      const tfill = title ? this.background(title) ?? out.fill ?? null : null;
+      if (out.titleSlide && tfill && !isPlain(tfill)) out.titleSlide = { ...out.titleSlide, fill: tfill };
+      return out;
+    }
     const tx = kid(root, 'txStyles');
     const title = lvlOf(kid(tx, 'titleStyle'), 0), body = lvlOf(kid(tx, 'bodyStyle'), 0);
     const tR = kid(title, 'defRPr'), bR = kid(body, 'defRPr');
@@ -307,37 +387,69 @@ class Reader {
     m.titleBold = tR?.getAttribute('b') === '1';
     m.titleColor = this.color(kid(tR, 'solidFill')) ?? m.titleColor;
     m.textColor = this.color(kid(bR, 'solidFill')) ?? m.textColor;
-    m.background = this.background(root) ?? m.background;
-    // numbers and footer: as the slides show them
-    let numbers = false, footer = '';
+    const bg = this.background(this.master);
+    if (bg) {
+      m.background = backgroundColour(bg);
+      if (!isPlain(bg)) m.fill = bg;
+    }
+    // numbers, footer and date: as the slides show them
+    let numbers = false, footer = '', date: Element | null = null;
     for (const p of slidePaths) {
       const s = this.part(p);
       for (const sp of kids(s?.tree, 'sp')) {
         const ph = phOf(sp);
         if (ph?.type === 'sldNum') numbers = true;
         if (ph?.type === 'ftr' && !footer) footer = this.plain(sp);
+        if (ph?.type === 'dt' && !date) date = sp;
       }
     }
     m.slideNumbers = numbers;
     m.footer = footer;
+    if (date) {
+      // today's date in one of PowerPoint's forms, or fixed text
+      m.dateOn = true;
+      const fld = date.getElementsByTagNameNS(NS.a, 'fld')[0];
+      const type = fld?.getAttribute('type') ?? '';
+      if (/^datetime([1-9]|1[0-3])$/.test(type)) m.dateFormat = type as DateFormat;
+      else if (fld) m.dateFormat = 'datetime1';
+      else m.dateFixed = this.plain(date);
+    }
     m.drawing = slideDrawingStyle();
     m.logo = logo;
     return m;
   }
 
-  /** A slide or master's own background colour. */
-  private background(root: Element): string | null {
-    const bg = kid(root, 'cSld', 'bg');
+  /** A slide, layout or master's own background (null when it uses the one behind it). */
+  private background(part: Part): Background | null {
+    const bg = kid(part.doc.documentElement, 'cSld', 'bg');
     if (!bg) return null;
+    const ctx = (from: string): FillContext => ({
+      color: (el, ph) => this.color(el, ph),
+      picture: (blipFill) => this.blipImage(from, blipFill),
+      warn: (w) => this.warnings.add(w),
+    });
     const pr = kid(bg, 'bgPr');
-    if (pr) {
-      const solid = kid(pr, 'solidFill');
-      if (solid) return this.color(solid);
-      this.warnings.add('Slide backgrounds with pictures or shading came in as plain colours.');
-      return null;
-    }
+    if (pr) return readFill(pr, this.size, ctx(part.path));
     const ref = kid(bg, 'bgRef');
-    return ref ? this.color(ref) : null;
+    if (!ref) return null;
+    // one of the theme's fill styles, in the colour given
+    const idx = Number(ref.getAttribute('idx') ?? 0);
+    if (!idx || idx === 1000) return { kind: 'solid', color: '#ffffff' };
+    const list = kid(this.themeFills, idx > 1000 ? 'bgFillStyleLst' : 'fillStyleLst');
+    const style = kids(list)[(idx > 1000 ? idx - 1001 : idx - 1)];
+    const got = style ? readOneFill(style, this.size, ctx(this.themePath ?? part.path), ref) : null;
+    if (got) return got;
+    const c = this.color(ref);
+    return c ? { kind: 'solid', color: c } : null;
+  }
+
+  /** The layout part used by slides of one of our layouts (files saved here have one of each). */
+  private layoutPart(id: LayoutId): Part | null {
+    for (const rel of this.r.rels(this.master.path).values()) {
+      const p = this.part(rel.target);
+      if (p && p.doc.documentElement.localName === 'sldLayout' && p.doc.documentElement.getAttribute('type') === ({ title: 'title', 'title-content': 'obj', 'two-content': 'twoObj', 'title-only': 'titleOnly', blank: 'blank' } as const)[id]) return p;
+    }
+    return null;
   }
 
   /** The logo: a picture on the master (the one named Logo in files saved here, else the first). */
@@ -362,13 +474,12 @@ class Reader {
     const layoutPath = this.r.relOfType(path, REL.slideLayout);
     const layout = this.part(layoutPath);
     const tags = this.tagsOf(path, kid(s.doc.documentElement, 'cSld'));
+    this.curPath = path;
+    if (tags[TAG.slideId]) this.slideIds.set(Number(tags[TAG.slideId]), this.slidePaths.indexOf(path));
     const doc = new Doc();
     doc.style = { ...this.masterOut.drawing };
     // files saved here say which layout each slide has; a title slide can have its own colours
     this.curLayout = tags[TAG.layout] as LayoutId | undefined;
-    const bg = this.background(s.doc.documentElement);
-    const ownBg = this.curLayout ? slideColours(this.masterOut, this.curLayout).background : this.masterOut.background;
-    if (bg && bg.toLowerCase() !== ownBg.toLowerCase()) this.warnings.add('Slides with a background colour of their own now use the master\'s.');
     this.tables = [];
     this.tableParts.clear();
     this.geoIds.clear();
@@ -385,12 +496,42 @@ class Reader {
     const warn = (w: string) => this.warnings.add(w);
     const transition = readTransition(root, warn);
     const targets = this.spidTargets;
-    if (targets) this.findHighlights(doc, targets);
+    if (targets) {
+      this.findHighlights(doc, targets);
+      // how the videos and sounds play
+      const how = readMediaTiming(root);
+      doc.bulk(() => {
+        for (const [spid, m] of how) {
+          const t = targets.get(spid);
+          const sh = t?.kind === 'shape' ? doc.shapes.get(t.id) : undefined;
+          if (!sh?.video) continue;
+          const next: Media = { ...sh.video, ...m };
+          if (next.once === false) delete next.once;
+          doc.updateShape(sh.id, { video: next });
+        }
+      });
+    }
     const anims = targets ? readTiming(root, (spid) => targets.get(spid) ?? null, warn) : [];
     this.spidTargets = null;
     const comments = this.comments(path);
+    const lay: LayoutId = hasLayout(this.masterOut, id) ? id : 'title-content';
+    // the background PowerPoint shows (the slide's, else its layout's, else the master's): the slide's own when ours would differ
+    const shown = this.background(s) ?? (layout ? this.background(layout) : null) ?? slideBackground(this.masterOut, lay);
+    const background = sameBackground(shown, slideBackground(this.masterOut, lay)) ? undefined : shown;
+    const hideGraphics = /^(0|false)$/.test(root.getAttribute('showMasterSp') ?? '');
+    // Hide Slide: PowerPoint's show="0"
+    const hidden = /^(0|false)$/.test(root.getAttribute('show') ?? '');
+    // the slide number, footer and date it shows, where they differ from what the master says
+    const has = (t: string) => kids(s.tree, 'sp').some((sp) => phOf(sp)?.type === t);
+    const m = this.masterOut;
+    const own: SlideHF = {};
+    if (has('sldNum') !== showsNumber(m, lay)) own.number = has('sldNum');
+    if (m.footer.trim() && has('ftr') !== showsFooter(m, lay)) own.footer = has('ftr');
+    if (has('dt') !== showsDate(m, lay)) own.date = has('dt');
+    const hf = Object.keys(own).length ? own : undefined;
     return {
-      layout: ['title', 'title-content', 'two-content', 'title-only', 'blank'].includes(id) ? id : 'title-content', contents: doc.contents(), notes: this.notes(path),
+      layout: lay, contents: doc.contents(), notes: this.notes(path),
+      ...(background ? { background } : {}), ...(hideGraphics ? { hideGraphics } : {}), ...(hidden ? { hidden } : {}), ...(hf ? { hf } : {}),
       ...(transition && (transition.kind !== 'none' || transition.advanceAfter) ? { transition } : {}), ...(anims.length ? { anims } : {}),
       ...(comments.length ? { comments } : {}),
     };
@@ -418,9 +559,48 @@ class Reader {
     }
   }
 
+  /** PowerPoint's custom layouts read so far (by their part), as layouts of the deck's master. */
+  private ownLayouts = new Map<string, LayoutId>();
+
+  /**
+   * One of PowerPoint's custom layouts as a layout of the master: its name and its title and text
+   * placeholders where it puts them (or where the master does). Null when it has none.
+   */
+  private customLayout(layout: Part): LayoutId | null {
+    const got = this.ownLayouts.get(layout.path);
+    if (got !== undefined) return got;
+    const boxes: PlaceholderBox[] = [];
+    for (const sp of kids(layout.tree, 'sp')) {
+      const ph = phOf(sp);
+      if (!ph || SKIP_PH.has(ph.type) || !(isTitle(ph.type) || ph.type === 'subTitle' || ph.type === 'body' || ph.type === 'obj')) continue;
+      const own = kid(sp, 'spPr', 'xfrm');
+      const xf = own ?? this.inherited(null, ph).map((e) => kid(e, 'spPr', 'xfrm')).find((x) => x) ?? null;
+      const b = boxOf(xf, IDENTITY);
+      if (!b) continue;
+      const kind = phKind(ph.type);
+      if (kind === 'title' && boxes.some((x) => x.ph === 'title')) continue;
+      const algn = kid(sp, 'txBody', 'lstStyle', 'lvl1pPr')?.getAttribute('algn') ?? kid(sp, 'txBody', 'p', 'pPr')?.getAttribute('algn');
+      const r = (v: number) => +v.toFixed(4);
+      boxes.push({ ph: kind, x: r(b.x1 / this.size.w), y: r(b.y1 / this.size.h), w: r((b.x2 - b.x1) / this.size.w), h: r((b.y2 - b.y1) / this.size.h), justify: algn === 'ctr' ? 'center' : algn === 'r' ? 'right' : 'left' });
+    }
+    if (!boxes.length && !kids(layout.tree, 'sp').length) { this.ownLayouts.set(layout.path, 'blank'); return 'blank'; }
+    if (!boxes.length) return null;
+    const m = this.masterOut;
+    const list = [...deckLayouts(m), ...(m.layouts ?? [])];
+    const def: LayoutDef = { id: newLayoutId(list), name: kid(layout.doc.documentElement, 'cSld')?.getAttribute('name') || 'Custom Layout', boxes };
+    m.layouts = [...(m.layouts ?? []), def];
+    this.ownLayouts.set(layout.path, def.id);
+    return def.id;
+  }
+
   /** Our layout for PowerPoint's, by its type or else by the text boxes on the slide. */
   private layoutId(layout: Part | null, doc: Doc): LayoutId {
     const t = layout?.doc.documentElement.getAttribute('type') ?? '';
+    // PowerPoint's own custom layouts become layouts of the master, with their names and placeholders
+    if (layout && (t === 'cust' || t === '') && !this.ourMaster) {
+      const own = this.customLayout(layout);
+      if (own) return own;
+    }
     const known: Record<string, LayoutId> = {
       title: 'title', secHead: 'title', obj: 'title-content', tx: 'title-content', txAndObj: 'two-content', objAndTx: 'two-content',
       twoObj: 'two-content', twoTxTwoObj: 'two-content', twoColTx: 'two-content', titleOnly: 'title-only', blank: 'blank',
@@ -448,10 +628,12 @@ class Reader {
   }
 
   private element(s: Part, layout: Part | null, el: Element, t: Xf, doc: Doc): void {
-    if (!this.spidTargets || el.localName === 'AlternateContent') { this.elementOnly(s, layout, el, t, doc); return; }
+    if (el.localName === 'AlternateContent') { this.elementOnly(s, layout, el, t, doc); return; }
     // note what each PowerPoint shape became, for the slide's animations
     const mark = doc.idMark, tables = this.tables.length;
     this.elementOnly(s, layout, el, t, doc);
+    this.nameNew(el, doc, mark);
+    if (!this.spidTargets) return;
     const spid = Number(el.getElementsByTagNameNS(NS.p, 'cNvPr')[0]?.getAttribute('id'));
     if (!Number.isFinite(spid)) return;
     if (this.tables.length > tables) { this.tableSpids.set(tables, spid); return; }
@@ -466,7 +648,7 @@ class Reader {
 
   private elementOnly(s: Part, layout: Part | null, el: Element, t: Xf, doc: Doc): void {
     switch (el.localName) {
-      case 'sp': this.shape(s, layout, el, t, doc); break;
+      case 'sp': if (!this.ourConnector(s, el, t, doc) && !this.equation(s, el, t, doc)) this.shape(s, layout, el, t, doc); break;
       case 'pic': this.pictureEl(s, el, t, doc); break;
       case 'cxnSp': if (!this.ourConnector(s, el, t, doc)) this.line(el, kid(el, 'spPr'), t, doc); break;
       case 'grpSp': {
@@ -479,20 +661,109 @@ class Reader {
           const o = apply(t, fromEmu(off.getAttribute('x')), fromEmu(off.getAttribute('y')));
           inner = { sx, sy, tx: o.x - sx * fromEmu(chOff.getAttribute('x')), ty: o.y - sy * fromEmu(chOff.getAttribute('y')) };
         }
-        if (Number(x?.getAttribute('rot') ?? 0)) this.warnings.add('Rotated groups came in unrotated.');
+        const turned = Number(x?.getAttribute('rot') ?? 0) / 60000, gb = boxOf(x, t), before = doc.idMark;
+        // one of our diagrams: its shapes come in as they are, then the frame that keeps its text goes round them
+        const diagramTag = this.tagsOf(s.path, kid(el, 'nvGrpSpPr', 'nvPr'))[TAG.diagram];
+        const hadShapes = new Set(doc.shapes.keys()), hadArrows = new Set(doc.arrows.keys());
         this.tree(s, layout, el, inner, doc);
+        if (diagramTag && off && ext) this.diagramFrame(diagramTag, off, ext, t, doc, hadShapes, hadArrows);
+        // a turned group: everything in it turned together about the group's middle
+        if (turned && gb) turnNew(doc, before, { x: (gb.x1 + gb.x2) / 2, y: (gb.y1 + gb.y2) / 2 }, turned);
         break;
       }
       case 'graphicFrame': this.frame(s, el, t, doc); break;
       case 'AlternateContent': {
-        // the version for programs that don't know the newer form, else the newer one
+        // the version for programs that don't know the newer form, else the newer one; but an
+        // equation (Office Math in a text box) comes in from the newer form, to edit here
         const fb = kids(el, 'Fallback')[0];
-        const branch = fb && kids(fb).length ? fb : kids(el, 'Choice')[0];
+        const choices = kids(el, 'Choice');
+        // an equation (a14:m) and PowerPoint 2016's newer charts (histograms, box charts) are read from their choice: their fallback is only a picture
+        const choice = choices.find((c) => c.getElementsByTagNameNS(NS_A14, 'm').length || Array.from(c.getElementsByTagNameNS('*', 'graphicData')).some((g) => /chartex/.test(g.getAttribute('uri') ?? '')));
+        const branch = choice ?? (fb && kids(fb).length ? fb : choices[0]);
+        // a zoom PowerPoint made: its picture (the fallback) is read as a zoom, coming back or not
+        const zm = choices.map((c) => c.getElementsByTagNameNS('*', 'zmPr')[0]).find((z) => z);
+        this.zoomBack = zm ? /^(1|true)$/.test(zm.getAttribute('returnToParent') ?? '') : null;
+        if (choices.some((c) => c.getElementsByTagNameNS('*', 'sumZm').length || c.getElementsByTagNameNS('*', 'secZm').length)) this.warnings.add('Summary and section zooms came in as pictures that go to their first slides.');
         for (const k of kids(branch)) this.element(s, layout, k, t, doc);
+        this.zoomBack = null;
         break;
       }
       default: break;
     }
+  }
+
+  /**
+   * The name PowerPoint's Selection Pane shows for a shape (when it isn't one PowerPoint made up,
+   * "Picture 3"), and whether it is hidden, given to what the shape became here.
+   */
+  private nameNew(el: Element, doc: Doc, mark: number): void {
+    const nv = kids(el).find((k) => /^nv/.test(k.localName));
+    const c = kid(nv ?? null, 'cNvPr');
+    if (!c) return;
+    const name = c.getAttribute('name')?.trim() ?? '';
+    const hidden = c.getAttribute('hidden') === '1' || c.getAttribute('hidden') === 'true';
+    const shapes = [...doc.shapes.values()].filter((x) => x.id >= mark);
+    const caps = [...doc.captions.values()].filter((x) => x.id >= mark);
+    if (hidden) {
+      for (const x of shapes) doc.updateShape(x.id, { hidden: true });
+      for (const x of caps) doc.updateCaption(x.id, { hidden: true });
+    }
+    if (!name || el.localName === 'grpSp' || PPT_NAME.test(name)) return;
+    if (shapes.length === 1) doc.updateShape(shapes[0].id, { name });
+    else if (!shapes.length && caps.length === 1) doc.updateCaption(caps[0].id, { name });
+  }
+
+  /**
+   * An equation (PowerPoint's Office Math in a text box): one to change in the equation window,
+   * its LaTeX as typed here when PowerPoint has not changed it. Its box is the equation's own size,
+   * where PowerPoint shows it in the text box. False when the text box holds no equation.
+   */
+  private equation(s: Part, sp: Element, t: Xf, doc: Doc): boolean {
+    const m = sp.getElementsByTagNameNS(NS_A14, 'm')[0];
+    const maths = m ? Array.from(m.getElementsByTagNameNS(NS_M, 'oMath')) : [];
+    const frame = boxOf(kid(sp, 'spPr', 'xfrm'), t);
+    if (!maths.length || !frame) return false;
+    const fromFile = maths.map((x) => ommlToTex(x)).join(' \\quad ');
+    if (!fromFile.trim()) return false;
+    const rPr = m.getElementsByTagNameNS(NS.a, 'rPr')[0] ?? null;
+    const sz = Number(rPr?.getAttribute('sz'));
+
+    let ours: ShapeMath | null = null;
+    try {
+      const tag = this.tagsOf(s.path, kid(sp, 'nvSpPr', 'nvPr'))[TAG.math];
+      ours = tag ? JSON.parse(tag) as ShapeMath : null;
+    } catch { ours = null; }
+    // the LaTeX typed here, unless PowerPoint's copy says something else now
+    const same = !!ours?.tex && texOfOmml(ours.tex) === fromFile;
+    const math: ShapeMath = {
+      tex: same ? ours!.tex : fromFile,
+      size: same ? ours!.size : sz > 0 ? sz / 100 : 18,
+      color: this.color(kid(rPr, 'solidFill')) ?? ours?.color ?? slideColours(this.masterOut, this.curLayout ?? 'title-content').textColor,
+      font: ours?.font ?? this.masterOut.bodyFont,
+    };
+    // saved here: the box it had; made or changed in PowerPoint: the equation's own size at its text size, in the middle of its text box
+    const nat = shapeMathSize(math, arialMeasure);
+    const k = sz > 0 ? sz / 100 / math.size : 1;
+    const cx = (frame.x1 + frame.x2) / 2, cy = (frame.y1 + frame.y2) / 2;
+    const box: Rect = same ? frame : { x1: cx - (nat.w * k) / 2, y1: cy - (nat.h * k) / 2, x2: cx + (nat.w * k) / 2, y2: cy + (nat.h * k) / 2 };
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: shapeMathPicture(math, arialMeasure), px: { w: Math.round(nat.w), h: Math.round(nat.h) }, math, ...turn(frame) });
+    return true;
+  }
+
+  /** The invisible frame of a diagram saved here, round the shapes its group brought in, keeping its text (with any words changed in PowerPoint). */
+  private diagramFrame(tag: string, off: Element, ext: Element, t: Xf, doc: Doc, hadShapes: Set<number>, hadArrows: Set<number>): void {
+    let saved: { s?: Partial<Shape> } | null;
+    try { saved = JSON.parse(tag); } catch { return; }
+    const diagram = cleanDiagram(saved?.s?.diagram);
+    if (!diagram) return;
+    const shapes = [...doc.shapes.keys()].filter((id) => !hadShapes.has(id));
+    const arrows = [...doc.arrows.keys()].filter((id) => !hadArrows.has(id));
+    const o = apply(t, fromEmu(off.getAttribute('x')), fromEmu(off.getAttribute('y')));
+    const box = { x1: o.x, y1: o.y, x2: o.x + t.sx * fromEmu(ext.getAttribute('cx')), y2: o.y + t.sy * fromEmu(ext.getAttribute('cy')) };
+    const frame: Frame = { atoms: [], captions: [], arrows, shapes, padX: 0, padY: 0, fit: true };
+    const made = doc.addShape({ kind: 'geo', geo: 'rect', ...box, filled: false, lineWidth: 0, color: '#000000', name: 'Diagram', frame, diagram: { ...diagram, w: box.x2 - box.x1, h: box.y2 - box.y1 } });
+    const text = textFromShapes(doc, made);
+    if (text !== diagram.text) doc.updateShape(made.id, { diagram: { ...made.diagram!, text } });
   }
 
   /** Tables, charts, and objects from other programs (ChemDraw) in PowerPoint. */
@@ -500,7 +771,7 @@ class Reader {
     const data = kid(el, 'graphic', 'graphicData');
     const uri = data?.getAttribute('uri') ?? '';
     if (/table$/.test(uri)) { this.table(s, el, t); return; }
-    if (/chart/.test(uri)) { this.warnings.add('Charts are not brought in.'); return; }
+    if (/chart/.test(uri)) { this.chart(s, el, data!, t, doc); return; }
     // an object from another program: PowerPoint keeps a picture of it, which comes in as a picture
     const find = (e: Element | null): Element | null => {
       if (!e) return null;
@@ -518,12 +789,38 @@ class Reader {
     const img = this.image(s.path, pic);
     if (!img || !box) return;
     if (/ChemDraw/i.test(ole?.getAttribute('progId') ?? '')) this.warnings.add('ChemDraw objects came in as pictures.');
-    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}) });
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...turn(box) });
+  }
+
+  /** A chart: PowerPoint's own (its numbers from what PowerPoint cached), or ours when it charts the same numbers. */
+  private chart(s: Part, el: Element, data: Element, t: Xf, doc: Doc): void {
+    const box = boxOf(kid(el, 'xfrm'), t);
+    const ref = kid(data, 'chart');
+    const path = ref ? this.r.rels(s.path).get(rAttr(ref, 'id') ?? '')?.target : undefined;
+    if (!box || !path) return;
+    const w = box.x2 - box.x1, h = box.y2 - box.y1;
+    const got = readChart(this.r, path, w, h);
+    if (!got) { this.warnings.add('Some charts could not be read and were left out.'); return; }
+    let kept: ChartBox | null = null;
+    try {
+      const tag = this.tagsOf(s.path, kid(el, 'nvGraphicFramePr', 'nvPr'))[TAG.chart];
+      kept = tag ? JSON.parse(tag) as ChartBox : null;
+    } catch { kept = null; }
+    const chosen = sizedBox(kept?.chart && Array.isArray(kept.cells) && sameBoxData(kept, got.box) ? freshBox(kept) : got.box, w, h);
+    if (chosen === got.box && got.partial) this.warnings.add('Some charts mix chart types (a line over columns, a second axis): they show as one type.');
+    const alt = kid(el, 'nvGraphicFramePr', 'cNvPr')?.getAttribute('descr')?.trim();
+    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: chartBoxPng(chosen, w, h), px: { w: chosen.chart.w, h: chosen.chart.h }, chart: chosen, ...(alt ? { alt } : {}) });
   }
 
   /** A picture's image (as a data URL), its size in pixels and its cropping. */
   private image(from: string, pic: Element): { src: string; px: { w: number; h: number }; crop: Shape['crop'] | null; mime: string } | null {
-    const blip = kid(pic, 'blipFill', 'blip');
+    const fill = kid(pic, 'blipFill');
+    return fill ? this.blipImage(from, fill) : null;
+  }
+
+  /** The picture of a blipFill (a picture's, or a background's). */
+  private blipImage(from: string, fill: Element): { src: string; px: { w: number; h: number }; crop: Shape['crop'] | null; mime: string } | null {
+    const blip = kid(fill, 'blip');
     if (!blip) return null;
     const rels = this.r.rels(from);
     // PowerPoint shows the SVG when there is one; so do we
@@ -537,16 +834,30 @@ class Reader {
     if (!bytes) return null;
     const mime = EXT_MIME[target.split('.').pop()!.toLowerCase()] ?? 'application/octet-stream';
     if (!SHOWABLE.has(mime)) this.warnings.add('Some pictures (old Windows WMF metafiles, or TIFF) can\'t be shown here yet; they are kept and saved back as they were.');
-    const src = kid(pic, 'blipFill', 'srcRect');
+    const src = kid(fill, 'srcRect');
     const f = (k: string) => Math.max(0, Number(src?.getAttribute(k) ?? 0) / 100000);
     const crop = src ? { l: f('l'), t: f('t'), r: f('r'), b: f('b') } : null;
     return { src: dataUrl(bytes, mime), px: imageSize(bytes, mime) ?? { w: 100, h: 100 }, crop: crop && (crop.l || crop.t || crop.r || crop.b) ? crop : null, mime };
   }
 
+  /** The drawing inside a picture (a metafile) copied from Chem Illustrator, with the area it covered. */
+  private emfDrawing(from: string, pic: Element): { cdxml: string; box: string } | null {
+    const target = this.r.rels(from).get(rAttr(kid(pic, 'blipFill', 'blip'), 'embed') ?? '')?.target;
+    if (!target || !/\.emf$/i.test(target)) return null;
+    const bytes = this.r.bytes(target);
+    const cdxml = bytes ? drawingInEmf(bytes) : null;
+    if (!cdxml) return null;
+    try {
+      const b = readCdxml(cdxml).doc.bounds();
+      return b ? { cdxml, box: [b.x1, b.y1, b.x2, b.y2].join(' ') } : null;
+    } catch {
+      return null;
+    }
+  }
+
   private pictureEl(s: Part, el: Element, t: Xf, doc: Doc): void {
     const box = boxOf(kid(el, 'spPr', 'xfrm'), t);
     if (!box) return;
-    if (box.rot) this.warnings.add('Rotated pictures and shapes came in unrotated.');
     const tags = this.tagsOf(s.path, kid(el, 'nvPicPr', 'nvPr'));
     if (tags[TAG.highlight]) {
       // a highlight's own picture: the structure's drawing has the highlight, so only its animation is wanted
@@ -558,27 +869,96 @@ class Reader {
       } catch { /* not ours after all: read it as a picture */ }
     }
     if (tags[TAG.cdxml] && this.drawing(tags[TAG.cdxml], tags[TAG.box], box, doc)) return;
+    // a picture pasted into PowerPoint from Chem Illustrator: the drawing rides inside it
+    const inside = this.emfDrawing(s.path, el);
+    if (inside && this.drawing(inside.cdxml, inside.box, box, doc)) return;
     const img = this.image(s.path, el);
     if (!img) return;
     const look = this.pictureLook(kid(el, 'spPr'));
-    const video = this.videoOf(s.path, kid(el, 'nvPicPr', 'nvPr'));
-    doc.addShape({ kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look ? { look } : {}), ...(video ? { video } : {}) });
+    const video0 = this.videoOf(s.path, kid(el, 'nvPicPr', 'nvPr'));
+    // recorded narration (Slide Show > Record), as we name it
+    const video = video0?.audio && kid(el, 'nvPicPr', 'cNvPr')?.getAttribute('name') === NARRATION_NAME ? { ...video0, narration: true } : video0;
+    const fx = this.pictureFx(s.path, el, img, tags[TAG.picture]);
+    // a picture cut to a shape has the shape's outline, not rounded corners
+    if (fx?.shape && look) delete look.round;
+    // a click on it in the show: a zoom (ours, or PowerPoint's, from its fallback picture) or a link
+    const click = video ? null : this.hlinkOf(kid(el, 'nvPicPr', 'cNvPr', 'hlinkClick'));
+    let zoom: Shape['zoom'] | undefined;
+    if (tags[TAG.zoom]) {
+      try { const z = JSON.parse(tags[TAG.zoom]); if (z && typeof z === 'object' && z.zoom) zoom = { ...(z.zoom.back ? { back: true } : {}), ...(typeof z.zoom.to === 'string' ? { to: z.zoom.to } : {}) }; } catch { /* a plain link */ }
+    } else if (this.zoomBack !== null && click) zoom = this.zoomBack ? { back: true } : {};
+    const alt = kid(el, 'nvPicPr', 'cNvPr')?.getAttribute('descr')?.trim();
+    doc.addShape({
+      kind: 'picture', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, src: img.src, px: img.px, ...(img.crop ? { crop: img.crop } : {}), ...(look && Object.keys(look).length ? { look } : {}), ...(fx ? { fx } : {}), ...(video ? { video } : {}), ...(alt ? { alt } : {}),
+      ...(click ? { link: click } : {}), ...(zoom && click ? { zoom } : {}), ...turn(box),
+    });
   }
 
-  /** The MP4 video a picture stands for (PowerPoint's media link, else its video link), if it is in the file. */
+  /**
+   * A picture's Picture Format settings. When PowerPoint worked sharpening or Remove Background
+   * into the picture and kept the original as its layer, the original comes in (`img` changed to
+   * it) with the settings; without the original they stay worked in, and are not done again.
+   */
+  private pictureFx(from: string, pic: Element, img: { src: string; px: { w: number; h: number }; mime: string }, tag: string | undefined): PictureFx | undefined {
+    const blip = kid(pic, 'blipFill', 'blip');
+    const got = readPictureFx(blip, kid(pic, 'spPr'));
+    if (got.dropped) this.warnings.add('Some picture effects (artistic effects, saturation, colour temperature) were left off.');
+    // ours: the original kept beside the picture, named by the tag with what was worked in
+    let t: { tol?: unknown; orig?: unknown; fx?: { bg?: unknown; sharpen?: unknown } } = {};
+    try { if (tag) t = JSON.parse(tag) ?? {}; } catch { /* not ours */ }
+    let layer = got.layer;
+    let fx = got.fx;
+    if (!layer && typeof t.orig === 'string' && t.fx && typeof t.fx === 'object') {
+      const bg = t.fx.bg && typeof t.fx.bg === 'object' ? t.fx.bg as BackgroundRemoval : undefined;
+      const sharpen = typeof t.fx.sharpen === 'number' ? Math.max(-1, Math.min(1, t.fx.sharpen)) : undefined;
+      if (bg || sharpen) {
+        layer = t.orig;
+        fx = { ...fx, ...(bg ? { bg: { ...(Array.isArray(bg.keep) ? { keep: bg.keep } : {}), ...(Array.isArray(bg.drop) ? { drop: bg.drop } : {}) } } : {}), ...(sharpen ? { sharpen } : {}) };
+      }
+    }
+    if (!fx) return undefined;
+    const target = layer ? this.r.rels(from).get(layer)?.target : undefined;
+    const bytes = target ? this.r.bytes(target) : null;
+    const mime = target ? EXT_MIME[target.split('.').pop()!.toLowerCase()] : undefined;
+    if (bytes && mime && SHOWABLE.has(mime) && !img.mime.includes('svg')) {
+      img.src = dataUrl(bytes, mime);
+      img.px = imageSize(bytes, mime) ?? img.px;
+      img.mime = mime;
+    } else {
+      delete fx.sharpen;
+      delete fx.bg;
+    }
+    if (fx.bg && typeof t.tol === 'number' && t.tol > 0 && t.tol <= 1) fx.bg.tol = t.tol;
+    return tidyFx(fx);
+  }
+
+  /**
+   * The video or sound a picture stands for (PowerPoint's media link, else its video or audio
+   * link), with its trim and fades, if the file is inside the PowerPoint file and plays here.
+   * Until the slide's timing says otherwise it starts when clicked and plays once, as
+   * PowerPoint's own.
+   */
   private videoOf(from: string, nvPr: Element | null): Shape['video'] | undefined {
     if (!nvPr) return undefined;
     const media = nvPr.getElementsByTagNameNS('http://schemas.microsoft.com/office/powerpoint/2010/main', 'media')[0];
-    const vf = kid(nvPr, 'videoFile');
-    if (!media && !vf) return undefined;
+    const vf = kid(nvPr, 'videoFile'), af = kid(nvPr, 'audioFile');
+    if (!media && !vf && !af) return undefined;
+    const audio = !!af && !vf;
     const rels = this.r.rels(from);
-    const target = (media && rels.get(rAttr(media, 'embed') ?? '')?.target) || (vf && rels.get(rAttr(vf, 'link') ?? '')?.target);
+    const target = (media && rels.get(rAttr(media, 'embed') ?? '')?.target) || (vf && rels.get(rAttr(vf, 'link') ?? '')?.target) || (af && rels.get(rAttr(af, 'link') ?? '')?.target);
     const bytes = target ? this.r.bytes(target) : null;
-    if (!target || !bytes || !/\.mp4$/i.test(target)) {
-      this.warnings.add('Videos other than MP4 files inside the PowerPoint file came in as their first picture.');
+    const type = target ? mediaMime(target) : null;
+    if (!target || !bytes || !type) {
+      this.warnings.add(audio ? 'Sounds other than MP3, M4A, WAV, AAC and OGG files inside the PowerPoint file came in as their icons.' : 'Videos other than MP4, MOV and WebM files inside the PowerPoint file came in as their first picture.');
       return undefined;
     }
-    return { src: dataUrl(bytes, 'video/mp4') };
+    const m: Media = { src: dataUrl(bytes, type.mime), ...(type.audio ? { audio: true } : {}), start: 'click', once: true };
+    const P14 = 'http://schemas.microsoft.com/office/powerpoint/2010/main';
+    const trim = media?.getElementsByTagNameNS(P14, 'trim')[0], fade = media?.getElementsByTagNameNS(P14, 'fade')[0];
+    const sec = (el: Element | undefined, a: string) => { const v = Number(el?.getAttribute(a)); return Number.isFinite(v) && v > 0 ? +(v / 1000).toFixed(3) : undefined; };
+    const parts = { trimStart: sec(trim, 'st'), trimEnd: sec(trim, 'end'), fadeIn: sec(fade, 'inDur'), fadeOut: sec(fade, 'outDur') };
+    for (const [k, v] of Object.entries(parts)) if (v !== undefined) (m as unknown as Record<string, number>)[k] = v;
+    return m;
   }
 
   /**
@@ -593,7 +973,7 @@ class Reader {
       const gd = kids(kid(geom, 'avLst')).find((g) => g.getAttribute('name') === 'adj');
       const v = /val\s+(-?\d+)/.exec(gd?.getAttribute('fmla') ?? '');
       look.round = Math.max(0, Math.min(0.5, (v ? Number(v[1]) : 16667) / 100000));
-    } else if (geom && geom.getAttribute('prst') !== 'rect') this.warnings.add('Pictures cut to shapes other than rectangles came in as rectangles.');
+    } else if (geom && geom.getAttribute('prst') !== 'rect' && !knownShape(geom.getAttribute('prst') ?? '')) this.warnings.add('Pictures cut to shapes other than the usual ones came in as rectangles.');
     const ln = kid(spPr, 'ln');
     if (ln && !kid(ln, 'noFill')) {
       const c = this.color(kid(ln, 'solidFill'));
@@ -681,16 +1061,13 @@ class Reader {
     const xfrm = kid(spPr, 'xfrm') ?? from.map((e) => kid(e, 'spPr', 'xfrm')).find((x) => x) ?? null;
     const box = boxOf(xfrm, xfrm && kid(spPr, 'xfrm') ? t : IDENTITY);
     if (!box) return;
-    // (text boxes and placeholders turn; other shapes don't yet)
-    const textBox = !!ph || kid(sp, 'nvSpPr', 'cNvSpPr')?.getAttribute('txBox') === '1';
-    if (box.rot && !textBox) this.warnings.add('Rotated pictures and shapes came in unrotated.');
     const prst = kid(spPr, 'prstGeom')?.getAttribute('prst') ?? (kid(spPr, 'custGeom') ? 'cust' : 'rect');
     if (!ph && /line|Connector/i.test(prst)) { this.line(sp, spPr, t, doc); return; }
     if (!ph) {
       // a design shape saved here, or a PowerPoint shape that is one (in designs, boxes and ovals too)
       const geoTag = this.tagsOf(s.path, kid(sp, 'nvSpPr', 'nvPr'))[TAG.geo];
-      if (geoTag || (GEO_BY_PRST.has(prst) && (this.design || !PLAIN_PRST.has(prst)))) {
-        if (this.geoShape(sp, spPr, prst, box, geoTag, doc)) return;
+      if (geoTag || (GEO_BY_PRST.has(prst) && (this.design || !PLAIN_PRST.has(prst) || fancyFill(spPr)))) {
+        if (this.geoShape(sp, spPr, prst, box, geoTag, doc, s.path)) return;
       }
     }
     const hasText = !!this.plain(sp).trim();
@@ -700,7 +1077,7 @@ class Reader {
         if (!['rect', 'roundRect', 'ellipse', 'snip1Rect', 'flowChartProcess', 'flowChartAlternateProcess'].includes(prst)) this.warnings.add('Some PowerPoint shapes came in as boxes.');
         const sh: Omit<Shape, 'id'> = {
           kind: prst === 'ellipse' ? 'oval' : 'rect', x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2,
-          color: look.fill ?? look.line ?? '#000000',
+          color: look.fill ?? look.line ?? '#000000', ...turn(box),
         };
         if (look.fill) sh.filled = true;
         if (look.fill && look.shaded) sh.fill = 'shaded';
@@ -718,7 +1095,12 @@ class Reader {
       if (!hasText) return;
     }
     const tags = this.tagsOf(s.path, kid(sp, 'nvSpPr', 'nvPr'));
-    const c = this.ourText(tags[TAG.text], sp, box) ?? turned(this.text(sp, box, ph, from), box);
+    // text running down or up: read as text in the box the other way round, turned a quarter more
+    const vert = kid(sp, 'txBody', 'bodyPr')?.getAttribute('vert');
+    const quarter = vert === 'vert' || vert === 'eaVert' ? 90 : vert === 'vert270' ? -90 : 0;
+    const tbox = quarter ? { ...box, ...swapBox(box), rot: box.rot + quarter } : box;
+    let c = this.ourText(tags[TAG.text], sp, tbox) ?? turned(this.text(sp, tbox, ph, from), tbox);
+    if (c && quarter) c = { ...c, dir: quarter > 0 ? 'vert' : 'vert270' };
     // a table's title or footnotes, saved here as a text box beside it
     const part = (() => {
       try { return tags[TAG.tablePart] ? JSON.parse(tags[TAG.tablePart]) as { key: string; part: 'title' | 'notes' } : null; } catch { return null; }
@@ -738,10 +1120,12 @@ class Reader {
    */
   /** The design shapes read on this slide: their number when saved → their number now (for connectors). */
   private geoIds = new Map<number, number>();
+  /** Reading a zoom PowerPoint made: whether the show comes back from it (null: not a zoom). */
+  private zoomBack: boolean | null = null;
 
   /** A connector saved here: the arrow, stuck to the same shapes, where PowerPoint now has it. */
   private ourConnector(s: Part, el: Element, t: Xf, doc: Doc): boolean {
-    const tag = this.tagsOf(s.path, kid(el, 'nvCxnSpPr', 'nvPr'))[TAG.connector];
+    const tag = this.tagsOf(s.path, kid(el, el.localName === 'sp' ? 'nvSpPr' : 'nvCxnSpPr', 'nvPr'))[TAG.connector];
     if (!tag) return false;
     let saved: { a?: Omit<Arrow, 'id'> } | null;
     try { saved = JSON.parse(tag); } catch { return false; }
@@ -750,7 +1134,16 @@ class Reader {
     const arrow: Omit<Arrow, 'id'> = { ...a };
     // a straight one moved in PowerPoint goes where it is now
     const box = boxOf(kid(kid(el, 'spPr'), 'xfrm'), t);
-    if (box && !a.elbow) {
+    if (box && a.sweep && !a.elbow) {
+      // a curved one: its ends go where the curve's box now is
+      const was = pointsBox(arrowPoints(a, 32));
+      const at = (p: { x: number; y: number }) => ({
+        x: box.x1 + (was.x2 > was.x1 ? ((p.x - was.x1) / (was.x2 - was.x1)) * (box.x2 - box.x1) : 0),
+        y: box.y1 + (was.y2 > was.y1 ? ((p.y - was.y1) / (was.y2 - was.y1)) * (box.y2 - box.y1) : 0),
+      });
+      arrow.tail = at(a.tail);
+      arrow.head = at(a.head);
+    } else if (box && !a.elbow) {
       arrow.tail = { x: box.flipH ? box.x2 : box.x1, y: box.flipV ? box.y2 : box.y1 };
       arrow.head = { x: box.flipH ? box.x1 : box.x2, y: box.flipV ? box.y1 : box.y2 };
     }
@@ -772,18 +1165,29 @@ class Reader {
     return true;
   }
 
-  private geoShape(sp: Element, spPr: Element | null, prst: string, box: Rect, tag: string | undefined, doc: Doc): boolean {
+  private geoShape(sp: Element, spPr: Element | null, prst: string, box: Rect & { rot: number }, tag: string | undefined, doc: Doc, from: string): boolean {
     let saved: { s: Partial<Shape>; plain: string } | null = null;
     try { saved = tag ? JSON.parse(tag) : null; } catch { saved = null; }
-    const where = { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2 };
+    const where = { x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, rot: turn(box).rot };
     const now = this.plain(sp);
     const theirText = () => {
       if (!now.trim()) return undefined;
       const c = this.text(sp, box, null, []);
       return c ? { runs: c.runs, ...(c.paras ? { paras: c.paras } : {}) } : undefined;
     };
+    // a picture fill's picture is in the file, not the tag
+    const blip = kid(spPr, 'blipFill');
+    const pic = blip ? this.blipImage(from, blip) : null;
+    const picFill = (was?: Shape['picFill']): Shape['picFill'] | undefined => {
+      if (!pic) return undefined;
+      const amt = kid(blip, 'blip', 'alphaModFix')?.getAttribute('amt');
+      const transparency = was?.transparency ?? (amt ? +(1 - Number(amt) / 100000).toFixed(3) : 0);
+      return { src: pic.src, px: pic.px, ...(transparency ? { transparency } : {}) };
+    };
     if (saved?.s && saved.s.kind === 'geo') {
       const sh = { ...saved.s, ...where, kind: 'geo' } as Omit<Shape, 'id'>;
+      const pf = picFill(sh.picFill);
+      if (pf) sh.picFill = pf; else delete sh.picFill;
       if (now !== saved.plain) {
         const t = theirText();
         if (t) sh.text = t; else delete sh.text;
@@ -797,8 +1201,24 @@ class Reader {
     if (!geo) return false;
     const look = this.look(sp, spPr);
     const sh: Omit<Shape, 'id'> = { kind: 'geo', geo, ...where, color: look.line ?? look.fill ?? '#000000' };
+    // an action button, or any shape with an action on a click
+    const click = this.hlinkOf(kid(sp, 'nvSpPr', 'cNvPr', 'hlinkClick'));
+    if (click) sh.link = click;
     if (look.fill) { sh.filled = true; sh.fillColor = look.fill; }
-    if (look.shaded) sh.fill = 'shaded';
+    const grad = kid(spPr, 'gradFill');
+    const stops = grad ? kids(kid(grad, 'gsLst'), 'gs').sort((a, b) => Number(a.getAttribute('pos') ?? 0) - Number(b.getAttribute('pos') ?? 0)) : [];
+    if (grad && stops.length >= 2) {
+      // a gradient: its first and last colours, across at its angle or out from the middle
+      sh.fill = 'gradient';
+      sh.fillColor = this.color(stops[0]) ?? sh.fillColor;
+      sh.fill2 = this.color(stops[stops.length - 1]) ?? '#ffffff';
+      const lin = kid(grad, 'lin');
+      if (kid(grad, 'path')) sh.gradRadial = true;
+      else sh.gradAngle = Math.round(Number(lin?.getAttribute('ang') ?? 5400000) / 60000) % 360;
+    } else if (look.shaded) sh.fill = 'shaded';
+    const pf = picFill();
+    if (pf) sh.picFill = pf;
+    Object.assign(sh, this.effects(spPr));
     sh.lineWidth = look.line ? +look.width.toFixed(2) : 0;
     if (look.dashed) sh.dashed = true;
     const t = theirText();
@@ -814,6 +1234,28 @@ class Reader {
     return true;
   }
 
+  /** A shape's glow, soft edges, reflection, bevel and shadow, as PowerPoint has them. */
+  private effects(spPr: Element | null): Partial<Shape> {
+    const alphaOf = (el: Element | null) => {
+      const a = el ? Array.from(el.getElementsByTagNameNS(NS.a, 'alpha'))[0] : undefined;
+      return a ? Number(a.getAttribute('val') ?? 100000) / 100000 : 1;
+    };
+    const out: Partial<Shape> = readEffects(spPr, (el) => this.color(el), alphaOf);
+    const sh = kid(spPr, 'effectLst', 'outerShdw');
+    if (sh) {
+      out.shadow = true;
+      const n = (a: string) => Number(sh.getAttribute(a) ?? 0);
+      out.shadowSize = +(fromEmu(String(n('dist'))) || 3).toFixed(2);
+      const blur = fromEmu(String(n('blurRad')));
+      if (blur) out.shadowBlur = +blur.toFixed(2);
+      out.shadowAngle = Math.round(n('dir') / 60000) % 360;
+      const c = this.color(sh);
+      if (c && c.toLowerCase() !== '#000000') out.shadowColor = c;
+      out.shadowOpacity = +alphaOf(Array.from(sh.children)[0] ?? null).toFixed(3);
+    }
+    return out;
+  }
+
   /**
    * A PowerPoint table: its cells (with their text, joined cells and rules) and column widths.
    * A table saved here comes back as it was when PowerPoint has not changed its text.
@@ -827,7 +1269,7 @@ class Reader {
     if (!m) return;
     const rows: TableCell[][] = [];
     const borders: Borders[][] = [];
-    let lines = false, down = false;
+    let lines = false;
     let color: string | undefined;
     const width = (tcPr: Element | null, side: string): number => {
       const e = kid(tcPr, side);
@@ -847,9 +1289,12 @@ class Reader {
         const tcPr = kid(tc ?? null, 'tcPr');
         bs.push({ left: width(tcPr, 'lnL'), top: width(tcPr, 'lnT'), bottom: width(tcPr, 'lnB'), right: width(tcPr, 'lnR') });
         if (!tc || tc.getAttribute('hMerge') === '1' || tc.getAttribute('vMerge') === '1') { row.push({ runs: [] }); continue; }
-        if (Number(tc.getAttribute('rowSpan') ?? 1) > 1) down = true;
         const cap = this.text(tc, { x1: 0, y1: 0, x2: cols[c], y2: 100 }, null, []);
         const cell: TableCell = { runs: cap?.runs ?? [] };
+        const down = Number(tc.getAttribute('rowSpan') ?? 1);
+        if (down > 1) cell.rowSpan = down;
+        const fill = this.color(kid(tcPr, 'solidFill'));
+        if (fill) cell.fill = fill;
         if (cap?.paras) cell.paras = cap.paras;
         if (cap && kid(kid(tc, 'txBody'), 'p', 'pPr')?.getAttribute('algn')) cell.align = cap.justify;
         const span = Number(tc.getAttribute('gridSpan') ?? 1);
@@ -860,19 +1305,25 @@ class Reader {
       borders.push(bs);
     }
     if (!rows.length) return;
-    if (down) this.warnings.add('Table cells joined down several rows came in as separate cells.');
+    rows.forEach((row, r) => row.forEach((c) => { if (c.rowSpan !== undefined) { if (c.rowSpan > rows.length - r) c.rowSpan = rows.length - r; if (c.rowSpan < 2) delete c.rowSpan; } }));
     // the size most of the text is in becomes the table's
     const sizes = new Map<number, number>();
     for (const row of rows) for (const c of row) for (const r of c.runs) if (r.size !== undefined && r.text.trim()) sizes.set(r.size, (sizes.get(r.size) ?? 0) + r.text.length);
     const size = [...sizes].sort((a, b) => b[1] - a[1])[0]?.[0];
     const plainRows = rows.map((row) => row.map((c) => ({ ...c, runs: c.runs.map((r) => { if (r.size !== size) return r; const { size: _, ...rest } = r; return rest; }) })));
     const style = kid(tbl, 'tblPr', 'tableStyleId')?.textContent?.trim() ?? '';
-    const head = kid(tbl, 'tblPr')?.getAttribute('firstRow') === '1' ? 1 : 0;
+    const pr = kid(tbl, 'tblPr');
+    const flag = (k: string) => pr?.getAttribute(k) === '1' || pr?.getAttribute(k) === 'true';
+    const head = flag('firstRow') ? 1 : 0;
     let read: TableData = { cols, rows: plainRows, head, lines: 'acs' };
     if (size !== undefined) read.size = size;
-    if (lines) read = { ...read, ...linesFromBorders(borders) };
+    const ours = PPT_STYLE_IDS[style];
+    if (ours) {
+      // one of the styles kept here: the cells' fills and text colours that only repeat it go
+      read = unstyle({ ...read, style: ours, look: { total: flag('lastRow'), bandRows: flag('bandRow'), firstCol: flag('firstCol'), lastCol: flag('lastCol'), bandCols: flag('bandCol') } });
+    } else if (lines) read = { ...read, ...linesFromBorders(borders) };
     else if (style === '{5940675A-B579-460E-94D1-54222C63F5DA}') read.lines = 'grid';
-    else if (style && style !== '{2D5ABB26-0587-4C30-8999-92F81FD0307C}') this.warnings.add('PowerPoint\'s table colours were left out; tables use the ACS style (change it in the Style panel).');
+    else if (style && style !== '{2D5ABB26-0587-4C30-8999-92F81FD0307C}') read = this.bakeStyle(read, style, { firstRow: !!head, lastRow: flag('lastRow'), band1H: flag('bandRow'), band1V: flag('bandCol'), firstCol: flag('firstCol'), lastCol: flag('lastCol') });
     // what was saved here, when the table still has its rows and columns (and its text, for its formatting)
     const tags = this.tagsOf(s.path, kid(el, 'nvGraphicFramePr', 'nvPr'));
     let saved: { key: string; table: TableData; plain: string[][] } | null = null;
@@ -883,10 +1334,63 @@ class Reader {
       const widths = saved.table.cols.map((w, k) => (Math.abs(w - cols[k]) > 0.5 ? cols[k] : w));
       const own = same ? saved.table.rows : rows.map((row) => row.map((c) => ({ ...c, runs: c.runs.map((r) => { if (r.size !== (saved!.table.size ?? undefined)) return r; const { size: _, ...rest } = r; return rest; }) })));
       const { title: _t, notes: _n, ...rest } = saved.table;
-      this.tables.push({ key: String(saved.key), table: { ...rest, cols: widths, rows: own }, frame, color });
+      const table = { ...rest, cols: widths, rows: own };
+      // text changed in PowerPoint carries the style's colours written out on it
+      this.tables.push({ key: String(saved.key), table: same ? table : unstyle(table), frame, color });
       return;
     }
     this.tables.push({ key: saved ? String(saved.key) : null, table: read, frame, color });
+  }
+
+  /**
+   * A table in a PowerPoint style not kept here: the style's fills and text colours (from the
+   * file's table styles) written onto the cells, and its inside lines as a grid.
+   */
+  private bakeStyle(t: TableData, id: string, on: Record<string, boolean>): TableData {
+    const def = kids(this.r.xml(this.r.relOfType(this.r.relOfType('', REL.officeDocument) ?? '', REL.tableStyles) ?? '')?.documentElement ?? null, 'tblStyle')
+      .find((e) => e.getAttribute('styleId') === id);
+    if (!def) {
+      this.warnings.add('A table\'s PowerPoint style wasn\'t in the file, so its colours were left out (pick a style in the Style panel).');
+      return t;
+    }
+    const n = t.rows.length, m = t.cols.length;
+    const head = on.firstRow ? 1 : 0;
+    // PowerPoint's order: the whole table, bands, then the marked-out columns and rows on top
+    const partsAt = (r: number, c: number): string[] => {
+      const out = ['wholeTbl'];
+      const body = r >= head && !(on.lastRow && r === n - 1);
+      if (on.band1H && body) out.push((r - head) % 2 === 0 ? 'band1H' : 'band2H');
+      const k = c - (on.firstCol ? 1 : 0);
+      if (on.band1V && body && !(on.firstCol && c === 0) && !(on.lastCol && c === m - 1)) out.push(k % 2 === 0 ? 'band1V' : 'band2V');
+      if (on.lastCol && c === m - 1) out.push('lastCol');
+      if (on.firstCol && c === 0) out.push('firstCol');
+      if (on.lastRow && r === n - 1) out.push('lastRow');
+      if (head && r === 0) out.push('firstRow');
+      return out;
+    };
+    const inside = kid(def, 'wholeTbl', 'tcStyle', 'tcBdr');
+    const grid = ['insideH', 'insideV'].some((k) => { const l = kid(inside, k, 'ln'); return !!l && !kid(l, 'noFill') && !!kid(l, 'solidFill'); });
+    const rows = t.rows.map((row, r) => row.map((cell, c) => {
+      let fill: string | undefined, color: string | undefined, bold: boolean | undefined;
+      for (const name of partsAt(r, c)) {
+        const p = kid(def, name);
+        if (!p) continue;
+        const f = this.color(kid(p, 'tcStyle', 'fill', 'solidFill'));
+        if (f) fill = f;
+        const tx = kid(p, 'tcTxStyle');
+        if (tx) {
+          const tc = this.color(tx);
+          if (tc) color = tc;
+          if (tx.getAttribute('b') === 'on') bold = true;
+          else if (tx.getAttribute('b') === 'off') bold = undefined;
+        }
+      }
+      const out: TableCell = { ...cell };
+      if (fill && out.fill === undefined) out.fill = fill;
+      if (color || bold) out.runs = cell.runs.map((x) => ({ ...x, ...(color && x.color === undefined ? { color } : {}), ...(bold && x.bold === undefined ? { bold: true } : {}) }));
+      return out;
+    }));
+    return { ...t, rows, lines: grid ? 'grid' : 'none' };
   }
 
   /** Put the slide's tables on it, with the titles and footnotes saved beside them. */
@@ -915,6 +1419,29 @@ class Reader {
   }
 
   /** Text saved here, when PowerPoint has not changed it, moved to where its box now is. */
+  /**
+   * A PowerPoint link as ours: a web page, e-mail or file; a jump to a slide (as #slide-n=its
+   * place, made into the slide's id once the deck has its slides); first/last/next/previous.
+   * Links that run programs or macros are left out.
+   */
+  private hlinkOf(el: Element | null): string | null {
+    if (!el) return null;
+    const action = el.getAttribute('action') ?? '';
+    const jump = /^ppaction:\/\/hlinkshowjump\?jump=(\w+)/.exec(action)?.[1];
+    if (jump) return ({ firstslide: '#first', lastslide: '#last', nextslide: '#next', previousslide: '#prev', lastslideviewed: '#return', endshow: '#end' } as Record<string, string>)[jump] ?? null;
+    const rel = this.r.rels(this.curPath).get(rAttr(el, 'id') ?? '');
+    if (!rel) return null;
+    if (action.startsWith('ppaction://hlinksldjump')) {
+      const i = this.slidePaths.indexOf(rel.target);
+      return i < 0 ? null : `#slide-n=${i}`;
+    }
+    if (action && !action.startsWith('ppaction://hlinkfile')) {
+      this.warnings.add('Links that run programs or macros were left out.');
+      return null;
+    }
+    return rel.external ? linkFromTarget(rel.target) : null;
+  }
+
   private ourText(tag: string | undefined, sp: Element, box: Rect & { rot?: number }): Omit<Caption, 'id'> | null {
     if (!tag) return null;
     let saved: { c: Caption; plain: string; at?: number[]; o?: number[] };
@@ -938,14 +1465,14 @@ class Reader {
       if (rot) c.rot = rot; else delete c.rot;
       const nw = box.x2 - box.x1, nh = box.y2 - box.y1;
       if (c.wrap !== undefined && Math.abs(nw - w) > 0.5) c.wrap = nw;
-      if (c.ph && Math.abs(nh - h) > 0.5) c.boxH = nh;
+      if ((c.ph || c.fit) && Math.abs(nh - h) > 0.5) c.boxH = nh;
     } else if (saved.at?.length === 4) {
       const [x, y, w, h] = saved.at;
       c.x += box.x1 - x;
       c.y += box.y1 - y;
       const nw = box.x2 - box.x1, nh = box.y2 - box.y1;
       if (c.wrap !== undefined && Math.abs(nw - w) > 0.5) c.wrap = nw;
-      if (c.ph && Math.abs(nh - h) > 0.5) c.boxH = nh;
+      if ((c.ph || c.fit) && Math.abs(nh - h) > 0.5) c.boxH = nh;
     }
     return c;
   }
@@ -988,8 +1515,10 @@ class Reader {
     if (!look.line) return;
     const prst = kid(spPr, 'prstGeom')?.getAttribute('prst') ?? 'line';
     if (!/^(line|straightConnector1)$/.test(prst)) this.warnings.add('Bent and curved connectors came in straight.');
-    const a = { x: box.flipH ? box.x2 : box.x1, y: box.flipV ? box.y2 : box.y1 };
-    const b = { x: box.flipH ? box.x1 : box.x2, y: box.flipV ? box.y1 : box.y2 };
+    const mid = { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 };
+    // a turned line: its ends turned about the middle of its box
+    const a = turnAbout({ x: box.flipH ? box.x2 : box.x1, y: box.flipV ? box.y2 : box.y1 }, mid, box.rot);
+    const b = turnAbout({ x: box.flipH ? box.x1 : box.x2, y: box.flipV ? box.y1 : box.y2 }, mid, box.rot);
     const ln = kid(spPr, 'ln');
     const end = (n: string) => {
       const e = kid(ln, n);
@@ -1032,7 +1561,10 @@ class Reader {
     else chain.push(this.defaultText, kid(txStyles, 'otherStyle'));
     const bodyPrs = [kid(body, 'bodyPr'), ...from.map((e) => kid(e, 'txBody', 'bodyPr'))];
     const bp = (k: string) => bodyPrs.map((b) => b?.getAttribute(k) ?? null).find((v) => v !== null) ?? null;
-    const scale = Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('fontScale') ?? 100000) / 100000;
+    // a text box that shrinks its text to fit keeps its own sizes (it is shrunk here as there);
+    // a placeholder's text comes in at the size PowerPoint shrank it to
+    const shrinks = !ph && !!kid(bodyPrs[0], 'normAutofit');
+    const scale = shrinks ? 1 : Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('fontScale') ?? 100000) / 100000;
     const kind = ph ? phKind(ph.type) : null;
     const base = kind ? textStyles(this.masterOut, this.curLayout)[kind] : undefined;
 
@@ -1066,7 +1598,7 @@ class Reader {
         const pct = kid(ls, 'spcPct')?.getAttribute('val'), fixed = kid(ls, 'spcPts')?.getAttribute('val');
         if (fixed) lineHeight = Number(fixed) / 100;
         else if (pct && Number(pct) !== 100000) lineSpacing = Number(pct) / 100000;
-        const red = Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('lnSpcReduction') ?? 0) / 100000;
+        const red = shrinks ? 0 : Number(kid(bodyPrs[0], 'normAutofit')?.getAttribute('lnSpcReduction') ?? 0) / 100000;
         if (red) lineSpacing = (lineSpacing ?? 1) * (1 - red);
       }
       const marL = fromEmu(inherit(pPr, chain, lvl, (e) => e.getAttribute('marL')));
@@ -1098,12 +1630,18 @@ class Reader {
         if (get('i') === '1' || get('i') === 'true') r.italic = true;
         const u = get('u');
         if (u && u !== 'none') r.underline = true;
+        const strike = get('strike');
+        if (strike && strike !== 'noStrike') r.strike = true;
+        const spc = Number(get('spc') ?? 0);
+        if (spc) r.spacing = spc / 100;
         const bl = Number(get('baseline') ?? 0);
         if (bl < 0) r.sub = true;
         else if (bl > 0) r.sup = true;
         const fillEl = inheritEl(rPr, chain, lvl, ['solidFill'], true);
         r.color = this.color(fillEl) ?? '#000000';
         r.font = this.font(inheritEl(rPr, chain, lvl, ['latin'], true)?.getAttribute('typeface') ?? null, title);
+        const link = this.hlinkOf(kid(rPr, 'hlinkClick'));
+        if (link) r.link = link;
         runs.push(r);
       }
     });
@@ -1138,6 +1676,17 @@ class Reader {
       const natural = layoutText(full, sizeFor, arialMeasure).boxWidth;
       if (justify !== 'left' || natural > w) c.wrap = Math.max(w, natural);
     }
+    const numCol = Number(bp('numCol') ?? 1);
+    if (numCol > 1 && c.wrap !== undefined) {
+      c.cols = Math.min(16, Math.round(numCol));
+      const gap = fromEmu(bp('spcCol') ?? 0);
+      if (gap > 0) c.colGap = +gap.toFixed(2);
+    }
+    if (!kind) {
+      if (shrinks) c.fit = 'shrink';
+      else if (kid(bodyPrs[0], 'noAutofit')) c.fit = 'fixed';
+      if (c.fit) c.boxH = Math.max(1, box.y2 - box.y1 - tI - bI);
+    }
     if (kind) {
       c.ph = kind;
       c.boxH = box.y2 - box.y1;
@@ -1161,6 +1710,21 @@ class Reader {
 const dropUndefined = (r: TextRun): Partial<TextRun> => Object.fromEntries(Object.entries(r).filter(([, v]) => v !== undefined));
 
 /** Join neighbouring runs formatted alike (a paragraph break joins the run before it). */
+/**
+ * Links to slides as their places (#slide-n=2): links PowerPoint made are read that way, and links
+ * kept in our own tags name the slide's id when it was saved (#slide=7), turned into its place here.
+ */
+function placeSlideLinks(slides: PptxSlide[], ids: Map<number, number>): void {
+  for (const s of slides) {
+    const json = JSON.stringify(s.contents);
+    if (!json.includes('"#slide=')) continue;
+    s.contents = JSON.parse(json.replace(/"#slide=(\d+)"/g, (all, id) => {
+      const i = ids.get(Number(id));
+      return i === undefined || i < 0 ? all : `"#slide-n=${i}"`;
+    }));
+  }
+}
+
 function merge(runs: TextRun[]): TextRun[] {
   const same = (a: TextRun, b: TextRun) => {
     const ka = Object.keys(a).filter((k) => k !== 'text'), kb = Object.keys(b).filter((k) => k !== 'text');
@@ -1210,8 +1774,31 @@ export function mergeDrawing(doc: Doc, src: Doc, map: (p: Vec) => Vec): void {
 }
 
 /** Read a PowerPoint file. Throws only when the file is not a PowerPoint file at all. */
+/** LaTeX as it comes back from the Office Math written for it (to tell whether PowerPoint has changed an equation). */
+function texOfOmml(tex: string): string {
+  const doc = new DOMParser().parseFromString(`<m:oMath xmlns:m="${NS_M}">${toOmml(tex)}</m:oMath>`, 'application/xml');
+  return ommlToTex(doc.documentElement);
+}
+
 export function readPptx(bytes: Uint8Array): PptxRead {
   return new Reader(bytes).read();
+}
+
+/** The names PowerPoint (and this program) give shapes on their own: "Picture 3", "TextBox 12". */
+const PPT_NAME = /^(Picture|Rectangle|Oval|Line|TextBox|Text Box|Title|Text Placeholder|Content Placeholder|Subtitle|Table|Chart|Equation|Animation|Straight Connector|Straight Arrow Connector|Elbow Connector|Curved Arrow|Connector|Freeform|Group|Diagram|Structure|Highlight|Graphic|Object|Shape|Google Shape|Footer|Slide Number|Date|Rounded Rectangle|Ellipse|Isosceles Triangle|Right Arrow|Arrow)( Placeholder)? \d+$/i;
+
+/** Everything added to a drawing since `mark` turned `deg` degrees clockwise about `c`, text and shapes included. */
+function turnNew(doc: Doc, mark: number, c: Vec, deg: number): void {
+  const ids = <T extends { id: number }>(m: Map<number, T>) => new Set([...m.values()].filter((x) => x.id >= mark).map((x) => x.id));
+  const sel = { atoms: ids(doc.atoms), bonds: ids(doc.bonds), captions: ids(doc.captions), arrows: ids(doc.arrows), shapes: ids(doc.shapes) };
+  const snap = snapshot(doc, sel, POINTS);
+  transform(doc, snap, rotation(c, deg * DEG), false, { deg, which: () => true, shapes: true });
+}
+
+/** A shape's turn as ours keeps it (left out when it isn't turned). */
+function turn(box: { rot: number }): { rot?: number } {
+  const rot = normDegrees(box.rot);
+  return Math.abs(rot) > 1e-6 ? { rot } : {};
 }
 
 /** A PowerPoint text box turned in its box: the text starts where the turn takes its first line. */
@@ -1220,4 +1807,17 @@ function turned(c: Omit<Caption, 'id'> | null, box: Rect & { rot: number }): Omi
   if (!c || !rot) return c;
   const a = turnAbout(c, { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 }, rot);
   return { ...c, x: a.x, y: a.y, rot };
+}
+
+/** PowerPoint 2010's sections (p14:sectionLst in presentation.xml), as runs of slides in order. */
+function readSections(root: Element, sldIds: string[]): SectionCount[] | undefined {
+  const lst = Array.from(root.getElementsByTagNameNS('*', 'sectionLst'))[0];
+  if (!lst) return undefined;
+  const at = new Map(sldIds.map((id, i) => [id, i]));
+  const out: SectionCount[] = [];
+  for (const sec of kids(lst, 'section')) {
+    const ids = kids(kid(sec, 'sldIdLst'), 'sldId').map((x) => at.get(x.getAttribute('id') ?? '')).filter((i): i is number => i !== undefined);
+    out.push({ name: sec.getAttribute('name') ?? 'Untitled Section', count: ids.length });
+  }
+  return out.length ? out : undefined;
 }

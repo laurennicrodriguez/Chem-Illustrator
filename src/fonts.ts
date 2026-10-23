@@ -7,6 +7,7 @@
 // upright and italic where the font has them); the screen loads a file only when it is used.
 
 import { woffToSfnt, type EmbedFace, type FontSource } from './io/font-embed';
+import type { PdfFontSource } from './io/pdf-fonts';
 
 export interface FontGroup {
   name: string;
@@ -54,7 +55,7 @@ export function readFontFile(path: string): { pkg: string; subset: string; weigh
 
 // the bundled files (Vite copies the ones listed and gives each its address)
 const FILES = import.meta.glob('/node_modules/@fontsource/*/files/*-{latin,latin-ext,greek}-{400,700}-{normal,italic}.woff2', { query: '?url', import: 'default', eager: true }) as Record<string, string>;
-const WOFF = import.meta.glob('/node_modules/@fontsource/*/files/*-latin-{400,700}-{normal,italic}.woff', { query: '?url', import: 'default', eager: true }) as Record<string, string>;
+const WOFF = import.meta.glob('/node_modules/@fontsource/*/files/*-{latin,latin-ext,greek}-{400,700}-{normal,italic}.woff', { query: '?url', import: 'default', eager: true }) as Record<string, string>;
 
 let registered = false;
 
@@ -108,4 +109,32 @@ export const bundledFaces: FontSource = async (family) => {
     out.push({ bold, italic, data: woffToSfnt(bytes) });
   }
   return out;
+};
+
+/** The free font a PDF uses for a family the app doesn't ship: same letter widths as Arial, Times New Roman or Courier New. */
+export function pdfStandIn(family: string): string {
+  if (isBundled(family)) return family;
+  if (/courier|consolas|mono/i.test(family)) return 'Cousine';
+  if (/times|georgia|cambria|garamond|book antiqua|palatino|serif$/i.test(family) && !/sans/i.test(family)) return 'Tinos';
+  return 'Arimo';
+}
+
+/** The bundled files (Latin, then Latin-extended, then Greek) of a face, nearest weight and style first. */
+export function pdfFontUrls(family: string, bold: boolean, italic: boolean): string[] {
+  const pkg = packageName(pdfStandIn(family));
+  const pick = (b: boolean, i: boolean) => ['latin', 'latin-ext', 'greek']
+    .map((sub) => Object.entries(WOFF).find(([path]) => path.endsWith(`/@fontsource/${pkg}/files/${pkg}-${sub}-${b ? 700 : 400}-${i ? 'italic' : 'normal'}.woff`))?.[1])
+    .filter((u): u is string => !!u);
+  // a font without a bold or italic face uses the one it has
+  for (const [b, i] of [[bold, italic], [false, italic], [bold, false], [false, false]] as const) {
+    const urls = pick(b, i);
+    if (urls.length) return urls;
+  }
+  return [];
+}
+
+/** Font files for PDF export: every face as TrueType, Symbol left to the reader's own. */
+export const pdfFonts: PdfFontSource = async (family, bold, italic) => {
+  if (/^symbol$/i.test(family.trim())) return [];
+  return Promise.all(pdfFontUrls(family, bold, italic).map(async (url) => woffToSfnt(new Uint8Array(await (await fetch(url)).arrayBuffer()))));
 };

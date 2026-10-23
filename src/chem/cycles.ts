@@ -2,7 +2,7 @@
 // for each step with its name inside the loop, and what comes in and goes out on small curved
 // arrows outside it. Two loops can turn together where they meet at a step (a Pd and a Cu cycle,
 // a photocatalyst and a nickel cycle), share a species (two pathways from one resting state),
-// or sit side by side. The loops are laid out by Scheme ▸ Arrange's catalytic cycle, and every
+// or sit side by side. The loops are laid out by Chemistry ▸ Arrange's catalytic cycle, and every
 // step keeps its roles, so a single loop can be arranged again after its text is swapped for
 // structures.
 

@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { Doc } from '../src/model';
 import type { Selection } from '../src/editor/editor';
-import { extractDrawing, insertDrawing, packFormats, unpackFormats, isEmpty } from '../src/io/clipboard';
+import { extractDrawing, insertDrawing, packFormats, unpackFormats, isEmpty, copyDrawing, forgetCopy, readPasteEvent } from '../src/io/clipboard';
 import { rgbaToDib } from '../src/render/picture';
 import { readCdxml } from '../src/io/cdxml';
 import { writeCdxml } from '../src/io/cdxml-write';
@@ -173,5 +173,40 @@ describe('the bitmap for programs that cannot take EMF', () => {
     // the first row stored is the bottom one
     expect(row(0)).toEqual([255, 0, 0, 127, 127, 127, 255, 255, 255]);
     expect(row(1)).toEqual([0, 0, 255, 0, 255, 0, 255, 255, 255]);
+  });
+});
+
+describe('pasting things that point at atoms', () => {
+  it('ties a pasted caption and a pinned arrow to the copy, not the original', () => {
+    const { doc, first } = sample();
+    doc.bulk(() => doc.addCaption({ x: 90, y: 160, runs: [{ text: 'C7' }], justify: 'left', attach: { atoms: [first[0]], side: 'below', gap: 4, shift: 0, role: 'caption' } }));
+    const sel = emptySel();
+    for (const id of first) sel.atoms.add(id);
+    for (const c of doc.captions.values()) sel.captions.add(c.id);
+    const part = extractDrawing(doc, sel);
+    const made = insertDrawing(doc, part, { x: 400, y: 400 });
+    const tied = [...made.captions].map((id) => doc.captions.get(id)!).find((c) => c.attach);
+    expect(tied).toBeTruthy();
+    expect(tied!.attach!.atoms.every((a) => made.atoms.has(a))).toBe(true);
+  });
+});
+
+describe('the last drawing copied, for a paste that finds nothing else', () => {
+  const emptyPaste = () => ({ clipboardData: { getData: () => '', files: [] } }) as unknown as ClipboardEvent;
+  it('is forgotten once something else is copied (cells, a document\'s text, a picture)', async () => {
+    // (jsdom has no canvas: a stand-in that measures text and draws nothing; the picture then
+    // fails to go on the clipboard, which comes after the drawing is kept)
+    const proto = HTMLCanvasElement.prototype as unknown as { getContext: unknown };
+    const real = proto.getContext;
+    const ctx: unknown = new Proxy({}, { get: (_, k) => (k === 'measureText' ? (t: string) => ({ width: t.length * 5, actualBoundingBoxAscent: 7, actualBoundingBoxDescent: 2 }) : () => ctx), set: () => true });
+    proto.getContext = () => ctx;
+    try {
+      await copyDrawing(sample().doc, null).catch(() => '');
+    } finally {
+      proto.getContext = real;
+    }
+    expect((await readPasteEvent(emptyPaste())).kind).toBe('drawing');
+    forgetCopy();
+    expect((await readPasteEvent(emptyPaste())).kind).toBe('nothing');
   });
 });

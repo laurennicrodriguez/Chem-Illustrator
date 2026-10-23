@@ -34,6 +34,21 @@ describe('built-in styles', () => {
     }
   });
 
+  it('take Thieme\'s values from its instructions, and scale Wiley\'s and Elsevier\'s to 7 pt text', () => {
+    const t = presetNamed('Thieme (Synthesis, Synlett)')!.style;
+    expect(t.bondLength).toBeCloseTo(0.357 * 28.3465, 1);
+    expect(t.boldWidth).toBeCloseTo(0.049 * 28.3465, 2);
+    expect(t.labelSize).toBe(6);
+    for (const name of ['Wiley (Angewandte, Chemistry Europe)', 'Elsevier (Tetrahedron and others)']) {
+      const st = presetNamed(name)!.style;
+      expect(st.labelSize).toBe(7);
+      expect(st.bondLength).toBeCloseTo(14.4 * 0.7, 2);
+      // Wiley asks for lines of at least 0.2 pt
+      expect(st.lineWidth).toBeGreaterThanOrEqual(0.2);
+      expect(st.labelFont).toBe('Arial');
+    }
+  });
+
   it('take the RSC values from its guideline (cm to points)', () => {
     expect(RSC.bondLength).toBeCloseTo(0.43 * 28.3465, 1);
     expect(RSC.lineWidth).toBeCloseTo(0.016 * 28.3465, 2);
@@ -139,5 +154,28 @@ describe('stored drawings (document figures)', () => {
     const c = restyleContents(sample().contents(), ACS_1996, RSC, 'restyle');
     const [p, q] = c.atoms;
     expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeCloseTo(RSC.bondLength, 6);
+  });
+});
+
+describe('a workbook\'s structure cells', () => {
+  it('all take a new style together, and one undo puts the style and the structures back', async () => {
+    const { Workbook } = await import('../src/sheet/workbook');
+    const wb = new Workbook();
+    const c = sample().contents();
+    wb.edit('Insert', () => { wb.sheet.setStructure(0, 0, c); wb.sheet.setStructure(1, 0, c); });
+    const before = [wb.sheet.cell(0, 0)!.structure!, wb.sheet.cell(1, 0)!.structure!];
+    wb.setDrawingStyle(RSC, (x, old) => restyleContents(x, old, RSC, 'restyle'));
+    expect(wb.drawingStyle.name).toBe(RSC.name);
+    for (const r of [0, 1]) {
+      const d = new Doc();
+      d.restoreContents(wb.sheet.cell(r, 0)!.structure!.contents);
+      expect(bondLen(d)).toBeCloseTo(RSC.bondLength, 3);
+    }
+    expect(wb.undoLabel).toBe(`Drawing style: ${RSC.name}`);
+    wb.undo();
+    expect(wb.drawingStyle.name).toBe(ACS_1996.name);
+    expect([wb.sheet.cell(0, 0)!.structure, wb.sheet.cell(1, 0)!.structure]).toEqual(before);
+    // the next undo is the insertion, not the style
+    expect(wb.undoLabel).toBe('Insert');
   });
 });

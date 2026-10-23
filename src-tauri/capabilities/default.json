@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the main window may do: Tauri's basic window functions, setting its title, going full screen to present slides, opening the audience window for presenter view on the second screen, closing after asking about unsaved work, native Open/Save dialogs, checking for, installing and restarting into updates, and opening web pages (a compound's PubChem page) in the browser.",
+  "description": "What the main window may do: Tauri's basic window functions, setting its title, drawing its own title bar (minimise, maximise, close, moving the window by the menu bar), going full screen to present slides, opening the audience window for presenter view on the second screen, closing after asking about unsaved work, native Open/Save dialogs, checking for, installing and restarting into updates, opening web pages (a compound's PubChem page, a link) in the browser, and opening a file a link goes to in its program (after asking).",
   "windows": [
     "main",
     "audience"
@@ -9,12 +9,18 @@
   "permissions": [
     "core:default",
     "core:window:allow-set-title",
+    "core:window:allow-set-decorations",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
     "core:window:allow-set-fullscreen",
     "core:window:allow-destroy",
     "core:webview:allow-create-webview-window",
     "dialog:default",
     "updater:default",
     "process:allow-restart",
-    "opener:default"
+    "opener:default",
+    { "identifier": "opener:allow-open-path", "allow": [{ "path": "**" }] }
   ]
 }

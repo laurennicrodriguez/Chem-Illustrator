@@ -27,7 +27,7 @@ export const SPACING = {
 };
 
 /**
- * The person's own scheme settings (Scheme > Scheme Settings): distances in points, or null to
+ * The person's own scheme settings (Chemistry > Reactions and Schemes > Scheme Settings): distances in points, or null to
  * follow the drawing's bond length (the fractions above). Used by Clean Up Reaction, Arrange
  * Scheme and the text typed above and below arrows.
  */
@@ -176,7 +176,7 @@ export function planCleanUp(doc: Doc, m: Measure, arrowIds?: Iterable<number>): 
   const ids = arrowIds ? new Set(arrowIds) : null;
   const steps: Step[] = [];
   for (const r of doc.arrows.values()) {
-    // (curved arrows, as round a catalytic cycle, are laid out by Scheme > Arrange)
+    // (curved arrows, as round a catalytic cycle, are laid out by Chemistry > Reactions and Schemes > Arrange Scheme)
     if ((ids && !ids.has(r.id)) || !isReactionArrow(r) || r.sweep) continue;
     const roles = rolesFor(r, items, bond);
     if (isStep(roles) || roles.above.length || roles.below.length) steps.push({ arrow: r, roles });

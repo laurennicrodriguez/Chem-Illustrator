@@ -3,9 +3,17 @@
 // pass through, and so on). The chemistry functions (MW, FORMULA, HRMS…) ask the sheet for the
 // properties of a structure cell, or of SMILES text.
 
-import type { Node, RefToken } from './formula';
-import { cellName, type Range } from './refs';
+import { tokenize, type Node, type RefToken } from './formula';
+import { MAX_COLS, MAX_ROWS, cellName, type Range } from './refs';
 import { CellError, ERR, Value, compareValues, isError, toBool, toNumber, toText } from './values';
+import { Arg, Block, FnDef, Fn, LambdaValue, array, at, isBlock, isMulti, lift, numbers, rowsOf, scalar } from './args';
+import { ARRAY_FUNCTIONS } from './fn-array';
+import { DATE_FUNCTIONS, DATE_LIFTED } from './fn-date';
+import { CRITERIA_FUNCTIONS } from './fn-criteria';
+import { LOOKUP_FUNCTIONS, chooseIndex } from './fn-lookup';
+import { TEXT_FUNCTIONS } from './fn-text';
+import { STATS_FUNCTIONS } from './fn-stats';
+import { ANALYSIS_FUNCTIONS } from './fn-analysis';
 import { MolProps, PROPERTIES, propertyValue } from './properties';
 import { ISOTOPE_FUNCTIONS, isotopeValue, readsAsFormula, type IsotopeSource } from './isotopes';
 
@@ -29,26 +37,37 @@ export interface EvalHost {
    * worked out. Whole columns are cut to the rows in use.
    */
   identities?(sheet: string | undefined, r: Range): (string | CellError | null)[][];
+  /** A name defined in the workbook (Formulas > Name Manager), worked out; undefined when there is no such name. */
+  name?(name: string): Arg | undefined;
+  /** The reference a defined name stands for, when it is one (for OFFSET, ROW and the like). */
+  nameRef?(name: string): RefToken | undefined;
+  /** The block an array spills into from its formula's cell (A1#); #REF! when that cell's formula doesn't spill. */
+  spill?(sheet: string | undefined, row: number, col: number): Range | CellError;
+  /** The cell the formula is in (for ROW(), COLUMN() and @). */
+  home?: { row: number; col: number };
+  /** Names given by LET, and a LAMBDA's parameters, upper case. */
+  vars?: Map<string, Arg>;
+  /**
+   * Is a cell left out of SUBTOTAL: one holding SUBTOTAL or AGGREGATE itself (so subtotals
+   * aren't counted twice), a row a filter hides, or with `hidden` any hidden row (109 and so on)?
+   */
+  subtotalSkip?(sheet: string | undefined, row: number, col: number, hidden: boolean): boolean;
+  /** A field of the compound card in a cell (Data > Data Types > Compound): undefined for a cell with no card, null for a field it doesn't have. */
+  field?(sheet: string | undefined, row: number, col: number, name: string): Value | null | undefined;
 }
 
-/** A block of cells given to a function (SUM(A1:A9)). */
-interface Block { block: Value[][] }
-type Arg = Value | Block;
-const isBlock = (a: Arg): a is Block => typeof a === 'object' && a !== null && 'block' in a;
+/** A number as a cell holds it: −0 is 0, infinities and NaN are #NUM!. */
+export const tidyValue = (v: Value): Value => (typeof v === 'number' ? (Number.isFinite(v) ? (v === 0 ? 0 : v) : ERR.num()) : v);
 
-/** Work out a formula's tree. */
+/** Work out a formula's tree, to one value. */
 export function evaluate(n: Node, host: EvalHost): Value {
-  const v = scalar(evalNode(n, host));
-  if (typeof v === 'number') return Number.isFinite(v) ? (v === 0 ? 0 : v) : ERR.num();
-  return v;
+  return tidyValue(scalar(evalNode(n, host)));
 }
 
-/** A block used where one value is wanted: a single cell gives its value, a larger block #VALUE!. */
-function scalar(a: Arg): Value {
-  if (!isBlock(a)) return a;
-  const b = a.block;
-  if (b.length === 1 && b[0].length === 1) return b[0][0];
-  return ERR.value('A block of cells where one value was wanted');
+/** Work out a formula's tree, keeping an array (or block of cells) whole, to spill. */
+export function evaluateArg(n: Node, host: EvalHost): Arg {
+  const a = evalNode(n, host);
+  return isBlock(a) ? a : tidyValue(a);
 }
 
 function refRange(r: RefToken): Range {
@@ -62,25 +81,98 @@ function evalNode(n: Node, host: EvalHost): Arg {
     case 'str': return n.v;
     case 'bool': return n.v;
     case 'err': return new CellError(n.v);
-    case 'name': return ERR.name(`"${n.v}" is not a function or cell this program knows`);
+    case 'name': return nameValue(n.v, host);
     case 'ref': {
       const r = n.v;
       if (r.broken) return ERR.ref();
       if (r.sheet !== undefined && !host.hasSheet(r.sheet)) return ERR.ref(`There is no sheet called "${r.sheet}"`);
+      if (r.spill) {
+        const sp = host.spill ? host.spill(r.sheet, r.a.row, r.a.col) : ERR.ref();
+        return isError(sp) ? sp : blockOf(host, r.sheet, sp);
+      }
       if (r.kind === 'cell') return host.value(r.sheet, r.a.row, r.a.col);
-      return { block: host.block(r.sheet, refRange(r)) };
+      return blockOf(host, r.sheet, refRange(r));
     }
-    case 'neg': {
-      const x = toNumber(scalar(evalNode(n.x, host)));
-      return isError(x) ? x : -x;
+    case 'neg': return unary(evalNode(n.x, host), (x) => -x);
+    case 'pct': return unary(evalNode(n.x, host), (x) => x / 100);
+    case 'at': return intersect(evalNode(n.x, host), host);
+    case 'arr': return array(n.rows.map((r) => r.map((x) => scalar(evalNode(x, host)))));
+    case 'bin': {
+      const l = evalNode(n.l, host), r = evalNode(n.r, host);
+      if (isMulti(l) || isMulti(r)) return lift([l, r], ([a, b]) => binary(n.op, a, b));
+      return binary(n.op, scalar(l), scalar(r));
     }
-    case 'pct': {
-      const x = toNumber(scalar(evalNode(n.x, host)));
-      return isError(x) ? x : x / 100;
-    }
-    case 'bin': return binary(n.op, scalar(evalNode(n.l, host)), scalar(evalNode(n.r, host)));
     case 'fn': return call(n.name, n.args, host);
+    case 'call': {
+      const f = evalNode(n.f, host);
+      if (!(f instanceof LambdaValue)) return isError(f) ? f : ERR.value('Only a LAMBDA can be called like this');
+      return applyLambda(f, n.args.map((a) => evalNode(a, host)));
+    }
   }
+}
+
+/** The cells of a block, as a function is given them. */
+function blockOf(host: EvalHost, sheet: string | undefined, range: Range): Block {
+  return { block: host.block(sheet, range), h: range.r2 - range.r1 + 1, w: range.c2 - range.c1 + 1, at: { r: range.r1, c: range.c1 }, ...(sheet !== undefined ? { sheet } : {}) };
+}
+
+/** A leading minus or a trailing %, for each value of an array too. */
+function unary(a: Arg, f: (x: number) => number): Arg {
+  const one = (v: Value): Value => {
+    const x = toNumber(v);
+    return isError(x) ? x : f(x);
+  };
+  return isMulti(a) ? lift([a], ([v]) => one(v)) : one(scalar(a));
+}
+
+/**
+ * @x: one value. A worked-out array gives its first; a block of cells gives the cell in the
+ * formula's own row (a column) or column (a row), as Excel did before arrays spilled.
+ */
+function intersect(a: Arg, host: EvalHost): Arg {
+  if (!isBlock(a)) return a;
+  if ((a.h === 1 && a.w === 1) || a.array || !a.at) return at(a, 0, 0);
+  const home = host.home;
+  if (home && a.w === 1 && home.row >= a.at.r && home.row < a.at.r + a.h) return at(a, home.row - a.at.r, 0);
+  if (home && a.h === 1 && home.col >= a.at.c && home.col < a.at.c + a.w) return at(a, 0, home.col - a.at.c);
+  return ERR.value('@ found no cell of the block in this formula\'s row or column');
+}
+
+/** A name in a formula: one given by LET or LAMBDA, or one defined in the workbook. */
+function nameValue(name: string, host: EvalHost): Arg {
+  const local = host.vars?.get(name.toUpperCase());
+  if (local !== undefined) return local;
+  const defined = host.name?.(name);
+  if (defined !== undefined) return defined;
+  return ERR.name(`"${name}" is not a name, function or cell this program knows (Formulas > Name Manager lists the names)`);
+}
+
+/** A host that also knows some names (LET's, or a LAMBDA's parameters). */
+function withVars(host: EvalHost, add: Map<string, Arg>): EvalHost {
+  const child = Object.create(host) as EvalHost;
+  child.vars = new Map([...(host.vars ?? []), ...add]);
+  return child;
+}
+
+let lambdaDepth = 0;
+
+/** Call a LAMBDA with its values. */
+export function applyLambda(f: LambdaValue, args: Arg[]): Arg {
+  if (args.length !== f.params.length) return ERR.value(`This LAMBDA takes ${f.params.length} value${f.params.length === 1 ? '' : 's'}, not ${args.length}`);
+  if (lambdaDepth > 300) return ERR.num('Too many LAMBDA calls inside each other (one that calls itself without stopping?)');
+  lambdaDepth++;
+  try {
+    return evalNode(f.body, withVars(f.host, new Map(f.params.map((p, i) => [p, args[i]]))));
+  } finally {
+    lambdaDepth--;
+  }
+}
+
+/** A LAMBDA's answer where one value is wanted (MAP, BYROW…): an array there is #CALC!, as in Excel. */
+function lambdaValue(f: LambdaValue, args: Arg[]): Value {
+  const r = applyLambda(f, args);
+  if (isMulti(r)) return ERR.calc('The LAMBDA must give one value here, not an array');
+  return scalar(r);
 }
 
 function binary(op: string, a: Value, b: Value): Value {
@@ -119,33 +211,6 @@ function binary(op: string, a: Value, b: Value): Value {
 }
 
 // ---------------------------------------------------------------- functions
-
-type Fn = (args: Arg[], host: EvalHost) => Value;
-
-interface FnDef {
-  min: number;
-  max: number;
-  fn: Fn;
-}
-
-/** The numbers among the arguments, as SUM sees them: in blocks only numbers count; typed arguments are read as numbers. */
-function numbers(args: Arg[], skipErrors = false): number[] | CellError {
-  const out: number[] = [];
-  for (const a of args) {
-    if (isBlock(a)) {
-      for (const row of a.block) for (const v of row) {
-        if (typeof v === 'number') out.push(v);
-        else if (isError(v) && !skipErrors) return v;
-      }
-    } else {
-      if (a === null) continue;
-      const x = toNumber(a);
-      if (isError(x)) { if (!skipErrors) return x; continue; }
-      out.push(x);
-    }
-  }
-  return out;
-}
 
 const agg = (f: (xs: number[]) => Value): Fn => (args) => {
   const xs = numbers(args);
@@ -236,14 +301,7 @@ const FUNCTIONS: Record<string, FnDef> = {
   MIN: { min: 1, max: 255, fn: agg((xs) => (xs.length ? xs.reduce((a, b) => (b < a ? b : a)) : 0)) },
   MAX: { min: 1, max: 255, fn: agg((xs) => (xs.length ? xs.reduce((a, b) => (b > a ? b : a)) : 0)) },
   MEDIAN: { min: 1, max: 255, fn: agg(median) },
-  STDEV: {
-    min: 1, max: 255,
-    fn: agg((xs) => {
-      if (xs.length < 2) return ERR.div0();
-      const m = xs.reduce((s, x) => s + x, 0) / xs.length;
-      return Math.sqrt(xs.reduce((s, x) => s + (x - m) ** 2, 0) / (xs.length - 1));
-    }),
-  },
+  STDEV: STATS_FUNCTIONS['STDEV.S'],
   COUNT: {
     min: 1, max: 255,
     fn: (args) => {
@@ -276,14 +334,19 @@ const FUNCTIONS: Record<string, FnDef> = {
       return n;
     },
   },
-  // Excel's SUBTOTAL (as a table's totals row writes it): 1 average, 2 count, 3 count filled, 4 max, 5 min, 6 product, 7 standard deviation, 9 sum (101… the same)
+  // Excel's SUBTOTAL (as a table's totals row writes it): 1 average, 2 count, 3 count filled, 4 max, 5 min, 6 product, 7 and 8 standard deviation, 9 sum, 10 and 11 variance (101… the same)
   SUBTOTAL: {
     min: 2, max: 255,
     fn: (args, host) => {
       const k = toNumber(scalar(args[0]));
       if (isError(k)) return k;
-      const name = ({ 1: 'AVERAGE', 2: 'COUNT', 3: 'COUNTA', 4: 'MAX', 5: 'MIN', 6: 'PRODUCT', 7: 'STDEV', 9: 'SUM' } as Record<number, string>)[Math.trunc(k) % 100];
-      return name ? FUNCTIONS[name].fn(args.slice(1), host) : ERR.value('SUBTOTAL works out 1 to 7 and 9 (101 to 107 and 109)');
+      const name = ({ 1: 'AVERAGE', 2: 'COUNT', 3: 'COUNTA', 4: 'MAX', 5: 'MIN', 6: 'PRODUCT', 7: 'STDEV', 8: 'STDEVP', 9: 'SUM', 10: 'VAR', 11: 'VARP' } as Record<number, string>)[Math.trunc(k) % 100];
+      if (!name) return ERR.value('SUBTOTAL works out 1 to 11 (101 to 111)');
+      // other subtotals in the block, and rows filtered out (any hidden row, for 101 to 111), are left out
+      const hidden = Math.trunc(k) > 100;
+      const skip = host.subtotalSkip;
+      const cells = skip ? args.slice(1).map((a) => (isBlock(a) && a.at ? { ...a, block: a.block.map((row, i) => row.map((v, j) => (skip(a.sheet, a.at!.r + i, a.at!.c + j, hidden) ? null : v))) } : a)) : args.slice(1);
+      return scalar(FUNCTIONS[name].fn(cells, host));
     },
   },
   ROUND: { min: 1, max: 2, fn: roundFn('near') },
@@ -361,37 +424,355 @@ const FUNCTIONS: Record<string, FnDef> = {
   ISNUMBER: { min: 1, max: 1, fn: is((v) => typeof v === 'number') },
   ISTEXT: { min: 1, max: 1, fn: is((v) => typeof v === 'string') },
   ISERROR: { min: 1, max: 1, fn: is((v) => isError(v)) },
+  ISNA: { min: 1, max: 1, fn: is((v) => isError(v) && v.code === '#N/A') },
+  NA: { min: 0, max: 0, fn: () => ERR.na() },
+  ...CRITERIA_FUNCTIONS,
+  ...LOOKUP_FUNCTIONS,
+  ...TEXT_FUNCTIONS,
+  ...STATS_FUNCTIONS,
+  ...ANALYSIS_FUNCTIONS,
+  ...DATE_FUNCTIONS,
+  ...ARRAY_FUNCTIONS,
+  // LAMBDA helpers: the LAMBDA comes last
+  // MAP(array1, …, LAMBDA): the LAMBDA worked out for each value (of each array together)
+  MAP: {
+    min: 2, max: 254,
+    fn: (args) => {
+      const f = args[args.length - 1];
+      if (!(f instanceof LambdaValue)) return needLambda('MAP', f);
+      return lift(args.slice(0, -1), (vals) => lambdaValue(f, [...vals]));
+    },
+  },
+  // REDUCE(start, array, LAMBDA(total, value)): one total carried through every value
+  REDUCE: { min: 3, max: 3, fn: (args) => scan(args, false) },
+  // SCAN(start, array, LAMBDA(total, value)): the running totals
+  SCAN: { min: 3, max: 3, fn: (args) => scan(args, true) },
+  // BYROW(array, LAMBDA(row)) and BYCOL(array, LAMBDA(column)): one answer per row (column)
+  BYROW: { min: 2, max: 2, fn: (args) => byLine(args, true) },
+  BYCOL: { min: 2, max: 2, fn: (args) => byLine(args, false) },
+  // MAKEARRAY(rows, columns, LAMBDA(row, column))
+  MAKEARRAY: {
+    min: 3, max: 3,
+    fn: (args) => {
+      const r = toNumber(scalar(args[0])), c = toNumber(scalar(args[1]));
+      if (isError(r)) return r;
+      if (isError(c)) return c;
+      const f = args[2];
+      if (!(f instanceof LambdaValue)) return needLambda('MAKEARRAY', f);
+      const R = Math.trunc(r), C = Math.trunc(c);
+      if (R < 1 || C < 1) return ERR.value('Rows and columns must be 1 or more');
+      if (R * C > 1_000_000) return ERR.num('The array would be too large');
+      return array(Array.from({ length: R }, (_, i) => Array.from({ length: C }, (_, j) => lambdaValue(f, [i + 1, j + 1]))));
+    },
+  },
 };
 
-/** Functions that only work out the arguments they need. */
-const LAZY = new Set(['IF', 'IFERROR']);
+const needLambda = (name: string, got: Arg): CellError => (isError(got) && !(got instanceof LambdaValue) && !isBlock(got) ? got : ERR.value(`${name}'s last argument is a LAMBDA, such as LAMBDA(x, x*2)`));
 
-/** Every function name, for the formula bar's suggestions. */
-export const FUNCTION_NAMES = [...Object.keys(FUNCTIONS), ...LAZY, ...Object.keys(PROPERTIES), ...Object.keys(ISOTOPE_FUNCTIONS)].sort();
+/** REDUCE and SCAN. */
+function scan(args: Arg[], keepAll: boolean): Arg {
+  const f = args[2];
+  if (!(f instanceof LambdaValue)) return needLambda(keepAll ? 'SCAN' : 'REDUCE', f);
+  let acc: Arg = args[0] === '' ? 0 : args[0];
+  const rows = rowsOf(args[1]);
+  const out: Value[][] = [];
+  for (const row of rows) {
+    const line: Value[] = [];
+    for (const v of row) {
+      acc = applyLambda(f, [acc, v]);
+      if (keepAll) line.push(isMulti(acc) ? ERR.calc('The LAMBDA must give one value here, not an array') : scalar(acc));
+    }
+    out.push(line);
+  }
+  return keepAll ? array(out) : acc;
+}
 
-function call(name: string, argNodes: Node[], host: EvalHost): Arg {
-  if (name === 'IF') {
+/** BYROW and BYCOL. */
+function byLine(args: Arg[], byRow: boolean): Arg {
+  const f = args[1];
+  if (!(f instanceof LambdaValue)) return needLambda(byRow ? 'BYROW' : 'BYCOL', f);
+  const rows = rowsOf(args[0]);
+  if (byRow) return array(rows.map((r) => [lambdaValue(f, [array([r])])]));
+  const w = rows[0]?.length ?? 0;
+  return array([Array.from({ length: w }, (_, j) => lambdaValue(f, [array(rows.map((r) => [r[j]]))]))]);
+}
+
+/** How many leading arguments of a function take one value each (0 for those that take blocks). */
+export const liftedArgs = (name: string): number => LIFTED[name] ?? 0;
+
+/**
+ * Functions that take one value in their first few arguments: given an array there, they are
+ * worked out for each of its values and give an array (=LEN(A2:A9), =YEAR(B2:B20)), as in Excel.
+ * The number says how many leading arguments.
+ */
+const LIFTED: Record<string, number> = {
+  ROUND: 2, ROUNDUP: 2, ROUNDDOWN: 2, INT: 1, ABS: 1, SQRT: 1, EXP: 1, LN: 1, LOG10: 1, LOG: 2, POWER: 2, MOD: 2, NOT: 1,
+  LEN: 1, UPPER: 1, LOWER: 1, TRIM: 1, LEFT: 2, RIGHT: 2, MID: 3, FIND: 3, SEARCH: 3, SUBSTITUTE: 4, REPLACE: 4, TEXT: 2, VALUE: 1,
+  CONCATENATE: 255, ISBLANK: 1, ISNUMBER: 1, ISTEXT: 1, ISERROR: 1, ISNA: 1,
+  ...DATE_LIFTED,
+};
+
+/** Functions that only work out the arguments they need, or need a reference rather than the values in it. */
+const LAZY: Record<string, (argNodes: Node[], host: EvalHost) => Arg> = {
+  FIELDVALUE: (argNodes, host) => fieldValue(argNodes, host),
+  IF: (argNodes, host) => {
     if (argNodes.length < 2 || argNodes.length > 3) return ERR.value('IF needs 2 or 3 arguments: IF(test, if true, if false)');
-    const c = toBool(scalar(evalNode(argNodes[0], host)));
+    const test = evalNode(argNodes[0], host);
+    if (isMulti(test)) {
+      // a test for each value of an array: both answers are needed
+      const t = evalNode(argNodes[1], host), f = argNodes.length > 2 ? evalNode(argNodes[2], host) : false;
+      return lift([test, t, f], ([c, x, y]) => { const b = toBool(c); return isError(b) ? b : b ? x : y; });
+    }
+    const c = toBool(scalar(test));
     if (isError(c)) return c;
     if (c) return evalNode(argNodes[1], host);
     return argNodes.length > 2 ? evalNode(argNodes[2], host) : false;
-  }
-  if (name === 'IFERROR') {
+  },
+  IFERROR: (argNodes, host) => {
     if (argNodes.length !== 2) return ERR.value('IFERROR needs 2 arguments');
-    const v = scalar(evalNode(argNodes[0], host));
+    const a = evalNode(argNodes[0], host);
+    if (isMulti(a)) return lift([a, evalNode(argNodes[1], host)], ([x, y]) => (isError(x) && x.code !== '#BUSY!' ? y : x));
+    const v = scalar(a);
     return isError(v) && v.code !== '#BUSY!' ? evalNode(argNodes[1], host) : v;
+  },
+  IFNA: (argNodes, host) => {
+    if (argNodes.length !== 2) return ERR.value('IFNA needs 2 arguments');
+    const a = evalNode(argNodes[0], host);
+    if (isMulti(a)) return lift([a, evalNode(argNodes[1], host)], ([x, y]) => (isError(x) && x.code === '#N/A' ? y : x));
+    const v = scalar(a);
+    return isError(v) && v.code === '#N/A' ? evalNode(argNodes[1], host) : v;
+  },
+  // LET(name1, value1, …, calculation): names for values, used in the calculation
+  LET: (argNodes, host) => {
+    if (argNodes.length < 3 || argNodes.length % 2 === 0) return ERR.value('LET needs names and values in pairs, then the calculation: LET(x, A1*2, x+1)');
+    let h = host;
+    for (let i = 0; i + 1 < argNodes.length; i += 2) {
+      const nm = argNodes[i];
+      if (nm.t !== 'name') return ERR.value('LET\'s names are plain names such as x or total (not cell addresses or numbers)');
+      h = withVars(h, new Map([[nm.v.toUpperCase(), evalNode(argNodes[i + 1], h)]]));
+    }
+    return evalNode(argNodes[argNodes.length - 1], h);
+  },
+  // LAMBDA(parameter1, …, calculation): a function of your own, called with its values
+  LAMBDA: (argNodes, host) => {
+    if (!argNodes.length || argNodes.length > 254) return ERR.value('LAMBDA needs its parameters, then the calculation: LAMBDA(x, x*2)');
+    const names: string[] = [];
+    for (const p of argNodes.slice(0, -1)) {
+      if (p.t !== 'name') return ERR.value('A LAMBDA\'s parameters are plain names such as x or rate, and the calculation comes last');
+      names.push(p.v.toUpperCase());
+    }
+    if (new Set(names).size !== names.length) return ERR.value('A LAMBDA\'s parameters need different names');
+    return new LambdaValue(names, argNodes[argNodes.length - 1], host);
+  },
+  // ROW([reference]) and COLUMN([reference]): row and column numbers (of the formula's own cell when left out)
+  ROW: (argNodes, host) => rowCol(argNodes, host, true),
+  COLUMN: (argNodes, host) => rowCol(argNodes, host, false),
+  // IFS(test1, value1, test2, value2, …): the value of the first test that is TRUE
+  IFS: (argNodes, host) => {
+    if (argNodes.length < 2 || argNodes.length % 2) return ERR.value('IFS needs pairs: IFS(test1, value1, test2, value2, …)');
+    for (let i = 0; i < argNodes.length; i += 2) {
+      const c = toBool(scalar(evalNode(argNodes[i], host)));
+      if (isError(c)) return c;
+      if (c) return evalNode(argNodes[i + 1], host);
+    }
+    return ERR.na('None of the tests is TRUE');
+  },
+  // SWITCH(value, match1, result1, …, [otherwise])
+  SWITCH: (argNodes, host) => {
+    if (argNodes.length < 3) return ERR.value('SWITCH needs a value, then pairs of match and result: SWITCH(A1, 1, "one", 2, "two", "other")');
+    const v = scalar(evalNode(argNodes[0], host));
+    if (isError(v)) return v;
+    let i = 1;
+    for (; i + 1 < argNodes.length; i += 2) {
+      const m = scalar(evalNode(argNodes[i], host));
+      if (isError(m)) return m;
+      if (typeof m === typeof v && compareValues(m, v) === 0) return evalNode(argNodes[i + 1], host);
+    }
+    return i < argNodes.length ? evalNode(argNodes[i], host) : ERR.na('No match, and no value for otherwise');
+  },
+  CHOOSE: (argNodes, host) => {
+    if (argNodes.length < 2) return ERR.value('CHOOSE needs a number and the values to pick from');
+    const i = chooseIndex(scalar(evalNode(argNodes[0], host)), argNodes.length - 1);
+    return isError(i) ? i : evalNode(argNodes[i], host);
+  },
+  OFFSET: (argNodes, host) => {
+    const r = offsetRef(argNodes, host);
+    return isError(r) ? r : evalNode({ t: 'ref', v: r }, host);
+  },
+  INDIRECT: (argNodes, host) => {
+    const r = indirectRef(argNodes, host);
+    return isError(r) ? r : evalNode({ t: 'ref', v: r }, host);
+  },
+};
+
+/**
+ * FIELDVALUE(A2,"Molecular weight"): a field of the compound card in A2, or of each cell of a
+ * block (an array). #FIELD! for a cell that isn't a compound, or a field its card doesn't have.
+ */
+function fieldValue(argNodes: Node[], host: EvalHost): Arg {
+  if (argNodes.length !== 2) return ERR.value('FIELDVALUE needs a compound cell and a field: FIELDVALUE(A2,"Molecular weight")');
+  const name = scalar(evalNode(argNodes[1], host));
+  if (isError(name)) return name;
+  const r = refOf(argNodes[0], host);
+  if (isError(r)) return ERR.field('FIELDVALUE needs a cell holding a compound (Data > Data Types > Compound)');
+  if (r.sheet !== undefined && !host.hasSheet(r.sheet)) return ERR.ref(`There is no sheet called "${r.sheet}"`);
+  const one = (row: number, col: number): Value => {
+    const v = host.field?.(r.sheet, row, col, String(name ?? ''));
+    if (v === undefined) return ERR.field('The cell isn\'t a compound (Data > Data Types > Compound)');
+    if (v === null) return ERR.field(`The compound has no field "${String(name ?? '')}"`);
+    return v;
+  };
+  const R = refRange(r);
+  if (R.r1 === R.r2 && R.c1 === R.c2) return one(R.r1, R.c1);
+  if ((R.r2 - R.r1 + 1) * (R.c2 - R.c1 + 1) > 100000) return ERR.value('FIELDVALUE takes a block of up to 100,000 cells');
+  return array(Array.from({ length: R.r2 - R.r1 + 1 }, (_, i) => Array.from({ length: R.c2 - R.c1 + 1 }, (_, j) => one(R.r1 + i, R.c1 + j))));
+}
+
+/** ROW and COLUMN. */
+function rowCol(argNodes: Node[], host: EvalHost, row: boolean): Arg {
+  if (argNodes.length > 1) return ERR.value(`${row ? 'ROW' : 'COLUMN'} takes one reference, or none for its own cell`);
+  if (!argNodes.length || (argNodes[0].t === 'str' && argNodes[0].v === '')) {
+    const h = host.home;
+    return h ? (row ? h.row : h.col) + 1 : ERR.value('No cell to number');
   }
+  const r = refOf(argNodes[0], host);
+  if (isError(r)) return r;
+  let R = refRange(r);
+  if (r.spill) {
+    const sp = host.spill ? host.spill(r.sheet, r.a.row, r.a.col) : ERR.ref();
+    if (isError(sp)) return sp;
+    R = sp;
+  }
+  if (row) {
+    if (R.r1 === R.r2 || R.r2 - R.r1 >= 100000) return R.r1 + 1;
+    return array(Array.from({ length: R.r2 - R.r1 + 1 }, (_, i) => [R.r1 + i + 1]));
+  }
+  if (R.c1 === R.c2) return R.c1 + 1;
+  return array([Array.from({ length: R.c2 - R.c1 + 1 }, (_, j) => R.c1 + j + 1)]);
+}
+
+/** Functions whose cells can't be known from the formula's text, or whose answers change by themselves, so they are worked out again after the others and after every change. */
+export const VOLATILE_FUNCTIONS = ['OFFSET', 'INDIRECT', 'TODAY', 'NOW'];
+
+/** Every function name, for the formula bar's suggestions. */
+export const FUNCTION_NAMES = [...Object.keys(FUNCTIONS), ...Object.keys(LAZY), ...Object.keys(PROPERTIES), ...Object.keys(ISOTOPE_FUNCTIONS)].sort();
+
+/** A reference worked out in a formula: as written, or made by INDIRECT or OFFSET. */
+function refOf(n: Node, host: EvalHost): RefToken | CellError {
+  if (n.t === 'ref') return n.v.broken ? ERR.ref() : n.v;
+  if (n.t === 'fn' && n.name === 'INDIRECT') return indirectRef(n.args, host);
+  if (n.t === 'fn' && n.name === 'OFFSET') return offsetRef(n.args, host);
+  if (n.t === 'err') return new CellError(n.v);
+  if (n.t === 'name') {
+    const r = host.nameRef?.(n.v);
+    if (r) return r;
+    const v = host.vars?.get(n.v.toUpperCase());
+    if (isBlock(v as Arg) && (v as Block).at) {
+      const b = v as Block;
+      return blockRef(undefined, b.at!.r, b.at!.c, b.at!.r + b.h - 1, b.at!.c + b.w - 1);
+    }
+  }
+  return ERR.value('A cell reference is needed here');
+}
+
+/** A reference to the block r1:c1 to r2:c2 of a sheet; #REF! when it runs off the sheet. */
+function blockRef(sheet: string | undefined, r1: number, c1: number, r2: number, c2: number): RefToken | CellError {
+  if (r1 < 0 || c1 < 0 || r2 >= MAX_ROWS || c2 >= MAX_COLS || r2 < r1 || c2 < c1) return ERR.ref('The reference runs off the sheet');
+  const a = { row: r1, col: c1, absRow: true, absCol: true };
+  if (r1 === r2 && c1 === c2) return { sheet, kind: 'cell', a };
+  return { sheet, kind: 'range', a, b: { row: r2, col: c2, absRow: true, absCol: true } };
+}
+
+/** OFFSET(reference, rows, columns, [height], [width]): the block moved, and sized. */
+function offsetRef(argNodes: Node[], host: EvalHost): RefToken | CellError {
+  if (argNodes.length < 3 || argNodes.length > 5) return ERR.value('OFFSET needs a reference, rows and columns, then optionally height and width');
+  const base = refOf(argNodes[0], host);
+  if (isError(base)) return base;
+  const r = refRange(base);
+  const num = (i: number, dflt: number): number | CellError => {
+    if (i >= argNodes.length) return dflt;
+    const v = scalar(evalNode(argNodes[i], host));
+    return v === '' ? dflt : toNumber(v);
+  };
+  const dr = num(1, 0), dc = num(2, 0), h = num(3, r.r2 - r.r1 + 1), w = num(4, r.c2 - r.c1 + 1);
+  for (const x of [dr, dc, h, w]) if (isError(x)) return x;
+  const [DR, DC, H, W] = [dr, dc, h, w].map((x) => Math.trunc(x as number));
+  if (H < 1 || W < 1) return ERR.ref('Height and width must be 1 or more');
+  return blockRef(base.sheet, r.r1 + DR, r.c1 + DC, r.r1 + DR + H - 1, r.c1 + DC + W - 1);
+}
+
+/** INDIRECT("B2"), INDIRECT("Sheet2!A1:C5"), or with FALSE as the second argument "R2C3" (R1C1 style, rows and columns from 1). */
+function indirectRef(argNodes: Node[], host: EvalHost): RefToken | CellError {
+  if (argNodes.length < 1 || argNodes.length > 2) return ERR.value('INDIRECT needs the reference as text, and optionally FALSE for R1C1 style');
+  const t = scalar(evalNode(argNodes[0], host));
+  if (isError(t)) return t;
+  if (typeof t !== 'string' || !t.trim()) return ERR.ref('INDIRECT needs a reference written as text');
+  let a1: boolean | CellError = true;
+  if (argNodes.length > 1) {
+    const v = scalar(evalNode(argNodes[1], host));
+    a1 = v === '' || v === null ? false : toBool(v);
+    if (isError(a1)) return a1;
+  }
+  const text = t.trim();
+  const bad = () => ERR.ref(`"${text}" is not a reference`);
+  if (a1) {
+    let toks;
+    try { toks = tokenize(text).filter((x) => x.t !== 'ws'); } catch { return bad(); }
+    if (toks.length !== 1 || toks[0].t !== 'ref') return bad();
+    const ref = toks[0].v;
+    // a single address written with a sheet but checked here, so a missing sheet is #REF!
+    if (ref.sheet !== undefined && !host.hasSheet(ref.sheet)) return ERR.ref(`There is no sheet called "${ref.sheet}"`);
+    return ref;
+  }
+  const bang = text.lastIndexOf('!');
+  let sheet: string | undefined;
+  if (bang >= 0) {
+    sheet = text.slice(0, bang).replace(/^'(.*)'$/, '$1').replace(/''/g, "'");
+    if (!host.hasSheet(sheet)) return ERR.ref(`There is no sheet called "${sheet}"`);
+  }
+  const m = /^R(\d+)C(\d+)(?::R(\d+)C(\d+))?$/i.exec(text.slice(bang + 1));
+  if (!m) return bad();
+  const r1 = Number(m[1]) - 1, c1 = Number(m[2]) - 1, r2 = m[3] ? Number(m[3]) - 1 : r1, c2 = m[4] ? Number(m[4]) - 1 : c1;
+  return blockRef(sheet, Math.min(r1, r2), Math.min(c1, c2), Math.max(r1, r2), Math.max(c1, c2));
+}
+
+/** The functions that add up, average, rank or spread the numbers they are given. */
+const BY_REFERENCE = new Set(['SUM', 'PRODUCT', 'AVERAGE', 'MIN', 'MAX', 'MEDIAN', 'SKEW', 'KURT', 'MODE', 'STDEV', 'STDEVP', 'VAR', 'VARP', 'STDEV.S', 'STDEV.P', 'VAR.S', 'VAR.P']);
+
+function call(name: string, argNodes: Node[], host: EvalHost): Arg {
+  // a LAMBDA named by LET
+  const local = host.vars?.get(name);
+  if (local instanceof LambdaValue) return applyLambda(local, argNodes.map((a) => evalNode(a, host)));
+  const lazy = LAZY[name];
+  if (lazy) return lazy(argNodes, host);
   if (name === 'DUPLICATE') return duplicate(argNodes, host);
   if (ISOTOPE_FUNCTIONS[name]) return isotope(name, argNodes, host);
   const prop = PROPERTIES[name];
   if (prop) return chemistry(name, argNodes, host);
   const def = FUNCTIONS[name];
-  if (!def) return ERR.name(`${name} is not a function this program knows`);
+  if (!def) {
+    // a LAMBDA given a name in the Name Manager
+    const named = host.name?.(name);
+    if (named instanceof LambdaValue) return applyLambda(named, argNodes.map((a) => evalNode(a, host)));
+    return ERR.name(`${name} is not a function this program knows`);
+  }
   if (argNodes.length < def.min || argNodes.length > def.max) {
     return ERR.value(def.min === def.max ? `${name} needs ${def.min} argument${def.min === 1 ? '' : 's'}` : `${name} needs ${def.min} to ${def.max} arguments`);
   }
-  const args = argNodes.map((a) => evalNode(a, host));
+  const args = argNodes.map((a) => {
+    const v = evalNode(a, host);
+    // text in a single cell that is named is left out of a sum, as in a range (only typed text is read as a number)
+    if (BY_REFERENCE.has(name) && a.t === 'ref' && a.v.kind === 'cell' && !isBlock(v) && !isError(v)) return { block: [[v]], h: 1, w: 1 } as Block;
+    return v;
+  });
+  const k = Math.min(LIFTED[name] ?? 0, args.length);
+  if (k && args.slice(0, k).some(isMulti)) {
+    const rest = args.slice(k);
+    return lift(args.slice(0, k), (vals) => {
+      const r = def.fn([...vals, ...rest], host);
+      return isMulti(r) ? ERR.calc('An array where one value was wanted') : scalar(r);
+    });
+  }
   return def.fn(args, host);
 }
 

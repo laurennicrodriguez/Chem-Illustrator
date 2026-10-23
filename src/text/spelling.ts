@@ -3,7 +3,8 @@
 //   - the English words of pyspellchecker (public/dict/english.txt, most common first);
 //   - Adam Azman's Open Source Chemistry Dictionary (public/dict/chemistry.txt, CC BY 3.0 US);
 //   - SI Assistant's chemistry word lists: lab words, NMR multiplicities, named reactions
-//     (public/dict/lab-words.txt);
+//     (public/dict/lab-words.txt), and our own list of name-reaction surnames and everyday
+//     words of synthesis (public/dict/name-reactions.txt);
 //   - units, the person's own dictionary, and the words ignored while the program is open;
 //   - or it is a systematic name built from name pieces ("dichloromethane").
 // Words that could be compound names or abbreviations are never underlined: words with digits,
@@ -84,7 +85,7 @@ formyl vinyl allyl aryl alk propargyl homo nor per anhydr hydr hydro dehydro hyd
 oxide aza oxa thia ether ester amin amid fluor chlor brom iod nitr ethan methan
 anol anal anone enone enol enal diene triene idine idin aceto sil silane bor borane
 pinacol epox lithium sodium potassium magnesium aluminum aluminium zinc copper cesium
-caesium titanium tin boronic`.split(/\s+/));
+caesium titanium tin boronic keto ketone dien trien ynon`.split(/\s+/));
 
 function fragments(word: string): number {
   const n = word.length;
@@ -280,8 +281,8 @@ export function loadSpeller(base = './dict/'): Promise<Speller | null> {
         if (!r.ok) throw new Error(`${f}: ${r.status}`);
         return r.text();
       };
-      const [english, chemistry, lab] = await Promise.all([get('english.txt'), get('chemistry.txt'), get('lab-words.txt')]);
-      return new Speller({ english, chemistry, lab });
+      const [english, chemistry, lab, names] = await Promise.all([get('english.txt'), get('chemistry.txt'), get('lab-words.txt'), get('name-reactions.txt')]);
+      return new Speller({ english, chemistry, lab: `${lab}\n${names}` });
     } catch (e) {
       console.warn('The spelling check could not read its word lists:', e);
       return null;

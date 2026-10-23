@@ -5,14 +5,17 @@
 
 import { isTauri } from '@tauri-apps/api/core';
 import { Doc, type Contents } from '../model';
-import { Deck, type LayoutId, type Master, type SlideSize } from './deck';
+import { Deck, type LayoutId, type Master, type SlideSize, type SlideHF } from './deck';
 import type { Anim, Transition } from './animation';
+import type { Background } from './background';
 
 /** Everything the audience window needs to show the slides. */
 export interface DeckData {
   size: SlideSize;
   master: Master;
-  slides: { layout: LayoutId; contents: Contents; transition?: Transition; anims?: Anim[] }[];
+  slides: { layout: LayoutId; contents: Contents; transition?: Transition; anims?: Anim[]; background?: Background; hideGraphics?: boolean; hidden?: boolean; hf?: SlideHF }[];
+  /** How the show plays, as the presenter's player does (Set Up Show): its slides in order, without animations, by its timings. */
+  play?: { order: number[] | null; noAnimation: boolean; useTimings: boolean };
 }
 
 export type ShowMessage =
@@ -22,6 +25,10 @@ export type ShowMessage =
   | { kind: 'prev' }
   | { kind: 'go'; i: number; atEnd?: boolean }
   | { kind: 'blank'; how: 'black' | 'white' | 'end' | null }
+  | { kind: 'zoom'; i: number; rect: { x1: number; y1: number; x2: number; y2: number }; out: boolean } // a zoom, its box as fractions of the slide canvas
+  | { kind: 'tap'; fx: number; fy: number } // a click on a video or sound, as fractions of the canvas
+  | { kind: 'ink'; i: number; strokes: { tool: 'pen' | 'highlighter'; color: string; width: number; pts: { x: number; y: number }[] }[] }
+  | { kind: 'laser'; p: { x: number; y: number } | null }
   | { kind: 'key'; key: string } // audience → presenter: a key pressed or a click there
   | { kind: 'bye' }; // either way: the show is over, or the window was closed
 
@@ -30,18 +37,19 @@ const EVENT = 'slide-show';
 const CHANNEL = 'chem-illustrator-slide-show';
 
 /** The deck as plain data (speaker notes stay with the presenter). */
-export function deckData(deck: Deck): DeckData {
+export function deckData(deck: Deck, play?: DeckData['play']): DeckData {
   return {
     size: { ...deck.size },
     master: deck.master,
-    slides: deck.slides.map((s, i) => ({ layout: s.layout, contents: deck.docOf(i).contents(), transition: s.transition, anims: s.anims })),
+    slides: deck.slides.map((s, i) => ({ layout: s.layout, contents: deck.docOf(i).contents(), transition: s.transition, anims: s.anims, background: s.background, hideGraphics: s.hideGraphics, hidden: s.hidden, hf: s.hf })),
+    ...(play ? { play } : {}),
   };
 }
 
 /** A deck to play, made from the data sent. */
 export function deckFromData(d: DeckData): Deck {
   const deck = new Deck(new Doc());
-  deck.load(d.slides.map((s) => deck.makeSlide(s.layout, s.contents, '', { transition: s.transition, anims: s.anims })), d.size, d.master);
+  deck.load(d.slides.map((s) => deck.makeSlide(s.layout, s.contents, '', { transition: s.transition, anims: s.anims, background: s.background, hideGraphics: s.hideGraphics, hidden: s.hidden, hf: s.hf })), d.size, d.master);
   return deck;
 }
 

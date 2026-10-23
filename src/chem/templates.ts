@@ -2,6 +2,7 @@
 // into a drawing: on their own, fused onto a bond, or joined to an atom. The shapes are made by
 // scripts/make-templates.mjs, with a bond length of 1 and the middle at (0, 0).
 
+import { layerByDepth } from './crossing';
 import data from './templates.json';
 import conformerData from './conformers.json';
 import metalData from './metal-templates.json';
@@ -20,7 +21,7 @@ export type TemplateBond = [number, number, number, BondDisplay?];
 export interface Template {
   id: string;
   name: string;
-  /** 'own': saved by the person (Structure > Save as Template). */
+  /** 'own': saved by the person (Chemistry > Nicknames and Templates > Save as Template). */
   group: TemplateGroup;
   atoms: TemplateAtom[];
   bonds: TemplateBond[];
@@ -245,6 +246,10 @@ export interface PlaceOptions {
   noMerge?: boolean;
   /** Template atoms in `existing` whose drawn atom moves to where the template puts it (a short axial or equatorial bond end that becomes a ring atom). */
   move?: Set<number>;
+  /** How far each template atom lies towards the reader, in drawing units (a 3-D fusion); by default the template's own depths. */
+  depth?: number[];
+  /** Depths to give drawn atoms that have none (the ring a 3-D fusion goes onto). */
+  atomDepth?: Map<number, number>;
 }
 
 /**
@@ -258,6 +263,9 @@ export function placeTemplate(doc: Doc, t: Template, pl: Placement, opts: PlaceO
   const ids: number[] = [];
   const used = new Set<number>(opts.existing?.values() ?? []);
   const shared = new Set<number>();
+  // a template drawn in perspective: each atom's depth, so crossing bonds overlap the right way
+  const depth = opts.depth ?? (t.z && t.z.length === t.atoms.length && !pl.pts ? t.z.map((z) => z * pl.scale) : undefined);
+  for (const [id, d] of opts.atomDepth ?? []) if (doc.atoms.get(id)?.depth === undefined) doc.updateAtom(id, { depth: d });
   t.atoms.forEach(([, , el, charge, label], i) => {
     let id = opts.existing?.get(i);
     if (id === undefined && !opts.noMerge) {
@@ -266,10 +274,11 @@ export function placeTemplate(doc: Doc, t: Template, pl: Placement, opts: PlaceO
     }
     if (id !== undefined) {
       shared.add(id);
-      if (opts.move?.has(i)) doc.updateAtom(id, { x: pts[i].x, y: pts[i].y });
+      if (opts.move?.has(i)) doc.updateAtom(id, { x: pts[i].x, y: pts[i].y, ...(depth ? { depth: depth[i] } : {}) });
+      else if (depth && doc.atoms.get(id)!.depth === undefined) doc.updateAtom(id, { depth: depth[i] });
     } else {
       const z = elementNumber(el) ?? 6;
-      id = doc.addAtom(pts[i].x, pts[i].y, z, { ...extra, ...(charge ? { charge } : {}), ...(label ? { label } : {}) }).id;
+      id = doc.addAtom(pts[i].x, pts[i].y, z, { ...extra, ...(charge ? { charge } : {}), ...(label ? { label } : {}), ...(depth ? { depth: depth[i] } : {}) }).id;
     }
     used.add(id);
     ids.push(id);
@@ -292,6 +301,7 @@ export function placeTemplate(doc: Doc, t: Template, pl: Placement, opts: PlaceO
   });
   for (const [m, members, display] of t.hapto ?? []) bondHapto(doc, ids[m], members.map((i) => ids[i]), display ?? 'solid');
   if (opts.bondFrom !== undefined && !doc.bondBetween(opts.bondFrom, ids[t.attach])) doc.addBond(opts.bondFrom, ids[t.attach], 1, 'solid', extra);
+  if (depth) layerByDepth(doc, ids);
   for (const ring of t.circle ?? []) circleRing(doc, ring.map((i) => ids[i]));
   for (const [kind, x1, y1, x2, y2] of t.shapes ?? []) {
     const a = placePoint(pl, x1, y1), b = placePoint(pl, x2, y2);

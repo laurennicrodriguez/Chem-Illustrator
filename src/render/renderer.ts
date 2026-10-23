@@ -13,22 +13,26 @@ import { crossingGapsCached } from '../chem/crossing';
 import { FADE, tint } from '../colours';
 import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, passParam, angleOf, arcCenter, fromAngle, turnedCorners, DEG } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
-import { chargeInk, labelBonds, labelSpec, layoutLabel, LabelLayout } from '../chem/labels';
+import { chargeInk, labelBonds, labelSpec, layoutLabel, LabelLayout, labelLook } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
 import { isGenericLabel } from '../chem/labels';
-import { bracketPath, shaftOffset, shapeOrder, elbowRoute, boxOf, bezPoints, bezHeadBack, bezPathAt, bezSlice, type PathStep } from '../objects';
+import { bracketPath, shaftOffset, shapeOrder, elbowRoute, boxOf, shapeBox, shapeMid, shapeTurn, bezPoints, bezHeadBack, bezPathAt, bezSlice, type PathStep } from '../objects';
 import { atomStereoText, bondStereoText, shownDescriptor, axialStyle, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { arialWidth } from '../text-metrics';
 import { attachDiamondSize, hasAttachDiamond } from './atom-marks';
 import { layoutText, FONT_STACK, withStack, type TextLayout } from '../text/layout';
 import { drawLayout } from '../text/draw';
-import { geoDef, moveSteps, textArea, traceSteps } from '../design/geo';
+import { geoDef, moveSteps, textArea, traceSteps, type GeoStep } from '../design/geo';
 import { cutCorners, fillInk, patternClear, patternInk, ringShadowSize, shadowLook, insetPolygon, dotCentres, gradientBands, hatchLines, isDotPattern, patternAngles, patternSpacing, radialBands, shapePolygons } from './fills';
 import { placeholderRect, isEmptyText } from '../deck/deck';
 import { imageFor } from './images';
+import { hasShapeFx, shapeFx, type ShapeFxPaints } from './shape-fx';
+import { fxCanvas, fxSrc, shapeDef, traceShape } from './picture-fx';
 import { layoutTable, drawTable, type TableLayout, type TablePart } from '../table';
 import type { TableData } from '../model';
 import { repeatLabelPlace } from '../chem/polymer';
+import { paintChartBox } from './chart-box-paint';
+import { paintShapeMath } from '../deck/equation';
 
 export { FONT_STACK };
 
@@ -122,6 +126,18 @@ export function withMeasure<T>(m: TextMeasure, fn: () => T): T {
 
 /** A patterned shape's dots or hatching, kept with the shape (a changed shape is a new object). */
 const patternPaths = new WeakMap<Shape, { make: () => Path2D; path: Path2D }>();
+/** Design shapes' effects, worked out once for each shape as it is. */
+const geoFx = new WeakMap<Shape, ShapeFxPaints>();
+
+/** Where a carbon drawn without a label shows its charge: its text and size, and the sign's middle (away from its bonds). */
+export function carbonCharge(doc: Doc, a: Atom): { text: string; size: number; at: Vec } {
+  let sx = 0, sy = 0;
+  for (const n of doc.neighbors(a.id)) { const d = norm(sub(n, a)); sx += d.x; sy += d.y; }
+  const away = len({ x: sx, y: sy }) > 0.1 ? norm({ x: -sx, y: -sy }) : { x: 0.7, y: -0.7 };
+  const size = doc.style.labelSize * 0.8;
+  const text = (Math.abs(a.charge) > 1 ? String(Math.abs(a.charge)) : '') + (a.charge > 0 ? '+' : '−');
+  return { text, size, at: { x: a.x + away.x * size * 0.8, y: a.y + away.y * size * 0.8 } };
+}
 
 export class Renderer {
   view: View = { scale: 2, ox: 40, oy: 40 };
@@ -162,6 +178,8 @@ export class Renderer {
   private labelStack = FONT_STACK;
   /** A caption being typed into: the text box shows it, so the page doesn't. */
   hiddenCaption: number | null = null;
+  /** An atom whose label is being typed (the typing box shows it instead). */
+  hiddenLabel: number | null = null;
   /** A table being typed into: drawn as this draft (so rows grow as the text does), without the part the text editor shows. */
   tableEdit: { id: number; table: TableData; part: TablePart } | null = null;
   private tableLayouts = new WeakMap<TableData, TableLayout>();
@@ -291,7 +309,7 @@ export class Renderer {
     const k = a.s ?? 1;
     const size = doc.style.labelSize * k;
     if (spec) {
-      if (a.supDigits) spec.supDigits = true;
+      Object.assign(spec, labelLook(a));
       layout = layoutLabel(spec, labelBonds(doc, a), size, (t, s) => measureText(t, s, this.labelStack), a.just);
       const m = doc.style.marginWidth * k;
       for (const b of layout.boxes) boxes.push({ x1: a.x + b.x1 - m, y1: a.y + b.y1 - m, x2: a.x + b.x2 + m, y2: a.y + b.y2 + m });
@@ -403,7 +421,8 @@ export class Renderer {
     if (scale !== this.tileScale || dpr !== this.tileDpr || doc.background !== this.tileBg) {
       if (this.tiles.size && dpr === this.tileDpr && doc.background === this.tileBg) {
         // keep the old tiles as stretched placeholders while new ones are painted
-        if (!this.stale || this.tiles.size >= this.stale.tiles.size / 2) this.stale = { tiles: this.tiles, scale: this.tileScale };
+        // (not tiles waiting to have an edit painted in: they show the drawing as it was)
+        if (!this.stale || this.tiles.size >= this.stale.tiles.size / 2) this.stale = { tiles: new Map([...this.tiles].filter(([, t]) => !t.patch)), scale: this.tileScale };
       } else this.stale = null;
       this.tiles = new Map();
       this.tileScale = scale;
@@ -439,6 +458,7 @@ export class Renderer {
     for (let ty = ty0; ty <= ty1; ty++) {
       for (let tx = tx0; tx <= tx1; tx++) {
         const t = this.tiles.get(tx + ',' + ty);
+        if (t?.patch) this.patchTile(doc, t);
         if (t) ctx.drawImage(t.canvas, tx * T + ox, ty * T + oy, T, T);
       }
     }
@@ -454,12 +474,7 @@ export class Renderer {
     const canvas = this.freeCanvases.pop() ?? (typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(px, px) : Object.assign(document.createElement('canvas'), { width: px, height: px }));
     if (canvas.width !== px) { canvas.width = px; canvas.height = px; }
     const ctx = canvas.getContext('2d', { alpha: false }) as CanvasRenderingContext2D;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    // a canvas used before keeps its settings: start each tile as a new canvas would
-    ctx.lineJoin = 'miter';
-    ctx.lineCap = 'butt';
-    ctx.setLineDash([]);
-    ctx.globalAlpha = 1;
+    this.startTile(ctx);
     ctx.fillStyle = doc.background;
     ctx.fillRect(0, 0, px, px);
     ctx.setTransform(dpr * scale, 0, 0, dpr * scale, -tx * T * dpr, -ty * T * dpr);
@@ -467,7 +482,48 @@ export class Renderer {
     const pad = this.pad(doc);
     this.page?.draw(ctx);
     this.drawContent(ctx, doc, { x1: x1 - pad, y1: y1 - pad, x2: x1 + T / scale + pad, y2: y1 + T / scale + pad });
-    return { canvas, tx, ty };
+    return { canvas, tx, ty, patch: null };
+  }
+
+  /** A canvas used before keeps its settings: start each paint as a new canvas would. */
+  private startTile(ctx: CanvasRenderingContext2D): void {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.lineJoin = 'miter';
+    ctx.lineCap = 'butt';
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+
+  /**
+   * Paint again only the part of a tile an edit touched (a small structure dragged in a big
+   * drawing, where a tile holds thousands of atoms): cleared, then everything that reaches into
+   * it drawn again, in the usual order, so it comes out as a whole repaint would.
+   */
+  private patchTile(doc: Doc, t: Tile): void {
+    const r = t.patch!;
+    t.patch = null;
+    const T = TILE, dpr = this.dpr, scale = this.tileScale;
+    const px = Math.round(T * dpr);
+    // the area in the tile's pixels, out to whole pixels
+    const k = scale * dpr;
+    const ix0 = Math.max(0, Math.floor(r.x1 * k - t.tx * T * dpr)), iy0 = Math.max(0, Math.floor(r.y1 * k - t.ty * T * dpr));
+    const ix1 = Math.min(px, Math.ceil(r.x2 * k - t.tx * T * dpr)), iy1 = Math.min(px, Math.ceil(r.y2 * k - t.ty * T * dpr));
+    if (ix1 <= ix0 || iy1 <= iy0) return;
+    const ctx = t.canvas.getContext('2d', { alpha: false }) as CanvasRenderingContext2D;
+    ctx.save();
+    this.startTile(ctx);
+    ctx.beginPath();
+    ctx.rect(ix0, iy0, ix1 - ix0, iy1 - iy0);
+    ctx.clip();
+    ctx.fillStyle = doc.background;
+    ctx.fillRect(ix0, iy0, ix1 - ix0, iy1 - iy0);
+    ctx.setTransform(k, 0, 0, k, -t.tx * T * dpr, -t.ty * T * dpr);
+    const pad = this.pad(doc);
+    const x1 = (t.tx * T + ix0 / dpr) / scale, y1 = (t.ty * T + iy0 / dpr) / scale;
+    const x2 = (t.tx * T + ix1 / dpr) / scale, y2 = (t.ty * T + iy1 / dpr) / scale;
+    this.page?.draw(ctx);
+    this.drawContent(ctx, doc, { x1: x1 - pad, y1: y1 - pad, x2: x2 + pad, y2: y2 + pad });
+    ctx.restore();
   }
 
   /** How far outside a tile an object can sit and still reach into it. */
@@ -481,16 +537,27 @@ export class Renderer {
     if (!this.tiles.size) return;
     const T = TILE, s = this.tileScale;
     const pad = this.pad(doc);
+    // what each tile needs painted again, in drawing units
+    const hit = new Map<Tile, Rect>();
     for (const r of rects) {
-      const tx0 = Math.floor(((r.x1 - pad) * s) / T), tx1 = Math.floor(((r.x2 + pad) * s) / T);
-      const ty0 = Math.floor(((r.y1 - pad) * s) / T), ty1 = Math.floor(((r.y2 + pad) * s) / T);
+      const x1 = r.x1 - pad, y1 = r.y1 - pad, x2 = r.x2 + pad, y2 = r.y2 + pad;
+      const tx0 = Math.floor((x1 * s) / T), tx1 = Math.floor((x2 * s) / T);
+      const ty0 = Math.floor((y1 * s) / T), ty1 = Math.floor((y2 * s) / T);
       for (let ty = ty0; ty <= ty1; ty++) {
         for (let tx = tx0; tx <= tx1; tx++) {
-          const key = tx + ',' + ty;
-          const t = this.tiles.get(key);
-          if (t) { this.freeCanvases.push(t.canvas); this.tiles.delete(key); }
+          const t = this.tiles.get(tx + ',' + ty);
+          if (!t) continue;
+          const u = hit.get(t) ?? t.patch;
+          hit.set(t, u ? { x1: Math.min(u.x1, x1), y1: Math.min(u.y1, y1), x2: Math.max(u.x2, x2), y2: Math.max(u.y2, y2) } : { x1, y1, x2, y2 });
         }
       }
+    }
+    const side = T / s;
+    for (const [t, u] of hit) {
+      // most of the tile: paint it whole; a small part: paint just that when it is next shown
+      const w = Math.min(u.x2, (t.tx + 1) * side) - Math.max(u.x1, t.tx * side), h = Math.min(u.y2, (t.ty + 1) * side) - Math.max(u.y1, t.ty * side);
+      if (w * h > 0.4 * side * side) { this.freeCanvases.push(t.canvas); this.tiles.delete(t.tx + ',' + t.ty); }
+      else t.patch = u;
     }
   }
 
@@ -627,7 +694,7 @@ export class Renderer {
 
     // Shapes behind the structures (filled boxes first).
     for (const s of doc.onlyHighlights ? [] : this.sortedShapes(doc)) {
-      const b = s.kind === 'table' ? this.tableBox(s) : { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
+      const b = s.kind === 'table' ? this.tableBox(s) : s.rot ? shapeBox(s) : { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
       if (b.x2 < vis.x1 || b.x1 > vis.x2 || b.y2 < vis.y1 || b.y1 > vis.y2) continue;
       this.drawShape(ctx, s, st.lineWidth, st.labelSize);
     }
@@ -678,7 +745,7 @@ export class Renderer {
     ctx.textBaseline = 'alphabetic';
     for (const a of atoms) {
       const info = this.atomInfo(doc, a);
-      if (info.layout) {
+      if (info.layout && a.id !== this.hiddenLabel) {
         ctx.fillStyle = a.color ?? '#000';
         for (const r of info.layout.runs) {
           const f = `${r.size}px ${this.labelStack}`;
@@ -703,7 +770,7 @@ export class Renderer {
       this.drawArrow(ctx, r, r.lineWidth ?? st.lineWidth);
     }
     for (const c of doc.captions.values()) {
-      if (c.id === this.hiddenCaption) continue;
+      if (c.id === this.hiddenCaption || c.hidden) continue;
       const r = this.captionBox(c);
       if (r.x1 > vis.x2 || r.x2 < vis.x1 || r.y1 > vis.y2 || r.y2 < vis.y1) continue;
       if (c.ph && isEmptyText(c)) { if (this.screen) this.drawPrompt(ctx, c); continue; }
@@ -808,14 +875,17 @@ export class Renderer {
       }
       let from = 0;
       const at = (t: number) => add(a, mul(sub(c, a), t));
+      // a scrap left between a gap and the bond's end (or between two gaps) would show as a dot
+      const scrap = (2 * st.lineWidth) / (len(sub(c, a)) || 1);
+      const piece = (t0: number, t1: number) => { if (t1 - t0 < scrap) return; const u = at(t0), v = at(t1); path.moveTo(u.x, u.y); path.lineTo(v.x, v.y); };
       for (const [g0, g1] of gaps) {
         let t0 = (g0 - fa) / (fc - fa), t1 = (g1 - fa) / (fc - fa);
         if (t0 > t1) [t0, t1] = [t1, t0];
         if (t1 <= from || t0 >= 1) continue;
-        if (t0 > from) { const u = at(from), v = at(t0); path.moveTo(u.x, u.y); path.lineTo(v.x, v.y); }
+        if (t0 > from) piece(from, t0);
         from = Math.max(from, t1);
       }
-      if (from < 1) { const u = at(from); path.moveTo(u.x, u.y); path.lineTo(c.x, c.y); }
+      if (from < 1) piece(from, 1);
     };
     // a line of a double or triple bond set off to one side can still run under a charge
     const offLine = (path: Path2D, a: Vec, c: Vec) => { const [u, v] = this.clearCharges(doc, p, q, a, c); line(path, u, v); };
@@ -943,20 +1013,41 @@ export class Renderer {
 
   /** A charge beside a carbon drawn without a label. Returns the font it leaves set. */
   private drawCarbonCharge(ctx: CanvasRenderingContext2D, doc: Doc, a: Atom): string {
-    let sx = 0, sy = 0;
-    for (const n of doc.neighbors(a.id)) { const d = norm(sub(n, a)); sx += d.x; sy += d.y; }
-    const away = len({ x: sx, y: sy }) > 0.1 ? norm({ x: -sx, y: -sy }) : { x: 0.7, y: -0.7 };
-    const size = doc.style.labelSize * 0.8;
-    const t = (Math.abs(a.charge) > 1 ? String(Math.abs(a.charge)) : '') + (a.charge > 0 ? '+' : '−');
+    const { text: t, size, at } = carbonCharge(doc, a);
     const font = `${size}px ${FONT_STACK}`;
     ctx.font = font;
     ctx.fillStyle = a.color ?? '#000';
     const w = measureText(t, size);
-    ctx.fillText(t, a.x + away.x * size * 0.8 - w / 2, a.y + away.y * size * 0.8 + size * 0.35);
+    ctx.fillText(t, at.x - w / 2, at.y + size * 0.35);
     return font;
   }
 
+  /**
+   * The box of the charge sign an atom shows (beside a carbon, or in its label), so that it can
+   * be picked up and moved; null when it shows none (no charge, or one drawn as a symbol).
+   */
+  chargeBox(doc: Doc, a: Atom): Rect | null {
+    if (!a.charge || a.hideCharge) return null;
+    if (a.z === 6 && !a.label && !a.attach && !a.multi) {
+      const { size, at } = carbonCharge(doc, a);
+      const h = size * 0.45;
+      return { x1: at.x - h, y1: at.y - h, x2: at.x + h, y2: at.y + h };
+    }
+    const info = this.atomInfo(doc, a);
+    return info.charge ? info.boxes[info.charge.index] ?? null : null;
+  }
+
   private drawShape(ctx: CanvasRenderingContext2D, s: Shape, lw: number, labelSize = 10): void {
+    const rot = shapeTurn(s);
+    if (!rot) { this.drawFlatShape(ctx, s, lw, labelSize); return; }
+    // a turned shape (Slides and Design): drawn level, turned about its middle
+    ctx.save();
+    turnAt(ctx, shapeMid(s), rot);
+    this.drawFlatShape(ctx, s, lw, labelSize);
+    ctx.restore();
+  }
+
+  private drawFlatShape(ctx: CanvasRenderingContext2D, s: Shape, lw: number, labelSize = 10): void {
     const x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2);
     const w = Math.abs(s.x2 - s.x1), h = Math.abs(s.y2 - s.y1);
     ctx.lineWidth = s.bold ? lw * 2.5 : lw;
@@ -1093,14 +1184,19 @@ export class Renderer {
   /** A picture, cropped as set, with its frame, corners and shadow; a grey box until its image has loaded. */
   private drawPicture(ctx: CanvasRenderingContext2D, s: Shape, x: number, y: number, w: number, h: number): void {
     const look = s.look;
-    const r = pictureRadius(look, w, h);
+    // a picture cut to a shape (Picture Format) has that shape's outline in place of rounded corners
+    const cut = s.fx?.shape && shapeDef(s.fx.shape) ? s.fx.shape : null;
+    const r = cut ? 0 : pictureRadius(look, w, h);
+    const outline = (dx = 0, dy = 0) => {
+      ctx.beginPath();
+      if (!cut || !traceShape(ctx, cut, x + dx, y + dy, w, h)) ctx.roundRect(x + dx, y + dy, w, h, r);
+    };
     const edge = () => {
       if (!look?.line) return;
       ctx.setLineDash([]);
       ctx.lineWidth = look.line;
       ctx.strokeStyle = look.lineColor ?? '#000000';
-      ctx.beginPath();
-      ctx.roundRect(x, y, w, h, r);
+      outline();
       ctx.stroke();
     };
     if ('picture' in ctx) {
@@ -1108,15 +1204,14 @@ export class Renderer {
       if (look?.shadow) {
         const d = PICTURE_SHADOWS[look.shadow].off;
         ctx.fillStyle = look.shadow === 'soft' ? '#c9c9c9' : '#8c8c8c';
-        ctx.beginPath();
-        ctx.roundRect(x + d, y + d, w, h, r);
+        outline(d, d);
         ctx.fill();
       }
-      (ctx as unknown as PictureSink).picture(s, r);
+      (ctx as unknown as PictureSink).picture({ ...s, src: fxSrc(s) }, r);
       edge();
       return;
     }
-    const img = s.src ? imageFor(s.src) : null;
+    const img = s.src && !s.chart && !s.math ? fxCanvas(s) ?? imageFor(s.src) : null;
     ctx.save();
     if (look?.shadow) {
       // canvas shadows ignore the zoom, so they are scaled by it here
@@ -1127,23 +1222,28 @@ export class Renderer {
       if (r || !img) {
         // rounded corners clip the picture, which would clip its shadow too: the shadow is the box's
         ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.roundRect(x, y, w, h, r);
+        outline();
         ctx.fill();
         ctx.shadowColor = 'transparent';
       }
     }
     if (r) {
-      ctx.beginPath();
-      ctx.roundRect(x, y, w, h, r);
+      outline();
       ctx.clip();
     }
-    if (!img) {
+    if (s.chart) {
+      // a chart is drawn from its data, sharp at any zoom
+      paintChartBox(ctx, s.chart, x, y, w, h);
+    } else if (s.math) {
+      // so is an equation, from its LaTeX
+      paintShapeMath(ctx, s.math, x, y, w, h, measureText);
+    } else if (!img) {
       ctx.fillStyle = '#eef1f5';
-      ctx.fillRect(x, y, w, h);
+      outline();
+      ctx.fill();
     } else {
       const c = s.crop ?? { l: 0, t: 0, r: 0, b: 0 };
-      const iw = img.naturalWidth || s.px?.w || w, ih = img.naturalHeight || s.px?.h || h;
+      const iw = (img as HTMLImageElement).naturalWidth || img.width || s.px?.w || w, ih = (img as HTMLImageElement).naturalHeight || img.height || s.px?.h || h;
       const sx = c.l * iw, sy = c.t * ih, sw = Math.max(1e-3, (1 - c.l - c.r) * iw), sh = Math.max(1e-3, (1 - c.t - c.b) * ih);
       ctx.imageSmoothingEnabled = true;
       ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
@@ -1742,6 +1842,40 @@ export class Renderer {
     }
   }
 
+  /** Filled areas, each in its own colour. */
+  private paintRegions(ctx: CanvasRenderingContext2D, paints: FxPaint[]): void {
+    ctx.save();
+    for (const p of paints) {
+      ctx.fillStyle = p.colour;
+      ctx.beginPath();
+      traceRegion(ctx, p.region);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /**
+   * A design shape filled with a picture, stretched to its box. On screen the picture is cut to
+   * the outline; in pictures and copies it is cut to PowerPoint's shape of that name (a box for
+   * a shape PowerPoint has no name for).
+   */
+  private paintPicFill(ctx: CanvasRenderingContext2D, s: Shape, prst: string | undefined, body: GeoStep[], x: number, y: number, w: number, h: number): void {
+    const f = s.picFill!;
+    const clear = Math.max(0, Math.min(1, f.transparency ?? 0));
+    const vector = 'picture' in ctx;
+    const cut = vector && prst && prst !== 'rect' ? prst : undefined;
+    const pic: Shape = { id: s.id, kind: 'picture', src: f.src, px: f.px, x1: x, y1: y, x2: x + w, y2: y + h, ...(cut || clear ? { fx: { ...(cut ? { shape: cut } : {}), ...(clear ? { alpha: clear } : {}) } } : {}) };
+    ctx.save();
+    if (!vector) {
+      ctx.beginPath();
+      traceSteps(ctx, body);
+      ctx.clip();
+    }
+    ctx.beginPath();
+    this.drawPicture(ctx, pic, x, y, w, h);
+    ctx.restore();
+  }
+
   /** A ring fill's or design shape's shadow, worked out as areas (see shapeShadow). */
   private paintShadow(ctx: CanvasRenderingContext2D, polys: Vec[][], look: ReturnType<typeof shadowLook>, cut: boolean): void {
     ctx.save();
@@ -1775,16 +1909,38 @@ export class Renderer {
       } else this.paintShadow(ctx, shapePolygons(s), look, !s.filled || (s.transparency ?? 0) > 0);
       ctx.beginPath();
     }
+    // Shape Effects: the reflection and glow under the shape, a soft-edged fill, a bevel over it
+    let fx: ShapeFxPaints | null = null;
+    if (hasShapeFx(s)) {
+      fx = geoFx.get(s) ?? null;
+      if (!fx) geoFx.set(s, (fx = shapeFx(s, shapePolygons(s), fillInk(s))));
+      this.paintRegions(ctx, fx.under);
+      ctx.beginPath();
+    }
     traceSteps(ctx, body);
-    if (s.filled) {
+    if (s.picFill) {
+      this.paintPicFill(ctx, s, def.prst, body, x, y, w, h);
+      ctx.beginPath();
+      traceSteps(ctx, body);
+    } else if (fx?.fill) {
+      this.paintRegions(ctx, fx.fill);
+      ctx.beginPath();
+      traceSteps(ctx, body);
+    } else if (s.filled) {
       const c = fillInk(s);
       const clear = Math.max(0, Math.min(1, s.transparency ?? 0));
       if (s.fill) this.paintFill(ctx, { ...s, pattern: undefined }, x, y, w, h);
       else { ctx.fillStyle = clear ? withAlpha(c, 1 - clear) : c; ctx.fill(); }
     }
     if (s.pattern) this.paintFill(ctx, { ...s, filled: false }, x, y, w, h);
+    if (fx?.over.length) {
+      this.paintRegions(ctx, fx.over);
+      ctx.beginPath();
+      traceSteps(ctx, body);
+    }
     ctx.lineWidth = width;
-    if (width > 0) ctx.stroke();
+    // soft edges soften the outline away too
+    if (width > 0 && !s.softEdge) ctx.stroke();
     if (out.lines && width > 0) {
       ctx.beginPath();
       traceSteps(ctx, moveSteps(out.lines, x, y));
@@ -1889,6 +2045,9 @@ export class Renderer {
     if (c.ph && c.boxH) {
       const f = placeholderRect(c, this.baseOf(c));
       r = { x1: Math.min(r.x1, f.x1), y1: Math.min(r.y1, f.y1), x2: Math.max(r.x2, f.x2), y2: Math.max(r.y2, f.y2) };
+    } else if (c.fit && c.boxH) {
+      // a text box that doesn't grow with its text keeps its height
+      r = { ...r, y2: Math.max(r.y2, r.y1 + c.boxH) };
     }
     this.capBoxes.set(c, r);
     return r;
@@ -1945,7 +2104,13 @@ const TILE_BYTES = 160 * 1024 * 1024;
 /** Most hashes or waves drawn on one bond (a hash spacing near 0 would otherwise draw for ever). */
 const MAX_HASHES = 400;
 
-interface Tile { canvas: OffscreenCanvas | HTMLCanvasElement; tx: number; ty: number }
+interface Tile {
+  canvas: OffscreenCanvas | HTMLCanvasElement;
+  tx: number;
+  ty: number;
+  /** Part changed since it was painted (drawing units), painted again before it is next shown. */
+  patch: Rect | null;
+}
 
 /** One colour and look of highlight: its atoms and bonds (with where each atom's highlight runs, when centred on double bonds). */
 /** A highlight's effects as worked out: its pieces as drawn, what it draws, and (made when first needed) its joined areas and plain-area paints. */

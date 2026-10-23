@@ -2,6 +2,7 @@
 // and the panel on the right where every setting can be changed by hand, down to each series'
 // cell references, axis limits and fitted-line options.
 
+import { askAltText } from './accessibility-pane';
 import { popupMenu } from './sheet-view';
 import type { SheetView } from './sheet-view';
 import { ask, Field } from './ask';
@@ -9,9 +10,10 @@ import type { Sheet } from '../sheet/workbook';
 import { Range, colName, parseCellRef } from '../sheet/refs';
 import {
   Chart, ChartKind, ChartAxis, Series, SeriesFit, ErrorBars, MarkerShape, CHART_NAMES, CHART_PALETTES, MARKERS,
-  chartFromRange, chartData, readRef, refText,
+  chartFromRange, chartData, readRef, refText, isXY, comboAs, onSecondAxis, Bins, BoxOptions,
 } from '../sheet/chart';
 import { FIT_NAMES, FitKind, fitEquation, r2Text, fitNumber } from '../sheet/fit';
+import { histogram } from '../sheet/chart-stats';
 import { chartCanvas, chartItems, chartFits } from '../render/chart-draw';
 import { itemsToSvg } from '../render/svg';
 import { copyPictureItems } from '../io/clipboard';
@@ -28,6 +30,8 @@ export interface ChartHost {
 type MenuItem = [string, () => void, boolean?] | null;
 
 const KINDS = Object.keys(CHART_NAMES) as ChartKind[];
+/** Charts that take fitted lines and error bars. */
+const FITTED = new Set<ChartKind>(['scatter', 'line', 'column', 'bar', 'area', 'bubble']);
 const FITS = Object.keys(FIT_NAMES) as FitKind[];
 
 /** The block of filled cells around a cell (Excel's current region), for charting one cell's table. */
@@ -55,6 +59,8 @@ export class SheetCharts {
   private get sheet(): Sheet { return this.view.sheet!; }
   /** A chart kept somewhere other than on a sheet (a dashboard tile), while it is the one being changed. */
   target: { get(): Chart | null; set(c: Chart, label: string): void; remove(): void } | null = null;
+  /** The chart keeps its own data (a chart in a document or on a slide): no sheet-only settings. */
+  ownData = false;
 
   get chart(): Chart | null { return this.target ? this.target.get() : this.view.selectedChart; }
 
@@ -98,6 +104,7 @@ export class SheetCharts {
     v.pickChart(chart.id);
     v.focus();
     if (kind === 'scatter') this.host.flash('Chart tab > Fit Line adds a straight line (or curve) with its equation and R². Drag the chart to move it; the corners resize it.', 7000);
+    else if (HINTS[kind]) this.host.flash(HINTS[kind]!, 7000);
   }
 
   // ---------------------------------------------------------------- the Chart tab
@@ -210,31 +217,36 @@ export class SheetCharts {
       { name: 'title', label: 'Chart title', value: c.title ?? '' },
       { name: 'x', label: c.kind === 'bar' ? 'Value axis (across)' : 'Horizontal axis', value: c.x.title ?? '' },
       { name: 'y', label: c.kind === 'bar' ? 'Category axis (down)' : 'Vertical axis', value: c.y.title ?? '' },
+      ...(c.kind === 'combo' ? [{ name: 'y2', label: 'Second vertical axis (right)', value: c.y2?.title ?? '' }] : []),
     ], { ok: 'Apply', note: 'k_{obs} writes a subscript and s^{-1} a superscript; one character needs no braces (H_2O). Leave a box empty for no title.' });
     if (!got) return;
-    this.patch((x) => ({ ...x, title: got.title.trim() || undefined, x: clean({ ...x.x, title: got.x.trim() || undefined }), y: clean({ ...x.y, title: got.y.trim() || undefined }) }), 'Chart titles');
+    this.patch((x) => clean({
+      ...x, title: got.title.trim() || undefined, x: clean({ ...x.x, title: got.x.trim() || undefined }), y: clean({ ...x.y, title: got.y.trim() || undefined }),
+      ...(got.y2 !== undefined ? { y2: clean({ ...x.y2, title: got.y2.trim() || undefined }) } : {}),
+    }), 'Chart titles');
   }
 
   async axes(): Promise<void> {
     const c = this.chart;
     if (!c) return;
-    const f = (p: 'x' | 'y', label: string): Field[] => [
-      { name: `${p}min`, label: `${label}: minimum`, value: c[p].min?.toString() ?? '', placeholder: 'auto' },
-      { name: `${p}max`, label: `${label}: maximum`, value: c[p].max?.toString() ?? '', placeholder: 'auto' },
-      { name: `${p}step`, label: `${label}: gap between labels`, value: c[p].step?.toString() ?? '', placeholder: 'auto' },
-      { name: `${p}fmt`, label: `${label}: number format`, value: c[p].numFmt ?? '', placeholder: 'General (or 0.00, 0.0E+00…)' },
-      { name: `${p}log`, label: `${label}: log scale`, value: String(!!c[p].log), type: 'checkbox' },
-      { name: `${p}grid`, label: `${label}: grid lines`, value: String(p === 'y' ? c.y.grid !== false : !!c.x.grid), type: 'checkbox' },
-      { name: `${p}rev`, label: `${label}: values in reverse order`, value: String(!!c[p].reverse), type: 'checkbox' },
+    const f = (p: 'x' | 'y' | 'y2', label: string): Field[] => [
+      { name: `${p}min`, label: `${label}: minimum`, value: c[p]?.min?.toString() ?? '', placeholder: 'auto' },
+      { name: `${p}max`, label: `${label}: maximum`, value: c[p]?.max?.toString() ?? '', placeholder: 'auto' },
+      { name: `${p}step`, label: `${label}: gap between labels`, value: c[p]?.step?.toString() ?? '', placeholder: 'auto' },
+      { name: `${p}fmt`, label: `${label}: number format`, value: c[p]?.numFmt ?? '', placeholder: 'General (or 0.00, 0.0E+00…)' },
+      { name: `${p}log`, label: `${label}: log scale`, value: String(!!c[p]?.log), type: 'checkbox' },
+      { name: `${p}grid`, label: `${label}: grid lines`, value: String(p === 'y' ? c.y.grid !== false : !!c[p]?.grid), type: 'checkbox' },
+      { name: `${p}rev`, label: `${label}: values in reverse order`, value: String(!!c[p]?.reverse), type: 'checkbox' },
     ];
-    const numeric = c.kind === 'scatter';
-    const got = await ask('Axes', [...(numeric || c.kind === 'bar' ? f('x', 'Horizontal') : []), ...(c.kind !== 'bar' ? f('y', 'Vertical') : [])], { ok: 'Apply', note: 'Leave a box empty for the automatic value.' });
+    const numeric = isXY(c.kind);
+    const second = c.kind === 'combo' && c.series.some((s, i) => onSecondAxis(s, i));
+    const got = await ask('Axes', [...(numeric || c.kind === 'bar' ? f('x', 'Horizontal') : []), ...(c.kind !== 'bar' ? f('y', 'Vertical') : []), ...(second ? f('y2', 'Second vertical (right)') : [])], { ok: 'Apply', note: 'Leave a box empty for the automatic value.' });
     if (!got) return;
-    const read = (p: 'x' | 'y', a: ChartAxis): ChartAxis => (got[`${p}min`] === undefined ? a : clean({
+    const read = (p: 'x' | 'y' | 'y2', a: ChartAxis): ChartAxis => (got[`${p}min`] === undefined ? a : clean({
       ...a, min: num(got[`${p}min`]), max: num(got[`${p}max`]), step: num(got[`${p}step`]), numFmt: got[`${p}fmt`].trim() || undefined,
       log: got[`${p}log`] === 'true' || undefined, grid: got[`${p}grid`] === 'true', reverse: got[`${p}rev`] === 'true' || undefined,
     }));
-    this.patch((x) => ({ ...x, x: read('x', x.x), y: read('y', x.y) }), 'Axes');
+    this.patch((x) => clean({ ...x, x: read('x', x.x), y: read('y', x.y), ...(second ? { y2: read('y2', x.y2 ?? {}) } : {}) }), 'Axes');
   }
 
   async addSeries(): Promise<void> {
@@ -244,11 +256,12 @@ export class SheetCharts {
     const got = await ask('Add Series', [
       { name: 'name', label: 'Name (or a cell)', value: '' },
       { name: 'y', label: 'Values', value: '', placeholder: 'C2:C10' },
-      { name: 'x', label: c.kind === 'scatter' ? 'X values' : 'Category labels', value: last?.x ?? '', placeholder: 'A2:A10' },
+      { name: 'x', label: isXY(c.kind) ? 'X values' : 'Category labels', value: last?.x ?? '', placeholder: 'A2:A10' },
+      ...(c.kind === 'bubble' ? [{ name: 'size', label: 'Bubble sizes', value: '', placeholder: 'D2:D10' }] : []),
     ], { ok: 'Add', note: 'Type ranges such as C2:C10, or Sheet2!C2:C10 for another sheet.' });
     if (!got || !got.y.trim()) return;
     const y = this.asRef(got.y)!;
-    const s: Series = clean({ y, x: this.asRef(got.x), name: /^=|^[A-Z]+\d+$/i.test(got.name.trim()) && parseCellRef(got.name.trim().replace(/^=/, '')) ? this.asRef(got.name) : got.name.trim() || undefined });
+    const s: Series = clean({ y, x: this.asRef(got.x), size: this.asRef(got.size), name: /^=|^[A-Z]+\d+$/i.test(got.name.trim()) && parseCellRef(got.name.trim().replace(/^=/, '')) ? this.asRef(got.name) : got.name.trim() || undefined });
     this.patch((x) => ({ ...x, series: [...x.series, s], legend: x.legend === 'none' ? 'right' : x.legend }), 'Add series');
   }
 
@@ -329,12 +342,12 @@ export class SheetCharts {
     if (!c) return [];
     return [
       ['Change Chart Type ▸', () => this.typeMenu(lastX, lastY)],
-      ['Fit Line ▸', () => this.fitMenu(lastX, lastY), c.kind !== 'pie'],
+      ['Fit Line ▸', () => this.fitMenu(lastX, lastY), FITTED.has(c.kind)],
       ['Titles…', () => void this.titles()],
       ['Axes…', () => void this.axes(), c.kind !== 'pie'],
       ['Legend ▸', () => this.legendMenu(lastX, lastY)],
       ['Colours ▸', () => this.paletteMenu(lastX, lastY)],
-      ['Error Bars ▸', () => this.errorsMenu(lastX, lastY), c.kind !== 'pie'],
+      ['Error Bars ▸', () => this.errorsMenu(lastX, lastY), FITTED.has(c.kind)],
       ['Add Series…', () => void this.addSeries()],
       [`${c.series.every((s) => s.labels) ? '✓ ' : ''}Data Labels`, () => this.toggleLabels()],
       null,
@@ -344,8 +357,20 @@ export class SheetCharts {
       ['Bring to Front', () => this.restack(1), !this.target && this.sheet.charts.length > 1],
       ['Send to Back', () => this.restack(-1), !this.target && this.sheet.charts.length > 1],
       ['All Settings…', () => this.focusPanel()],
+      // a chart on a slide or in a document has its alt text on its picture
+      ...(this.target ? [] : [['Alt Text…', () => void this.altText()] as MenuItem]),
       ['Delete Chart', () => this.deleteChart()],
     ];
+  }
+
+  /** Alt Text… for the chart picked on the sheet. */
+  async altText(): Promise<void> {
+    const c = this.chart;
+    if (!c) return;
+    const got = await askAltText(c.title?.trim() ? `"${c.title.trim()}"` : 'chart', c.alt);
+    const cur = this.chart;
+    if (got === null || !cur || cur.id !== c.id) return;
+    this.change({ ...cur, alt: got || undefined }, 'Alt text');
   }
 
   contextMenu(x: number, y: number): void {
@@ -373,7 +398,7 @@ export class SheetCharts {
     const out: HTMLElement[] = [];
     const head = (t: string) => Object.assign(document.createElement('h4'), { textContent: t, className: 'cp-head' });
     const note = (t: string, cls = 'muted small') => Object.assign(document.createElement('p'), { textContent: t, className: cls });
-    out.push(note('Drag the chart to move it and its corners to resize it. Everything here can be changed; a blank box means automatic.'));
+    out.push(note(this.ownData ? 'Everything here can be changed; a blank box means automatic. Series take ranges of the data, such as B2:B5.' : 'Drag the chart to move it and its corners to resize it. Everything here can be changed; a blank box means automatic.'));
 
     out.push(head('Chart'));
     out.push(row('Type', select(KINDS.map((k) => [k, CHART_NAMES[k]]), c.kind, (v) => this.setKind(v as ChartKind))));
@@ -381,32 +406,51 @@ export class SheetCharts {
     out.push(row('Legend', select([['right', 'Right'], ['bottom', 'Bottom'], ['top', 'Top'], ['none', 'None']], c.legend, (v) => this.patch((x) => ({ ...x, legend: v as Chart['legend'] }), 'Legend'))));
     out.push(row('Colours', select(Object.entries(CHART_PALETTES).map(([k, p]) => [k, p.name]), c.palette ?? 'office', (v) => this.patch((x) => clean({ ...x, palette: v === 'office' ? undefined : v }), 'Chart colours'))));
     if (c.kind === 'column' || c.kind === 'bar' || c.kind === 'area') out.push(row('Stacked', check(!!c.stacked, (v) => this.patch((x) => clean({ ...x, stacked: v || undefined }), 'Stacked'))));
+    if (c.kind === 'radar') out.push(row('Filled', check(!!c.filled, (v) => this.patch((x) => clean({ ...x, filled: v || undefined }), 'Filled radar'), 'Shapes filled in')));
+    if (c.kind === 'histogram') {
+      const b = c.bins ?? {};
+      const setB = (q: Partial<Bins>) => this.patch((x) => { const bins = clean({ ...x.bins, ...q }); return clean({ ...x, bins: Object.keys(bins).length ? bins : undefined }); }, 'Bins');
+      out.push(row('Bin width', numberBox(b.width, (v) => setB({ width: v && v > 0 ? v : undefined }), 'auto')));
+      out.push(row('Or bins', numberBox(b.count, (v) => setB({ count: v && v >= 1 ? Math.round(v) : undefined }), 'auto', 'of them')));
+      out.push(row('Overflow', numberBox(b.overflow, (v) => setB({ overflow: v }), 'none', 'and above in one bin')));
+      out.push(row('Underflow', numberBox(b.underflow, (v) => setB({ underflow: v }), 'none', 'and below in one bin')));
+      const h = histogram(chartData(this.view.wb!, this.sheet, c)[0]?.ys ?? [], b);
+      if (h.width) out.push(note(`Bins ${Number(h.width.toPrecision(4))} wide${b.width || b.count ? '' : ' (chosen by Scott\'s rule, as Excel does)'}; each holds the numbers above its start, up to and including its end.`));
+    }
+    if (c.kind === 'box') {
+      const o = c.boxes ?? {};
+      const setO = (q: Partial<BoxOptions>) => this.patch((x) => { const boxes = clean({ ...x.boxes, ...q }); return clean({ ...x, boxes: Object.keys(boxes).length ? boxes : undefined }); }, 'Box options');
+      out.push(row('Mean', check(o.mean !== false, (v) => setO({ mean: v ? undefined : false }), 'Cross'), check(!!o.meanLine, (v) => setO({ meanLine: v || undefined }), 'Line joining them')));
+      out.push(row('Points', check(o.outliers !== false, (v) => setO({ outliers: v ? undefined : false }), 'Outliers'), check(!!o.points, (v) => setO({ points: v || undefined }), 'All the others')));
+      out.push(row('Quartiles', select([['exclusive', 'Exclusive median (Excel\'s default)'], ['inclusive', 'Inclusive median']], o.quartiles ?? 'exclusive', (v) => setO({ quartiles: v === 'inclusive' ? 'inclusive' : undefined }))));
+    }
     out.push(row('Font', text(c.font ?? '', (v) => this.patch((x) => clean({ ...x, font: v || undefined }), 'Chart font'), 'Arial')));
     out.push(row('Font size', numberBox(c.fontSize, (v) => this.patch((x) => clean({ ...x, fontSize: v }), 'Chart font size'), '12', 'px')));
-    out.push(row('Size', numberBox(c.w, (v) => v && this.patch((x) => ({ ...x, w: Math.max(80, v) }), 'Resize chart'), '', '×'), numberBox(c.h, (v) => v && this.patch((x) => ({ ...x, h: Math.max(80, v) }), 'Resize chart'), '', 'px')));
+    if (!this.ownData) out.push(row('Size', numberBox(c.w, (v) => v && this.patch((x) => ({ ...x, w: Math.max(80, v) }), 'Resize chart'), '', '×'), numberBox(c.h, (v) => v && this.patch((x) => ({ ...x, h: Math.max(80, v) }), 'Resize chart'), '', 'px')));
     out.push(row('Background', colour(c.background && c.background !== 'none' ? c.background : '#ffffff', (v) => this.patch((x) => ({ ...x, background: v === '#ffffff' ? undefined : v }), 'Chart background')),
       check(c.background === 'none', (v) => this.patch((x) => clean({ ...x, background: v ? 'none' : undefined }), 'Chart background'), 'See-through')));
     out.push(row('Border', check(c.border !== false, (v) => this.patch((x) => clean({ ...x, border: v ? undefined : false }), 'Chart border'))));
-    out.push(row('Hidden rows', check(!!c.showHidden, (v) => this.patch((x) => clean({ ...x, showHidden: v || undefined }), 'Chart hidden rows'), 'Chart them too (off: a filtered table charts what shows)')));
+    if (!this.ownData) out.push(row('Hidden rows', check(!!c.showHidden, (v) => this.patch((x) => clean({ ...x, showHidden: v || undefined }), 'Chart hidden rows'), 'Chart them too (off: a filtered table charts what shows)')));
 
     if (c.kind !== 'pie') {
-      const axis = (p: 'x' | 'y', name: string) => {
-        const a = c[p];
+      const axis = (p: 'x' | 'y' | 'y2', name: string) => {
+        const a = c[p] ?? {};
         const set = (q: Partial<ChartAxis>, label = 'Axis') => this.patch((x) => ({ ...x, [p]: clean({ ...x[p], ...q }) }), label);
         out.push(head(name));
         out.push(row('Title', text(a.title ?? '', (v) => set({ title: v || undefined }, 'Axis title'), 'none')));
-        const numeric = p === 'y' ? c.kind !== 'bar' : c.kind === 'scatter' || c.kind === 'bar';
+        const numeric = p === 'x' ? isXY(c.kind) || c.kind === 'bar' : c.kind !== 'bar';
         if (numeric) {
           out.push(row('From', numberBox(a.min, (v) => set({ min: v }), 'auto'), numberBox(a.max, (v) => set({ max: v }), 'auto', 'to')));
           out.push(row('Label every', numberBox(a.step, (v) => set({ step: v }), 'auto')));
           out.push(row('Numbers', text(a.numFmt ?? '', (v) => set({ numFmt: v || undefined }), 'General')));
-          out.push(row('Log scale', check(!!a.log, (v) => set({ log: v || undefined }))));
+          if (c.kind !== 'radar') out.push(row('Log scale', check(!!a.log, (v) => set({ log: v || undefined }))));
         }
         out.push(row('Grid lines', check(p === 'y' ? a.grid !== false : !!a.grid, (v) => set({ grid: v }))));
-        out.push(row('Reverse', check(!!a.reverse, (v) => set({ reverse: v || undefined }))));
+        if (c.kind !== 'radar') out.push(row('Reverse', check(!!a.reverse, (v) => set({ reverse: v || undefined }))));
       };
-      axis('x', c.kind === 'bar' ? 'Value axis (across)' : 'Horizontal axis');
-      axis('y', c.kind === 'bar' ? 'Category axis (down)' : 'Vertical axis');
+      if (c.kind !== 'radar') axis('x', c.kind === 'bar' ? 'Value axis (across)' : 'Horizontal axis');
+      axis('y', c.kind === 'bar' ? 'Category axis (down)' : c.kind === 'radar' ? 'Values (along the spokes)' : 'Vertical axis');
+      if (c.kind === 'combo' && c.series.some((s, i) => onSecondAxis(s, i))) axis('y2', 'Second vertical axis (right)');
     }
 
     const data = chartData(this.view.wb!, this.sheet, c);
@@ -415,23 +459,31 @@ export class SheetCharts {
       out.push(head(`Series ${i + 1}: ${data[i]?.name ?? ''}`));
       out.push(row('Name', text(s.name ?? '', (v) => this.patchSeries(i, { name: v || undefined }, 'Series name'), `Series ${i + 1}`)));
       out.push(row('Values', text(s.y, (v) => v && this.patchSeries(i, { y: this.asRef(v)! }, 'Series values'), '', true)));
-      if (c.kind !== 'pie' || i === 0) out.push(row(c.kind === 'scatter' ? 'X values' : 'Labels', text(s.x ?? '', (v) => this.patchSeries(i, { x: this.asRef(v) }, 'Series x values'), '1, 2, 3…', true)));
+      if ((c.kind !== 'pie' || i === 0) && c.kind !== 'histogram') out.push(row(isXY(c.kind) ? 'X values' : 'Labels', text(s.x ?? '', (v) => this.patchSeries(i, { x: this.asRef(v) }, 'Series x values'), c.kind === 'box' ? 'one box' : '1, 2, 3…', true)));
+      if (c.kind === 'bubble') out.push(row('Sizes', text(s.size ?? '', (v) => this.patchSeries(i, { size: this.asRef(v) }, 'Bubble sizes'), 'all the same', true)));
+      if (c.kind === 'combo') {
+        out.push(row('Drawn as', select([['column', 'Columns'], ['line', 'A line']], comboAs(s, i), (v) => this.patchSeries(i, { as: v === (i === 0 ? 'column' : 'line') ? undefined : v as 'column' | 'line' }, 'Series drawn as')),
+          check(onSecondAxis(s, i), (v) => this.patchSeries(i, { secondary: v === i > 0 ? undefined : v }, 'Second axis'), 'Second axis')));
+      }
       if (c.kind !== 'pie') {
         out.push(row('Colour', colour(data[i]?.color ?? '#4472c4', (v) => this.patchSeries(i, { color: v }, 'Series colour')),
           s.color ? button('Auto', () => this.patchSeries(i, { color: undefined }, 'Series colour')) : null));
       }
-      if (c.kind === 'scatter' || c.kind === 'line') {
+      const lineLike = c.kind === 'scatter' || c.kind === 'line' || (c.kind === 'radar' && !c.filled) || (c.kind === 'combo' && comboAs(s, i) === 'line');
+      if (lineLike) {
+        const joined = c.kind !== 'scatter';
         if (c.kind === 'scatter') out.push(row('Sticks', check(!!s.sticks, (v) => this.patchSeries(i, { sticks: v || undefined, ...(v ? { errors: undefined } : {}) }, 'Sticks'), 'Peaks drawn from zero, as a mass spectrum')));
         out.push(row('Markers', select([...MARKERS, 'none'].map((m) => [m, m[0].toUpperCase() + m.slice(1)]), s.marker ?? (c.kind === 'scatter' && !s.sticks ? 'circle' : 'none'), (v) => this.patchSeries(i, { marker: v as MarkerShape }, 'Markers')),
           numberBox(s.markerSize, (v) => this.patchSeries(i, { markerSize: v }, 'Marker size'), '7', 'px')));
-        out.push(row('Line', check(c.kind === 'line' ? s.line !== false : !!s.line, (v) => this.patchSeries(i, { line: c.kind === 'line' ? (v ? undefined : false) : v || undefined }, 'Series line')),
-          check(!!s.smooth, (v) => this.patchSeries(i, { smooth: v || undefined }, 'Smooth line'), 'Smooth')));
+        out.push(row('Line', check(joined ? s.line !== false : !!s.line, (v) => this.patchSeries(i, { line: joined ? (v ? undefined : false) : v || undefined }, 'Series line')),
+          c.kind !== 'radar' ? check(!!s.smooth, (v) => this.patchSeries(i, { smooth: v || undefined }, 'Smooth line'), 'Smooth') : null));
         out.push(row('Line style', select([['solid', 'Solid'], ['dash', 'Dashed'], ['dot', 'Dotted']], s.dash ?? 'solid', (v) => this.patchSeries(i, { dash: v === 'solid' ? undefined : (v as 'dash') }, 'Line style')),
           numberBox(s.lineWidth, (v) => this.patchSeries(i, { lineWidth: v }, 'Line width'), '2', 'px')));
       }
-      out.push(row('Values shown', check(!!s.labels, (v) => this.patchSeries(i, { labels: v || undefined }, 'Data labels')),
+      const remove = () => row('', button('Remove this series', () => this.patch((x) => ({ ...x, series: x.series.filter((_, j) => j !== i) }), 'Remove series')));
+      if (c.kind !== 'box') out.push(row('Values shown', check(!!s.labels, (v) => this.patchSeries(i, { labels: v || undefined }, 'Data labels')),
         c.kind === 'scatter' ? check(!!s.labelX, (v) => this.patchSeries(i, { labelX: v || undefined, ...(v ? { labels: true } : {}) }, 'Data labels'), 'Show x (m/z)') : null));
-      if (c.kind === 'pie') return;
+      if (!FITTED.has(c.kind)) { if (c.series.length > 1 && c.kind !== 'pie') out.push(remove()); return; }
       // error bars
       const e = s.errors;
       if (!s.sticks) out.push(row('Error bars', select([['', 'None'], ['fixed', 'Fixed amount'], ['percent', 'Percentage'], ['stdev', 'Standard deviations'], ['cells', 'From cells']], e?.kind ?? '', (v) => this.patchSeries(i, { errors: v ? { kind: v as ErrorBars['kind'], value: v === 'percent' ? 5 : 1 } : undefined }, 'Error bars'))));
@@ -465,7 +517,7 @@ export class SheetCharts {
           out.push(box);
         } else out.push(note('Too few usable points to fit (log and power fits need x > 0; exponential and power fits need y > 0).', 'cp-error'));
       }
-      if (c.series.length > 1) out.push(row('', button('Remove this series', () => this.patch((x) => ({ ...x, series: x.series.filter((_, j) => j !== i) }), 'Remove series'))));
+      if (c.series.length > 1) out.push(remove());
     });
     out.push(rowOf(button('Add series…', () => void this.addSeries()), button('Copy as picture', () => void this.copyPicture()), button('Delete chart', () => this.deleteChart())));
     return out;
@@ -473,6 +525,15 @@ export class SheetCharts {
 }
 
 let lastX = 0, lastY = 0;
+
+/** What to select for each newer kind of chart, said when one is made. */
+const HINTS: Partial<Record<ChartKind, string>> = {
+  combo: 'The first series is drawn as columns and the others as lines on a second axis, on the right; the panel changes each series.',
+  histogram: 'A histogram counts the numbers of one column in bins of equal width; set the width or number of bins in the panel.',
+  box: 'One box for each label in the first column (or one per column of numbers): the line is the median, the cross the mean.',
+  bubble: 'Columns go x, y, then the bubble sizes (a bubble\'s area goes with its number).',
+  radar: 'One spoke for each row label; each column of numbers is a shape round them.',
+};
 
 const seriesLabel = (c: Chart, i: number) => c.series[i].name && !c.series[i].name!.startsWith('=') ? c.series[i].name! : `Series ${i + 1}`;
 

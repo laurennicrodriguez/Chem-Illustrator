@@ -11,7 +11,9 @@ import * as rt from '../richtext';
 import { caretPos, layoutText, lineOf, offsetAt, offsetInLine, selectionRects, wordAt, type Measure, type TextFrame, type TextLayout } from './layout';
 import { cleanPara, editParas, fitParas, paraAt, paraCount, paraRange, storedParas } from './paragraphs';
 import type { CharLook, FixEdit } from './chemtext';
-import { trackedReplace } from '../document/revisions';
+import { trackFormatting, trackedReplace, trackingFormatting } from '../document/revisions';
+import { linkAt, removeLink as removeLinkRuns, setLink as setLinkRuns, type LinkSpan } from '../links';
+import { paintParas, paintRange, paintRuns, paraLook, picksParagraph, runLook, type TextLook } from '../format-painter';
 
 /** A styled text with its paragraph formatting: what a caption, a text box or a slide holds. */
 export interface RichText {
@@ -64,6 +66,13 @@ export class TextEditing {
    * inserted or deleted by this person instead of changing it outright (see document/revisions).
    */
   track: (() => { author: string; date: string } | null) | null = null;
+  /**
+   * Documents under Review > Restrict Editing: whether a change may be made, from the text as it
+   * is to the text after it. A change turned away is not made (nor undone or redone), and
+   * `refused` is told.
+   */
+  guard: ((before: RichText, after: RichText) => boolean) | null = null;
+  refused: () => void = () => {};
   /** How much of the last tracked deletion stayed in place, struck through. */
   private keptLast = 0;
 
@@ -186,6 +195,7 @@ export class TextEditing {
 
   /** Make a change (kind null: part of the change before, as while dragging, so no new undo step). */
   private commit(kind: string | null, t: RichText, anchor: number, focus = anchor): void {
+    if (this.guard && !this.guard(this.t, t)) { this.refused(); return; }
     if (kind !== null) this.snapshot(kind, focus);
     this.t = t;
     this.anchor = anchor;
@@ -256,7 +266,9 @@ export class TextEditing {
       return;
     }
     const style = this.typingStyle();
+    const before = this.t;
     this.replace(this.start, this.end, [{ ...style, text: '\n' }], undefined, 'line');
+    if (this.t === before) return;
     if (soft && ps.list) {
       const paras = this.t.paras.slice();
       paras[p + 1] = cleanPara({ ...paras[p + 1], cont: true });
@@ -280,6 +292,8 @@ export class TextEditing {
     const p = paraAt(text, at);
     if (paraRange(text, p).start === at) {
       const ps = this.t.paras[p] ?? {};
+      // (a section break first: the text joins the section before)
+      if (ps.section) { this.setParas(p, p, { section: undefined }, 'break'); return; }
       if (ps.pageBreak || ps.colBreak) { this.setParas(p, p, { pageBreak: undefined, colBreak: undefined }, 'break'); return; }
       if (ps.list) { this.setParas(p, p, { list: undefined, level: undefined, cont: undefined }, 'list'); return; }
       if (ps.firstLine && ps.firstLine > 0) { this.setParas(p, p, { firstLine: undefined }, 'indent'); return; }
@@ -398,7 +412,87 @@ export class TextEditing {
       this.onChange('selection');
       return;
     }
-    this.commit('style', { ...this.t, runs: rt.toggleStyle(this.t.runs, this.start, this.end, key, this.defaults) }, this.anchor, this.focus);
+    this.commit('style', { ...this.t, runs: this.restyled(rt.toggleStyle(this.t.runs, this.start, this.end, key, this.defaults)) }, this.anchor, this.focus);
+  }
+
+  /** Home > Change Case: the selection (or the word at the caret) in another case. */
+  changeCase(mode: rt.CaseMode): void {
+    let a = this.start, b = this.end;
+    if (a === b) [a, b] = wordAt(this.text, a);
+    if (a === b) return;
+    this.commit('case', { ...this.t, runs: rt.changeCase(this.t.runs, a, b, mode) }, this.anchor, this.focus);
+  }
+
+  /** Clear Formatting: the selection back to plain text (or what is typed next, with nothing selected). */
+  clearFormatting(): void {
+    if (this.collapsed) {
+      this.pending = Object.fromEntries(rt.CLEARED.map((k) => [k, undefined]));
+      this.onChange('selection');
+      return;
+    }
+    this.commit('style', { ...this.t, runs: rt.clearFormatting(this.t.runs, this.start, this.end) }, this.anchor, this.focus);
+  }
+
+  /** Format Painter: the look of the selection (and of its paragraph, for a caret or whole paragraphs). */
+  pickLook(): TextLook {
+    const text = this.text;
+    const look: TextLook = { run: runLook(this.currentStyle()) };
+    if (picksParagraph(text, this.start, this.end)) look.para = paraLook(this.t.paras[paraAt(text, this.start)] ?? {});
+    return look;
+  }
+
+  /** Format Painter: give the selection (or the word at the caret) a look picked up. False when there was nothing to paint. */
+  paintLook(look: TextLook): boolean {
+    const text = this.text;
+    const [a, b] = paintRange(text, this.start, this.end);
+    if (a === b && !look.para) return false;
+    const t: RichText = { ...this.t, runs: paintRuns(this.t.runs, a, b, look.run) };
+    if (look.para) t.paras = paintParas(this.t.paras, paraAt(text, a), paraAt(text, b), look.para);
+    this.commit('Format Painter', t, this.anchor, this.focus);
+    return true;
+  }
+
+  // ------------------------------------------------------------------ links
+
+  /** The link the selection or caret is on (see links.linkAt). */
+  linkHere(): LinkSpan | null {
+    return linkAt(this.t.runs, this.start, this.end);
+  }
+
+  /**
+   * Insert > Link: the selection (or the link the caret is in, when nothing is selected) links
+   * to `link`, its text replaced by `text` when that is given and different. With nothing
+   * selected and no link here, `text` (or the address) is typed at the caret as the link.
+   */
+  setLink(link: string, text?: string): void {
+    let start = this.start, end = this.end;
+    const here = this.collapsed ? this.linkHere() : null;
+    if (here) { start = here.start; end = here.end; }
+    if (start === end) {
+      const shown = text || link.replace(/^mailto:/i, '');
+      const style = { ...this.typingStyle(), link: undefined };
+      const runs = rt.replaceRange(this.t.runs, start, end, [{ ...style, text: shown }]);
+      const got = setLinkRuns(runs, start, start + shown.length, link);
+      const t: RichText = { ...this.t, runs: got.runs, paras: editParas(this.t.paras, this.text, start, end, shown) };
+      this.commit('link', t, got.end);
+      return;
+    }
+    const before = this.text;
+    const got = setLinkRuns(this.t.runs, start, end, link, text);
+    const inserted = rt.plainText(got.runs).slice(start, got.end);
+    const t: RichText = { ...this.t, runs: got.runs, paras: text !== undefined ? editParas(this.t.paras, before, start, end, inserted) : this.t.paras };
+    this.commit('link', t, this.collapsed ? got.end : start, got.end);
+  }
+
+  /** Remove Link: on the selection, or on the whole link the caret is in. */
+  removeLink(): void {
+    let start = this.start, end = this.end;
+    if (this.collapsed) {
+      const here = this.linkHere();
+      if (!here) return;
+      start = here.start; end = here.end;
+    }
+    this.commit('link', { ...this.t, runs: removeLinkRuns(this.t.runs, start, end) }, this.anchor, this.focus);
   }
 
   /** Size, font or colour: on the selection, or for what is typed next. */
@@ -408,7 +502,13 @@ export class TextEditing {
       this.onChange('selection');
       return;
     }
-    this.commit('style', { ...this.t, runs: rt.applyStyle(this.t.runs, this.start, this.end, patch) }, this.anchor, this.focus);
+    this.commit('style', { ...this.t, runs: this.restyled(rt.applyStyle(this.t.runs, this.start, this.end, patch)) }, this.anchor, this.focus);
+  }
+
+  /** The selection restyled: while changes are tracked, its look before is kept as a formatting change. */
+  private restyled(runs: TextRun[]): TextRun[] {
+    const who = this.track?.();
+    return who && trackingFormatting() ? trackFormatting(this.t.runs, runs, this.start, this.end, who) : runs;
   }
 
   /** Change the selected paragraphs' formatting (one undo step). */
@@ -537,6 +637,7 @@ export class TextEditing {
       const patch: Partial<rt.RunStyle> = {};
       if (e.pos) Object.assign(patch, { sub: e.pos === 'sub' || undefined, sup: e.pos === 'sup' || undefined, formula: undefined });
       if (e.italic !== undefined) patch.italic = e.italic || undefined;
+      if (e.bold !== undefined) patch.bold = e.bold || undefined;
       if (Object.keys(patch).length) runs = rt.applyStyle(runs, e.start, e.end, patch);
     }
     let anchor = this.anchor, focus = this.focus;
@@ -572,6 +673,7 @@ export class TextEditing {
   private restore(from: Snap[], to: Snap[]): void {
     const s = from.pop();
     if (!s) return;
+    if (this.guard && !this.guard(this.t, s.t)) { from.push(s); this.refused(); return; }
     to.push({ t: this.t, anchor: this.anchor, focus: this.focus });
     this.t = s.t;
     this.anchor = s.anchor;

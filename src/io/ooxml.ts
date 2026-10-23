@@ -18,13 +18,16 @@ export const NS = {
 
 /** Relationship types. */
 export const REL = {
+  hyperlink: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink',
   officeDocument: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument',
   coreProps: 'http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties',
   extendedProps: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties',
+  customProps: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties',
   slide: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide',
   slideLayout: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout',
   slideMaster: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster',
   notesMaster: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster',
+  handoutMaster: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/handoutMaster',
   notesSlide: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide',
   theme: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme',
   image: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image',
@@ -266,16 +269,39 @@ export function rAttr(el: Element | null | undefined, name: string): string | nu
   return el?.getAttributeNS(NS.r, name) ?? null;
 }
 
-/** Does a zip file have an entry with this name (read from its list of contents)? */
+/**
+ * Does a zip file have an entry with this name? Read from the zip's own list of contents (found
+ * through the end-of-directory record), so a zip stored inside it, such as the workbook Word keeps
+ * beside a chart, does not count.
+ */
 export function zipHas(bytes: Uint8Array, entry: string): boolean {
   const want = new TextEncoder().encode(entry);
-  outer: for (let i = 0; i + 46 + want.length <= bytes.length; i++) {
-    // central directory headers: PK\x01\x02, name length at +28, name at +46
-    if (bytes[i] !== 0x50 || bytes[i + 1] !== 0x4b || bytes[i + 2] !== 1 || bytes[i + 3] !== 2) continue;
-    const n = bytes[i + 28] | (bytes[i + 29] << 8);
-    if (n !== want.length) continue;
-    for (let j = 0; j < n; j++) if (bytes[i + 46 + j] !== want[j]) continue outer;
-    return true;
+  const u16 = (i: number) => bytes[i] | (bytes[i + 1] << 8);
+  const u32 = (i: number) => (bytes[i] | (bytes[i + 1] << 8) | (bytes[i + 2] << 16) | (bytes[i + 3] << 24)) >>> 0;
+  let end = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65535); i--) {
+    if (bytes[i] === 0x50 && bytes[i + 1] === 0x4b && bytes[i + 2] === 5 && bytes[i + 3] === 6) { end = i; break; }
+  }
+  if (end < 0) return false;
+  let at = u32(end + 16);
+  const count = u16(end + 10);
+  for (let k = 0; k < count && at + 46 <= bytes.length; k++) {
+    if (u32(at) !== 0x02014b50) return false;
+    const n = u16(at + 28);
+    if (n === want.length) {
+      let same = true;
+      for (let j = 0; j < n && same; j++) if (bytes[at + 46 + j] !== want[j]) same = false;
+      if (same) return true;
+    }
+    at += 46 + n + u16(at + 30) + u16(at + 32);
   }
   return false;
+}
+
+/**
+ * Alt text for a picture of structures: their SMILES, so screen readers, search and other
+ * programs can get the chemistry back.
+ */
+export function structureAltText(smiles: string | null): string {
+  return smiles ? `Chemical structure (SMILES): ${smiles}` : 'Chemical structure or scheme';
 }

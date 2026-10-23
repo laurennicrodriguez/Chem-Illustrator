@@ -3,7 +3,8 @@
 // 100%; the caller scales the canvas. Titles take simple sub- and superscripts: k_{obs}, s^{−1}.
 
 import type { Chart, ChartAxis, SeriesData, MarkerShape } from '../sheet/chart';
-import { niceTicks, logTicks, CHART_PALETTES } from '../sheet/chart';
+import { niceTicks, logTicks, CHART_PALETTES, isXY, comboAs, onSecondAxis } from '../sheet/chart';
+import { histogram, boxGroups } from '../sheet/chart-stats';
 import { fitPoints, fitAt, fitEquation, r2Text, Fit, FitKind } from '../sheet/fit';
 import { cssFamily } from '../text/layout';
 import { formatValue, generalNumber } from '../sheet/numfmt';
@@ -225,19 +226,32 @@ const dashOf = (d: string | undefined): number[] => (d === 'dash' ? [6, 4] : d =
 
 const SHORT_FIT: Record<FitKind, string> = { linear: 'Linear', poly2: 'Poly.', poly3: 'Poly.', exp: 'Expon.', log: 'Log.', power: 'Power' };
 
+/** Charts that take fitted lines (as Excel gives trendlines to). */
+const FITTED = new Set<Chart['kind']>(['scatter', 'line', 'column', 'bar', 'area', 'bubble']);
+
+/** A histogram's one series as the counts in its bins, to be drawn as columns. */
+export function histogramData(chart: Chart, data: SeriesData[]): SeriesData[] {
+  const d = data[0];
+  if (!d) return [];
+  const h = histogram(d.ys, chart.bins);
+  return [{ ...d, cats: h.labels, ys: h.counts, xs: h.counts.map((_, j) => j + 1), plus: undefined, minus: undefined }];
+}
+
 /** The fitted line of each series (worked out once and shared by the drawing and the side panel). */
 export function chartFits(chart: Chart, data: SeriesData[]): (Fit | null)[] {
   return chart.series.map((s, i) => {
     const d = data[i];
-    if (!s.fit || !d || chart.kind === 'pie') return null;
-    const xs = chart.kind === 'scatter' ? d.xs : d.ys.map((_, j) => j + 1);
+    if (!s.fit || !d || !FITTED.has(chart.kind)) return null;
+    const xs = isXY(chart.kind) ? d.xs : d.ys.map((_, j) => j + 1);
     return fitPoints(s.fit.kind, xs, d.ys, s.fit.intercept);
   });
 }
 
 interface LegendItem { name: string; color: string; kind: 'line' | 'box' | 'fit'; marker?: MarkerShape; dash?: number[]; line?: boolean }
 
-export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number, h: number): ChartHits {
+export function drawChart(ctx: Ctx, chart: Chart, data0: SeriesData[], w: number, h: number): ChartHits {
+  // a histogram is drawn as columns of the counts in its bins
+  const data = chart.kind === 'histogram' ? histogramData(chart, data0) : data0;
   const family = chart.font ? `${cssFamily(chart.font)}, ${CHART_FONT}` : CHART_FONT;
   const fs = chart.fontSize ?? 12;
   const opt = (size: number, more: Partial<TextOpts> = {}): TextOpts => ({ size, family, ...more });
@@ -266,9 +280,10 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
   } else {
     data.forEach((d, i) => {
       const s = chart.series[i];
-      const lineLike = kind === 'scatter' || kind === 'line';
+      const lineLike = kind === 'scatter' || kind === 'line' || kind === 'bubble' || (kind === 'radar' && !chart.filled) || (kind === 'combo' && comboAs(s, i) === 'line');
       const sticks = kind === 'scatter' && !!s.sticks;
-      legend.push({ name: d.name, color: d.color, kind: lineLike ? 'line' : 'box', marker: lineLike ? s.marker ?? (kind === 'scatter' && !sticks ? 'circle' : 'none') : undefined, dash: dashOf(s.dash), line: kind === 'line' ? s.line !== false : !!s.line || sticks });
+      const joined = kind === 'line' || kind === 'radar' || kind === 'combo';
+      legend.push({ name: d.name, color: d.color, kind: lineLike ? 'line' : 'box', marker: lineLike ? kind === 'bubble' ? 'circle' : s.marker ?? (kind === 'scatter' && !sticks ? 'circle' : 'none') : undefined, dash: dashOf(s.dash), line: kind === 'bubble' ? false : joined ? s.line !== false : !!s.line || sticks });
     });
     chart.series.forEach((s, i) => {
       if (s.fit && fits[i] && s.fit.legend !== false) legend.push({ name: `${SHORT_FIT[s.fit.kind]} (${data[i].name})`, color: s.fit.color ?? data[i].color, kind: 'fit' });
@@ -305,12 +320,25 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
   }
 
   if (kind === 'pie') return drawPie(ctx, chart, data, { x: left, y: top, w: Math.max(1, right - left), h: Math.max(1, bottom - top) }, fs, family);
+  if (kind === 'radar') return drawRadar(ctx, chart, data, { x: left, y: top, w: Math.max(1, right - left), h: Math.max(1, bottom - top) }, opt);
 
   // value ranges
   const horizontal = kind === 'bar';
-  const ncat = Math.max(0, ...data.map((d) => d.ys.length));
-  let ylo = Infinity, yhi = -Infinity, xlo = Infinity, xhi = -Infinity;
-  const growY = (v: number) => { if (Number.isFinite(v)) { if (v < ylo) ylo = v; if (v > yhi) yhi = v; } };
+  const xy = isXY(kind);
+  const combo = kind === 'combo';
+  const boxes = kind === 'box' ? boxGroups(data, chart.series.some((s) => !!s.x), chart.boxes) : null;
+  /** Series drawn as columns (or bars), and which of them each is. */
+  const isBar = (i: number) => kind === 'column' || kind === 'bar' || kind === 'histogram' || (combo && comboAs(chart.series[i], i) === 'column');
+  const barNo = data.map((_, i) => data.slice(0, i).filter((__, k) => isBar(k)).length);
+  const nBars = Math.max(1, data.filter((_, i) => isBar(i)).length);
+  /** Series measured on the second value axis (combo charts). */
+  const onRight = (i: number) => combo && onSecondAxis(chart.series[i], i);
+  const anyRight = data.some((_, i) => onRight(i));
+  const ncat = boxes ? boxes.cats.length : Math.max(0, ...data.map((d) => d.ys.length));
+  const lim = { l: [Infinity, -Infinity], r: [Infinity, -Infinity] };
+  let xlo = Infinity, xhi = -Infinity;
+  const grow = (v: number, side: 'l' | 'r' = 'l') => { const L = lim[side]; if (Number.isFinite(v)) { if (v < L[0]) L[0] = v; if (v > L[1]) L[1] = v; } };
+  const growY = (v: number) => grow(v);
   const growX = (v: number) => { if (Number.isFinite(v)) { if (v < xlo) xlo = v; if (v > xhi) xhi = v; } };
   const stackable = chart.stacked && (kind === 'column' || kind === 'bar' || kind === 'area');
   if (stackable) {
@@ -319,46 +347,62 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
       for (const d of data) { const v = d.ys[j]; if (Number.isFinite(v)) { if (v >= 0) pos += v; else neg += v; } }
       growY(pos); growY(neg);
     }
+  } else if (boxes) {
+    for (const row of boxes.stats) for (const b of row) if (b) { growY(b.lo); growY(b.hi); b.outliers.forEach(growY); growY(b.mean); }
   } else {
-    data.forEach((d) => d.ys.forEach((v, j) => { growY(v); if (d.plus) growY(v + (d.plus[j] || 0)); if (d.minus) growY(v - (d.minus[j] || 0)); }));
+    data.forEach((d, i) => {
+      const side = onRight(i) ? 'r' : 'l';
+      d.ys.forEach((v, j) => { grow(v, side); if (d.plus) grow(v + (d.plus[j] || 0), side); if (d.minus) grow(v - (d.minus[j] || 0), side); });
+    });
   }
-  if (kind === 'scatter') data.forEach((d) => d.xs.forEach((x, j) => { if (Number.isFinite(d.ys[j])) growX(x); }));
+  if (xy) data.forEach((d) => d.xs.forEach((x, j) => { if (Number.isFinite(d.ys[j])) growX(x); }));
   // sticks stand on zero, and keep clear of the plot's sides
   const anySticks = kind === 'scatter' && chart.series.some((s) => s.sticks);
   if (anySticks) {
     growY(0);
     if (xlo !== Infinity) { const padX = Math.max(0.5, (xhi - xlo) * 0.05); xlo -= padX; xhi += padX; }
   }
+  // bubbles keep clear of the plot's edges
+  if (kind === 'bubble') {
+    if (xlo !== Infinity) { const p = (xhi - xlo || Math.abs(xlo) || 1) * 0.12; xlo -= p; xhi += p; }
+    if (lim.l[0] !== Infinity) { const p = (lim.l[1] - lim.l[0] || Math.abs(lim.l[0]) || 1) * 0.12; lim.l[0] -= p; lim.l[1] += p; }
+  }
   // fitted lines reach beyond the data when asked
   chart.series.forEach((s, i) => {
     const f = fits[i];
     if (!f || !s.fit) return;
-    const xs = kind === 'scatter' ? data[i].xs.filter(Number.isFinite) : data[i].ys.map((_, j) => j + 1);
+    const xs = xy ? data[i].xs.filter(Number.isFinite) : data[i].ys.map((_, j) => j + 1);
     const a = least(xs) - (s.fit.backward ?? 0), b = most(xs) + (s.fit.forward ?? 0);
-    if (kind === 'scatter') { growX(a); growX(b); }
+    if (xy) { growX(a); growX(b); }
     growY(fitAt(f, a)); growY(fitAt(f, b));
   });
-  if (ylo === Infinity) { ylo = 0; yhi = 1; }
+  for (const L of [lim.l, lim.r]) if (L[0] === Infinity) { L[0] = 0; L[1] = 1; }
   if (xlo === Infinity) { xlo = 0; xhi = 1; }
 
   const valueAxisDef = horizontal ? chart.x : chart.y;
   const catAxisDef = horizontal ? chart.y : chart.x;
-  const zero = kind === 'column' || kind === 'bar' || kind === 'area' ? 'always' : 'auto';
-  const vAxis = numAxis(ylo, yhi, valueAxisDef, zero, Math.max(3, Math.round((horizontal ? w / 80 : h / 40))));
-  const xAxis = kind === 'scatter' ? numAxis(xlo, xhi, chart.x, 'auto', Math.max(3, Math.round(w / 80))) : null;
+  const barsOn = (side: boolean) => data.some((_, i) => isBar(i) && onRight(i) === side);
+  const zero = kind === 'column' || kind === 'bar' || kind === 'area' || kind === 'histogram' || (combo && barsOn(false)) ? 'always' : 'auto';
+  const vAxis = numAxis(lim.l[0], lim.l[1], valueAxisDef, zero, Math.max(3, Math.round((horizontal ? w / 80 : h / 40))));
+  const v2Axis = anyRight ? numAxis(lim.r[0], lim.r[1], chart.y2 ?? {}, barsOn(true) ? 'always' : 'auto', Math.max(3, Math.round(h / 40))) : null;
+  const xAxis = xy ? numAxis(xlo, xhi, chart.x, 'auto', Math.max(3, Math.round(w / 80))) : null;
+  const axisOf = (i: number) => (onRight(i) ? v2Axis! : vAxis);
 
   // room for titles and tick labels
-  const xTitle = horizontal ? chart.x.title : chart.x.title, yTitle = chart.y.title;
+  const xTitle = chart.x.title, yTitle = chart.y.title, y2Title = v2Axis ? chart.y2?.title : undefined;
+  const y2TitleX = right - fs * 0.3;
   if (xTitle) bottom -= fs * 1.5 + 2;
   if (yTitle) left += fs * 1.5 + 2;
+  if (y2Title) right -= fs * 1.5 + 2;
   const tickFs = fs * 0.92;
-  const cats = data[0]?.cats ?? [];
+  const cats = boxes ? boxes.cats : data[0]?.cats ?? [];
   const leftLabels = horizontal ? cats.slice(0, ncat) : vAxis.ticks.map(vAxis.label);
   const leftW = Math.max(0, ...leftLabels.map((l) => measure(ctx, l, opt(tickFs))));
   left += Math.min(leftW, w * 0.35) + 6;
   bottom -= tickFs * 1.4 + 2;
   const bottomLabels = horizontal ? vAxis.ticks.map(vAxis.label) : xAxis ? xAxis.ticks.map(xAxis.label) : [];
-  if (bottomLabels.length) right -= Math.min(measure(ctx, bottomLabels[bottomLabels.length - 1], opt(tickFs)) / 2, 30);
+  if (v2Axis) right -= Math.min(Math.max(0, ...v2Axis.ticks.map((t) => measure(ctx, v2Axis.label(t), opt(tickFs)))), w * 0.3) + 6;
+  else if (bottomLabels.length) right -= Math.min(measure(ctx, bottomLabels[bottomLabels.length - 1], opt(tickFs)) / 2, 30);
   const plot: Box = { x: left, y: top + fs * 0.5, w: Math.max(10, right - left), h: Math.max(10, bottom - top - fs * 0.5) };
 
   // where things go
@@ -366,8 +410,13 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
   const Y = (f: number) => plot.y + plot.h - f * plot.h;
   const band = (horizontal ? plot.h : plot.w) / Math.max(1, ncat);
   const catAt = (j: number) => (horizontal ? (catAxisDef.reverse ? plot.y + plot.h - (j + 0.5) * band : plot.y + (j + 0.5) * band) : catAxisDef.reverse ? plot.x + plot.w - (j + 0.5) * band : plot.x + (j + 0.5) * band);
-  const valAt = (v: number) => (horizontal ? X(vAxis.frac(v)) : Y(vAxis.frac(v)));
+  const valAt = (v: number, i = -1) => (horizontal ? X(vAxis.frac(v)) : Y((i >= 0 ? axisOf(i) : vAxis).frac(v)));
   const ptX = (d: SeriesData, j: number) => (xAxis ? X(xAxis.frac(d.xs[j])) : catAt(j));
+  // columns side by side in each category (a histogram's touch)
+  const groupW = kind === 'histogram' ? Math.max(1, band - 1) : band / 1.8;
+  const each = stackable ? groupW : groupW / (boxes ? Math.max(1, data.length) : nBars);
+  const barMid = (i: number, j: number) => catAt(j) - groupW / 2 + (stackable ? 0 : (boxes ? i : barNo[i]) * each) + each / 2;
+  const inside = (x: number, y: number) => x >= plot.x - 0.5 && x <= plot.x + plot.w + 0.5 && y >= plot.y - 0.5 && y <= plot.y + plot.h + 0.5;
 
   // grid lines
   ctx.lineWidth = 1;
@@ -388,19 +437,19 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
   }
 
   // columns, bars and areas
-  const base = valAt(vAxis.log ? vAxis.min : Math.min(Math.max(0, vAxis.min), vAxis.max));
-  if (kind === 'column' || kind === 'bar') {
-    const groupW = band / 1.8;
-    const each = stackable ? groupW : groupW / Math.max(1, data.length);
+  const baseOf = (a: NumAxis) => (horizontal ? X : Y)(a.frac(a.log ? a.min : Math.min(Math.max(0, a.min), a.max)));
+  const base = baseOf(vAxis);
+  if (data.some((_, i) => isBar(i))) {
     const pos = new Array<number>(ncat).fill(0), neg = new Array<number>(ncat).fill(0);
     data.forEach((d, i) => {
+      if (!isBar(i)) return;
       ctx.fillStyle = d.color;
       d.ys.forEach((v, j) => {
         if (!Number.isFinite(v)) return;
         let a: number, b: number;
         if (stackable) { const from = v >= 0 ? pos[j] : neg[j]; a = valAt(from); b = valAt(from + v); if (v >= 0) pos[j] += v; else neg[j] += v; }
-        else { a = base; b = valAt(v); }
-        const c = catAt(j) - groupW / 2 + (stackable ? 0 : i * each);
+        else { a = baseOf(axisOf(i)); b = valAt(v, i); }
+        const c = barMid(i, j) - each / 2;
         const lo = Math.min(a, b), len = Math.abs(b - a);
         const r = horizontal ? clipBox({ x: lo, y: c, w: len, h: each }, plot) : clipBox({ x: c, y: lo, w: each, h: len }, plot);
         if (r) ctx.fillRect(r.x, r.y, r.w, r.h);
@@ -414,7 +463,7 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
       if (stackable) up.forEach((v, j) => (lower[j] = v));
       return { d, up, low };
     });
-    for (const f of stackable ? fills : fills) {
+    for (const f of fills) {
       ctx.beginPath();
       f.up.forEach((v, j) => (j ? ctx.lineTo(catAt(j), clampY(valAt(v), plot)) : ctx.moveTo(catAt(j), clampY(valAt(v), plot))));
       for (let j = f.low.length - 1; j >= 0; j--) ctx.lineTo(catAt(j), clampY(stackable ? valAt(f.low[j]) : base, plot));
@@ -424,32 +473,82 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
     }
   }
 
+  // boxes and whiskers
+  if (boxes) {
+    const o = chart.boxes ?? {};
+    const bw = each * 0.8;
+    data.forEach((d, i) => {
+      const means: [number, number][] = [];
+      boxes.stats[i].forEach((b, j) => {
+        if (!b) { means.push([NaN, NaN]); return; }
+        const cx = barMid(i, j);
+        const yq1 = valAt(b.q1), yq3 = valAt(b.q3);
+        ctx.setLineDash([]);
+        ctx.strokeStyle = d.color; ctx.lineWidth = 1.25; ctx.lineCap = 'butt';
+        ctx.beginPath();
+        // whiskers with their caps
+        for (const [from, to] of [[b.q1, b.lo], [b.q3, b.hi]]) {
+          const seg = clipSegment(cx, valAt(from), cx, valAt(to), plot);
+          if (seg) { ctx.moveTo(seg[0], seg[1]); ctx.lineTo(seg[2], seg[3]); }
+          const yy = valAt(to);
+          if (yy >= plot.y && yy <= plot.y + plot.h) { ctx.moveTo(cx - bw / 4, yy); ctx.lineTo(cx + bw / 4, yy); }
+        }
+        ctx.stroke();
+        const r = clipBox({ x: cx - bw / 2, y: Math.min(yq1, yq3), w: bw, h: Math.max(0.5, Math.abs(yq1 - yq3)) }, plot);
+        if (r) {
+          ctx.fillStyle = withAlpha(d.color, 0.3);
+          ctx.fillRect(r.x, r.y, r.w, r.h);
+          ctx.strokeRect(r.x, r.y, r.w, r.h);
+        }
+        const ym = valAt(b.median);
+        if (ym >= plot.y && ym <= plot.y + plot.h) { ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx - bw / 2, ym); ctx.lineTo(cx + bw / 2, ym); ctx.stroke(); }
+        const dots = [...(o.points ? b.inside.map((v) => [v, 0] as const) : []), ...(o.outliers !== false ? b.outliers.map((v) => [v, 1] as const) : [])];
+        for (const [v, out] of dots) {
+          const y = valAt(v);
+          if (!inside(cx, y)) continue;
+          ctx.beginPath(); ctx.arc(cx, y, 2.5, 0, Math.PI * 2);
+          ctx.fillStyle = out ? '#ffffff' : d.color; (ctx as CanvasRenderingContext2D).fill();
+          ctx.lineWidth = 1; ctx.stroke();
+        }
+        const ymean = valAt(b.mean);
+        means.push([cx, ymean]);
+        if (o.mean !== false && inside(cx, ymean)) drawMarker(ctx, 'cross', cx, ymean, 6, darker(d.color));
+      });
+      if (o.meanLine && means.length > 1) {
+        ctx.strokeStyle = d.color; ctx.lineWidth = 1.25; ctx.setLineDash([]);
+        polyline(ctx, means, plot);
+      }
+    });
+  }
+
   // axis lines
   ctx.strokeStyle = AXIS;
   ctx.lineWidth = 1;
+  ctx.setLineDash([]);
   ctx.beginPath();
   if (horizontal) { const x = Math.round(base) + 0.5; ctx.moveTo(x, plot.y); ctx.lineTo(x, plot.y + plot.h); }
   else {
-    const y = Math.round(kind === 'scatter' || kind === 'line' ? plot.y + plot.h : base) + 0.5;
+    const y = Math.round(kind === 'scatter' || kind === 'line' || kind === 'bubble' || kind === 'box' ? plot.y + plot.h : base) + 0.5;
     ctx.moveTo(plot.x, y); ctx.lineTo(plot.x + plot.w, y);
-    if (kind === 'scatter') { ctx.moveTo(Math.round(plot.x) + 0.5, plot.y); ctx.lineTo(Math.round(plot.x) + 0.5, plot.y + plot.h); }
+    if (xy) { ctx.moveTo(Math.round(plot.x) + 0.5, plot.y); ctx.lineTo(Math.round(plot.x) + 0.5, plot.y + plot.h); }
   }
   ctx.stroke();
 
   // lines, error bars and markers
-  const inside = (x: number, y: number) => x >= plot.x - 0.5 && x <= plot.x + plot.w + 0.5 && y >= plot.y - 0.5 && y <= plot.y + plot.h + 0.5;
+  const noLine = (i: number) => isBar(i) || kind === 'area' || kind === 'box' || kind === 'bubble';
   data.forEach((d, i) => {
     const s = chart.series[i];
-    if (kind === 'column' || kind === 'bar' || kind === 'area') return;
-    const pts: [number, number][] = d.ys.map((v, j) => [ptX(d, j), Number.isFinite(v) && (!vAxis.log || v > 0) ? Y(vAxis.frac(v)) : NaN]);
-    const showLine = kind === 'line' ? s.line !== false : !!s.line;
+    if (noLine(i)) return;
+    const a = axisOf(i);
+    const pts: [number, number][] = d.ys.map((v, j) => [ptX(d, j), Number.isFinite(v) && (!a.log || v > 0) ? Y(a.frac(v)) : NaN]);
+    const showLine = kind === 'line' || combo ? s.line !== false : !!s.line;
     if (showLine) {
       ctx.strokeStyle = d.color;
       ctx.lineWidth = s.lineWidth ?? 2;
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
       ctx.setLineDash(dashOf(s.dash));
       let line = pts;
-      if (kind === 'scatter') line = pts.filter((p) => Number.isFinite(p[0])).slice().sort((a, b) => a[0] - b[0]);
+      if (kind === 'scatter') line = pts.filter((p) => Number.isFinite(p[0])).slice().sort((p, q) => p[0] - q[0]);
       polyline(ctx, s.smooth ? smoothPoints(line) : line, plot);
       ctx.setLineDash([]);
     }
@@ -480,17 +579,32 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
       ctx.beginPath(); ctx.moveTo(plot.x, Math.round(zeroY) + 0.5); ctx.lineTo(plot.x + plot.w, Math.round(zeroY) + 0.5); ctx.stroke();
     }
   }
+  // bubbles: each one's area goes with its size, the largest a quarter of the plot across (as Excel)
+  if (kind === 'bubble') {
+    const biggest = Math.max(0, ...data.flatMap((d) => (d.sizes ?? []).filter((v) => Number.isFinite(v) && v > 0)));
+    const rMax = Math.min(plot.w, plot.h) / 8;
+    data.forEach((d) => {
+      d.ys.forEach((v, j) => {
+        const size = d.sizes?.[j] ?? NaN;
+        const x = ptX(d, j), y = Number.isFinite(v) && (!vAxis.log || v > 0) ? Y(vAxis.frac(v)) : NaN;
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !inside(x, y) || !(size > 0) || !biggest) return;
+        const r = Math.max(1.5, rMax * Math.sqrt(size / biggest));
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = withAlpha(d.color, 0.75); (ctx as CanvasRenderingContext2D).fill();
+        ctx.strokeStyle = d.color; ctx.lineWidth = 1; ctx.setLineDash([]); ctx.stroke();
+      });
+    });
+  }
   // error bars and markers go over every line
   data.forEach((d, i) => {
     const s = chart.series[i];
-    const bars = kind === 'column' || kind === 'bar';
-    const groupW = band / 1.8, each = stackable ? groupW : groupW / Math.max(1, data.length);
-    if (d.plus) {
+    const bars = isBar(i);
+    if (d.plus && !boxes) {
       ctx.strokeStyle = '#404040'; ctx.lineWidth = 1; ctx.setLineDash([]);
       ctx.beginPath();
       d.ys.forEach((v, j) => {
         if (!Number.isFinite(v)) return;
-        const c = bars ? catAt(j) - groupW / 2 + (stackable ? 0 : i * each) + each / 2 : ptX(d, j);
+        const c = bars ? barMid(i, j) : ptX(d, j);
         const hi = v + (d.plus![j] || 0), lo = v - (d.minus![j] || 0);
         if (horizontal) {
           const seg = clipSegment(valAt(lo), c, valAt(hi), c, plot);
@@ -499,19 +613,20 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
           for (const x of [valAt(lo), valAt(hi)]) if (x >= plot.x && x <= plot.x + plot.w) { ctx.moveTo(x, c - 3); ctx.lineTo(x, c + 3); }
         } else {
           if (!Number.isFinite(c)) return;
-          const seg = clipSegment(c, valAt(hi), c, valAt(lo), plot);
+          const seg = clipSegment(c, valAt(hi, i), c, valAt(lo, i), plot);
           if (!seg) return;
           ctx.moveTo(c, seg[1]); ctx.lineTo(c, seg[3]);
-          for (const y of [valAt(lo), valAt(hi)]) if (y >= plot.y && y <= plot.y + plot.h) { ctx.moveTo(c - 3, y); ctx.lineTo(c + 3, y); }
+          for (const y of [valAt(lo, i), valAt(hi, i)]) if (y >= plot.y && y <= plot.y + plot.h) { ctx.moveTo(c - 3, y); ctx.lineTo(c + 3, y); }
         }
       });
       ctx.stroke();
     }
-    if (bars || kind === 'area') return;
+    if (noLine(i)) return;
+    const a = axisOf(i);
     const marker = s.marker ?? (kind === 'scatter' && !s.sticks ? 'circle' : 'none');
     const size = s.markerSize ?? 7;
     d.ys.forEach((v, j) => {
-      const x = ptX(d, j), y = Number.isFinite(v) && (!vAxis.log || v > 0) ? Y(vAxis.frac(v)) : NaN;
+      const x = ptX(d, j), y = Number.isFinite(v) && (!a.log || v > 0) ? Y(a.frac(v)) : NaN;
       if (Number.isFinite(x) && Number.isFinite(y) && inside(x, y)) drawMarker(ctx, marker, x, y, size, d.color);
     });
   });
@@ -519,11 +634,11 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
   // fitted lines and their equations
   const fitLabels: ChartHits['fitLabels'] = [];
   const taken: [number, number][] = [];
-  data.forEach((d) => d.ys.forEach((v, j) => { const x = ptX(d, j), y = valAt(v); if (Number.isFinite(x) && Number.isFinite(y)) taken.push([x, y]); }));
+  data.forEach((d, i) => d.ys.forEach((v, j) => { const x = isBar(i) ? barMid(i, j) : ptX(d, j), y = valAt(v, i); if (Number.isFinite(x) && Number.isFinite(y)) taken.push([x, y]); }));
   chart.series.forEach((s, i) => {
     const f = fits[i], d = data[i];
     if (!f || !s.fit || !d) return;
-    const xs = kind === 'scatter' ? d.xs.filter(Number.isFinite) : d.ys.map((_, j) => j + 1);
+    const xs = xy ? d.xs.filter(Number.isFinite) : d.ys.map((_, j) => j + 1);
     const a = least(xs), b = most(xs);
     for (let k = 0; k <= 40; k++) {
       const x = a + ((b - a) * k) / 40, y = fitAt(f, x);
@@ -534,7 +649,7 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
   chart.series.forEach((s, i) => {
     const f = fits[i], d = data[i];
     if (!f || !s.fit || !d) return;
-    const xs = kind === 'scatter' ? d.xs.filter(Number.isFinite) : d.ys.map((_, j) => j + 1);
+    const xs = xy ? d.xs.filter(Number.isFinite) : d.ys.map((_, j) => j + 1);
     let a = least(xs) - (s.fit.backward ?? 0), b = most(xs) + (s.fit.forward ?? 0);
     if (f.kind === 'log' || f.kind === 'power') a = Math.max(a, least(xs.filter((x) => x > 0)) * 0.01);
     const toX = (x: number) => (xAxis ? X(xAxis.frac(x)) : catAt(x - 1));
@@ -558,17 +673,17 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
     else {
       // the corner of the plot where it covers the fewest points, lines and other equations
       const busy = (x: number, y: number) => {
-        let n = 0;
-        for (const [px, py] of taken) if (px >= x - 4 && px <= x + bw + 4 && py >= y - 4 && py <= y + bh + 4) n++;
-        for (const l of fitLabels) if (x < l.box.x + l.box.w && l.box.x < x + bw && y < l.box.y + l.box.h && l.box.y < y + bh) n += 1000;
-        return n;
+        let n2 = 0;
+        for (const [px, py] of taken) if (px >= x - 4 && px <= x + bw + 4 && py >= y - 4 && py <= y + bh + 4) n2++;
+        for (const l of fitLabels) if (x < l.box.x + l.box.w && l.box.x < x + bw && y < l.box.y + l.box.h && l.box.y < y + bh) n2 += 1000;
+        return n2;
       };
       const xs2 = [plot.x + plot.w - bw - 6, plot.x + 6], best = { x: xs2[0], y: plot.y + 6, n: Infinity };
       for (let k = 0; k < 4; k++) {
         for (const x of xs2) {
           for (const y of [plot.y + 6 + k * (bh + 4), plot.y + plot.h - bh - 6 - k * (bh + 4)]) {
-            const n = busy(x, y) + k * 0.5;
-            if (n < best.n) Object.assign(best, { x, y, n });
+            const n2 = busy(x, y) + k * 0.5;
+            if (n2 < best.n) Object.assign(best, { x, y, n: n2 });
           }
         }
       }
@@ -580,21 +695,19 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
 
   // value labels
   data.forEach((d, i) => {
-    if (!chart.series[i].labels) return;
-    const bars = kind === 'column' || kind === 'bar';
-    const groupW = band / 1.8, each = stackable ? groupW : groupW / Math.max(1, data.length);
+    if (!chart.series[i].labels || boxes) return;
+    const bars = isBar(i);
     const showX = kind === 'scatter' && chart.series[i].labelX;
     d.ys.forEach((v, j) => {
       if (!Number.isFinite(v)) return;
       if (showX && !Number.isFinite(d.xs[j])) return;
       const fmt = chart.series[i].labelFmt;
-      const t = showX ? formatValue(d.xs[j], fmt ?? chart.x.numFmt).text : formatValue(v, fmt ?? valueAxisDef.numFmt).text;
+      const t = showX ? formatValue(d.xs[j], fmt ?? chart.x.numFmt).text : formatValue(v, fmt ?? (onRight(i) ? chart.y2?.numFmt : valueAxisDef.numFmt)).text;
       if (horizontal) {
-        const c = catAt(j) - groupW / 2 + (stackable ? 0 : i * each) + each / 2;
-        text(ctx, t, valAt(v) + 4, c + tickFs * 0.35, opt(tickFs));
+        text(ctx, t, valAt(v) + 4, barMid(i, j) + tickFs * 0.35, opt(tickFs));
       } else {
-        const x = bars ? catAt(j) - groupW / 2 + (stackable ? 0 : i * each) + each / 2 : ptX(d, j);
-        const y = valAt(v);
+        const x = bars ? barMid(i, j) : ptX(d, j);
+        const y = valAt(v, i);
         // under a peak drawn downwards
         const below = chart.series[i].sticks && v < 0;
         if (inside(x, y)) text(ctx, t, x, below ? y + tickFs + 4 : y - 6, opt(tickFs, { align: 'center' }));
@@ -609,6 +722,7 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
     labelCats(ctx, cats.slice(0, ncat), (j) => catAt(j), plot.h / Math.max(1, ncat), tickFs * 1.3, (l, p) => text(ctx, l, plot.x - 6, p + tickFs * 0.35, { ...tick, align: 'right' }));
   } else {
     for (const t of vAxis.ticks) text(ctx, vAxis.label(t), plot.x - 6, valAt(t) + tickFs * 0.35, { ...tick, align: 'right' });
+    if (v2Axis) for (const t of v2Axis.ticks) text(ctx, v2Axis.label(t), plot.x + plot.w + 6, Y(v2Axis.frac(t)) + tickFs * 0.35, tick);
     if (xAxis) for (const t of xAxis.ticks) text(ctx, xAxis.label(t), X(xAxis.frac(t)), plot.y + plot.h + tickFs * 1.2, { ...tick, align: 'center' });
     else {
       const widest = Math.max(1, ...cats.slice(0, ncat).map((c) => measure(ctx, c, tick)));
@@ -619,6 +733,7 @@ export function drawChart(ctx: Ctx, chart: Chart, data: SeriesData[], w: number,
   // axis titles
   if (xTitle) text(ctx, xTitle, plot.x + plot.w / 2, h - pad - (chart.legend === 'bottom' && legend.length ? h - pad - bottom - tickFs * 1.4 - fs * 1.5 - 6 : 0) - fs * 0.3, opt(fs, { align: 'center' }));
   if (yTitle) text(ctx, yTitle, pad + fs * 1.1, plot.y + plot.h / 2, opt(fs, { align: 'center', angle: 90 }));
+  if (y2Title) text(ctx, y2Title, y2TitleX, plot.y + plot.h / 2, opt(fs, { align: 'center', angle: 90 }));
 
   return { plot, fitLabels, fits };
 }
@@ -653,6 +768,88 @@ function withAlpha(hex: string, a: number): string {
   if (!m) return hex;
   const n = parseInt(m[1], 16);
   return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+
+/** A darker shade of a colour (a box's mean marker, against its own fill). */
+function darker(hex: string): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const f = (c: number) => Math.round(c * 0.6).toString(16).padStart(2, '0');
+  return `#${f(n >> 16)}${f((n >> 8) & 255)}${f(n & 255)}`;
+}
+
+/** A radar chart: a spoke for each category, the values out along them, each series a closed line (or filled shape). */
+function drawRadar(ctx: Ctx, chart: Chart, data: SeriesData[], area: Box, opt: (size: number, more?: Partial<TextOpts>) => TextOpts): ChartHits {
+  const fs = chart.fontSize ?? 12, tickFs = fs * 0.92;
+  const plot = area;
+  const n = Math.max(0, ...data.map((d) => d.ys.length));
+  if (!n) return { plot, fitLabels: [], fits: [] };
+  let lo = Infinity, hi = -Infinity;
+  for (const d of data) for (const v of d.ys) if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  if (lo === Infinity) { lo = 0; hi = 1; }
+  const a = numAxis(lo, hi, { ...chart.y, log: false }, 'auto', 5);
+  const cats = (data[0]?.cats ?? []).slice(0, n);
+  const labelW = Math.max(0, ...cats.map((c) => measure(ctx, c, opt(tickFs))));
+  const cx = area.x + area.w / 2, cy = area.y + area.h / 2;
+  const R = Math.max(10, Math.min(area.w / 2 - Math.min(labelW, area.w * 0.25) - 8, area.h / 2 - tickFs * 1.6));
+  const ang = (j: number) => -Math.PI / 2 + (2 * Math.PI * j) / n;
+  const at = (j: number, v: number): [number, number] => {
+    const f = Math.max(0, Math.min(1, a.frac(v)));
+    return [cx + Math.cos(ang(j)) * R * f, cy + Math.sin(ang(j)) * R * f];
+  };
+  // the web: a ring at each tick, and the spokes
+  ctx.lineWidth = 1; ctx.setLineDash([]);
+  if (chart.y.grid !== false) {
+    ctx.strokeStyle = GRID;
+    for (const t of a.ticks) {
+      ctx.beginPath();
+      for (let j = 0; j <= n; j++) { const [x, y] = at(j % n, t); if (j) ctx.lineTo(x, y); else ctx.moveTo(x, y); }
+      ctx.stroke();
+    }
+  }
+  ctx.strokeStyle = AXIS;
+  ctx.beginPath();
+  for (let j = 0; j < n; j++) { ctx.moveTo(cx, cy); const [x, y] = at(j, a.max); ctx.lineTo(x, y); }
+  ctx.stroke();
+  // the series
+  data.forEach((d, i) => {
+    const s = chart.series[i];
+    const pts = d.ys.map((v, j) => (Number.isFinite(v) ? at(j, v) : at(j, a.min)));
+    if (!pts.length) return;
+    ctx.beginPath();
+    pts.forEach(([x, y], j) => (j ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.closePath();
+    if (chart.filled) {
+      ctx.fillStyle = withAlpha(d.color, 0.6);
+      (ctx as CanvasRenderingContext2D).fill();
+      ctx.strokeStyle = d.color; ctx.lineWidth = 1; ctx.stroke();
+      return;
+    }
+    if (s.line !== false) {
+      ctx.strokeStyle = d.color; ctx.lineWidth = s.lineWidth ?? 2; ctx.lineJoin = 'round';
+      ctx.setLineDash(dashOf(s.dash)); ctx.stroke(); ctx.setLineDash([]);
+    }
+    const marker = s.marker ?? 'none';
+    for (const [x, y] of pts) drawMarker(ctx, marker, x, y, s.markerSize ?? 7, d.color);
+  });
+  // values shown
+  data.forEach((d, i) => {
+    if (!chart.series[i].labels) return;
+    d.ys.forEach((v, j) => {
+      if (!Number.isFinite(v)) return;
+      const [x, y] = at(j, v);
+      text(ctx, formatValue(v, chart.series[i].labelFmt ?? chart.y.numFmt).text, x, y - 6, opt(tickFs, { align: 'center' }));
+    });
+  });
+  // the scale up the first spoke, and the categories round the outside
+  for (const t of a.ticks) { const [x, y] = at(0, t); text(ctx, a.label(t), x + 4, y + tickFs * 0.35, opt(tickFs * 0.9)); }
+  cats.forEach((c, j) => {
+    const cos = Math.cos(ang(j)), sin = Math.sin(ang(j));
+    const x = cx + cos * (R + 6), y = cy + sin * (R + 6) + tickFs * 0.35 + sin * tickFs * 0.5;
+    text(ctx, c, x, y, opt(tickFs, { align: Math.abs(cos) < 0.2 ? 'center' : cos > 0 ? 'left' : 'right' }));
+  });
+  return { plot, fitLabels: [], fits: [] };
 }
 
 function drawPie(ctx: Ctx, chart: Chart, data: SeriesData[], area: Box, fs: number, family: string): ChartHits {

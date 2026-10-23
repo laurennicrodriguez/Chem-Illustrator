@@ -4,41 +4,86 @@
 // spelling check knows chemistry words. The panel on the right shows the paragraph's formatting,
 // its style, the page and the figure picked, every value of which can be typed in.
 
-import { Doc, type Contents, type ParaStyle, type Shape, type TextRun } from '../model';
+import { Doc, type Contents, type ParaStyle, type Shape, type TabStop, type TextRun } from '../model';
+
+type TabStopKind = TabStop['kind'];
 import { geoDef, geoShapeStyle } from '../design/geo';
 import type { DocStyle } from '../style';
 import type { Tab } from '../workspace';
 import type { Measure } from '../text/layout';
+import { askAltText } from './accessibility-pane';
 import { keymap, chordOf, parseAction, type KeyContext } from '../editor/keymap';
 import * as rt from '../richtext';
-import type { Move } from '../text/editing';
+import type { Move, TextEditing } from '../text/editing';
+import type { TextLook } from '../format-painter';
+import { BRUSH } from '../editor/cursors';
 import { offsetAt, caretPos, selectionRects } from '../text/layout';
 import { htmlToRich, richToHtml, richToPlain } from '../text/html';
+import { pastedTable, tableHtml, tableTsv } from '../io/table-clip';
 import { afterTyping, typingPrefs, setTypingPrefs } from '../text/typing';
 import { findIssues, type CharLook, type Issue } from '../text/chemtext';
 import { loadSpeller, type Speller } from '../text/spelling';
-import { paraAt, paraRange, splitParagraphs } from '../text/paragraphs';
+import { BULLET_LIBRARY, LIST_SCHEMES, fitParas, paraAt, paraCount, paraRange, splitParagraphs } from '../text/paragraphs';
 import { DocView, ACTUAL, type Overlay } from './doc-view';
+import {
+  PRINT_VIEW, VIEW_NAMES as VIEW_LABEL, changeLevel, withHeadings, continuous, foldHeadings, moveParas, newOutline, outlineLevel, shiftFolds, subtreeEnd, toggleFold,
+  type DocViewKind, type OutlineOp, type OutlineState, type ScreenView,
+} from '../document/doc-views';
 import { DocPanel, parseLength, showLength, type DocBoxKey } from './doc-panel';
 import { WORD_HIGHLIGHTS } from '../io/docx';
 import { DocFind } from './doc-find';
+import { askLink, followLink, linkTip } from './links-ui';
+import { bookmarkName, linkAtPoint } from '../links';
+import { addBookmark, bookmarkPara, bookmarksOf, docPlaces, placeLink, placeName, removeBookmark } from '../document/bookmarks';
 import { DocComments } from './doc-comments';
-import { tocEntries } from '../document/toc';
-import { changesIn, countChanges, decide, decideEverywhere, reviewAuthor, setReviewAuthor } from '../document/revisions';
+import { Ruler, docRulerPrefs, type RulerGeometry } from './ruler';
+import { StylesPane } from './styles-pane';
+import { TOF_NAMES, tocEntries, tofEntries } from '../document/toc';
+import { changeName, changesIn, countChanges, decide, decideEverywhere, reviewAuthor, reviewers, setReviewAuthor, setTrackFormatting, trackingFormatting, type MarkupView, type ReviewView } from '../document/revisions';
+import { combineDocuments, compareDocuments } from '../document/compare';
 import { ask } from './ask';
 import { askEquation } from './equation-dialog';
 import { ReferencesDialog, chooseReferences } from './references-dialog';
 import { citeSuper, formatOf, type Reference } from '../document/references';
 import { dataUrl, imageSize } from '../render/images';
+import { editChart, chartPoints } from './chart-editor';
+import { pictureFormat } from './picture-dialog';
+import { embedFile, fileInside, objectKind, withFile } from '../io/ole-object';
+import { showsContents, type ObjectPicture } from '../render/object-picture';
+import { newChartBox, sizedBox } from '../sheet/chart-box';
+import { chartBoxPng } from '../render/chart-box-paint';
 import type { DocFile } from '../document/doc-file';
 import type { TableData } from '../model';
 import {
-  coveringCell, deleteColumn, deleteRow, emptyTable, insertColumn, insertRow, isCovered, mergeRight, nextCell, setColumnAlign, setColumnWidth, setSpan, spanOf,
+  canMerge, coveringCell, deleteColumn, deleteRow, emptyTable, insertColumn, tableFromCells, insertRow, isCovered, mergeDown, mergeRight, nextCell, rowSpanOf, setColumnAlign, setColumnWidth, setPart, splitCell, spanOf,
 } from '../table';
+import { cellMargins, paintEdge, type CellBlock } from '../document/table-styles';
+import { blockOf, canMergeBlock, mergeBlock } from '../document/table-convert';
+import { BORDER_STYLES, BORDER_WIDTHS, DocTablesUI, LOOK_OPTIONS, penSwatch } from './doc-tables-ui';
+import { DocNav } from './doc-nav';
+import { DocInsertUI } from './doc-insert-ui';
+import { DocParagraphUI } from './doc-paragraph-ui';
+import { DocArrangeUI } from './doc-arrange-ui';
+import type { DocDesign } from '../document/document';
+import { setParaSpacing, setStyleSet, setTheme, setThemeColors, setThemeFonts, PARA_SPACINGS, STYLE_SETS, THEMES, THEME_COLORS, THEME_FONTS } from '../document/themes';
+import { groupOf, withFloats } from '../document/arrange';
+import { DocProofingUI } from './doc-proofing-ui';
+import { DEFAULT_ZONE } from '../text/hyphenate';
+import { bodyFromZones, insertInZone, numbersFor, zonesFor } from '../document/hf-bodies';
+import { popupMenu } from './sheet-view';
+import type { BorderChoice } from '../document/para-borders';
+import type { QuickPart } from '../document/quick-parts';
+import { GO_TO_KINDS, goToOffset, similarRanges, type GoToKind } from '../document/goto';
+import { DocIndexUI } from './doc-index-ui';
+import { lookOfTable } from '../document/table-styles';
+import type { BorderLine, BorderSide, TableLook } from '../model';
+import { BREAK_NAMES, changeSection, newBreak, pageNumText, sectionAt, sectionsOf, type Section, type SectionPatch } from '../document/sections';
 import {
-  A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, captionRuns, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets, inlineMove,
+  type HfKey, A4, COMPOUND, INCH, LETTER, OBJECT_CHAR, CAPTION_NAMES, END_FORMAT, FOOT_FORMAT, captionRuns, noteLabel, noteStyle, nextObjectId, objectRun, objectsInText, runStyleOf, setParaStyle, styleOf, fieldTexts, objectOffsets, inlineMove,
   floatOf, lookExtent, lookOf, cellHolding, innerObjects,
-  type DocObject, type DocText, type FigureLook, type Float, type NumberPlace, type PageSetup, type WrapKind,
+  WATERMARKS, applyCharStyle, charStylesOf, clearCharStyle, clearFormatting, defaultPageBorder, defaultWatermark, deleteStyle, modifyCharStyle, newCharStyle, newParaStyle, withStyle,
+  type CharStyle, type PageBorder, type Watermark,
+  type BreakKind, type DocObject, type DocText, type Embedded, type FigureLook, type Float, type LineNumbers, type NoteFormat, type NumberPlace, type PageNumFormat, type PageSetup, type WrapKind,
 } from '../document/document';
 
 export interface DocModeHost {
@@ -51,14 +96,31 @@ export interface DocModeHost {
   changed(): void;
   /** Open the drawing tools on a drawing (null to draw a new one); `done` gets it, or null when cancelled. */
   editDrawing(contents: Contents | null, title: string, done: (c: Contents | null) => void): void;
+  /** The diagram window (Insert > Diagram) on a figure's diagram, or for a new one (null); resolves to the drawing, or null when cancelled. */
+  editDiagram?(contents: Contents | null): Promise<Contents | null>;
   /** Put a drawing on the clipboard, for ChemDraw and Word. */
   copyDrawing(contents: Contents, style: DocStyle): Promise<string>;
+  /** Something other than a drawing was copied (so a paste elsewhere doesn't fall back on an old drawing). */
+  copiedOther?(): void;
+  /** Put a picture (its image's URL) on the clipboard as a picture, for other programs and modes. */
+  copyPicture?(src: string): Promise<string>;
   /** What a paste brings: a drawing (from ChemDraw or a drawing here), a picture, or text. */
   readPaste(e: ClipboardEvent | null): Promise<DocPaste>;
   /** A name or SMILES as a drawing. */
   toStructure(text: string, style: DocStyle): Promise<{ contents: Contents; notes: string[] } | { error: string }>;
   /** Choose a picture file. */
   pickPicture(): Promise<{ bytes: Uint8Array; mime: string; name: string } | null>;
+  /** Choose any file, to put in as an object (Insert > Object). */
+  pickObjectFile?(): Promise<{ name: string; bytes: Uint8Array } | null>;
+  /** The picture a file put in as an object shows: its contents where they can be shown, else its icon. */
+  objectPicture?(name: string, bytes: Uint8Array, icon: boolean): Promise<ObjectPicture>;
+  /**
+   * Open an object's file in its own program (the desktop app; a browser saves it instead).
+   * `changed` gets the file each time it is saved there. Resolves to a message when it can't.
+   */
+  openObjectFile?(file: { name: string; bytes: Uint8Array }, changed: (bytes: Uint8Array) => void): Promise<string | null>;
+  /** Another program's object copied to the clipboard (Excel cells, for one), with its picture (the Windows app). */
+  clipboardObject?(): Promise<{ embed: Embedded; picture: { bytes: Uint8Array; mime: string } | null } | null>;
   /** An empty ACS-style table as a drawing. */
   newTable(rows: number, cols: number, style: DocStyle): Contents;
   /** Choose a BibTeX or RIS file and read its text (References > Manage References > Import). */
@@ -67,6 +129,17 @@ export interface DocModeHost {
   preferredChanged?(): void;
   /** The name put on tracked changes was changed (save settings). */
   reviewNameChanged?(): void;
+  /** The documents open in tabs, by name (Review > Compare offers them). */
+  openDocuments?(): { name: string; t: DocText }[];
+  /** Choose a Word file and read it (not opened in a tab). */
+  pickDocument?(): Promise<{ name: string; t: DocText } | null>;
+  /** Show a document made here (Compare's result) in a new tab, unsaved. */
+  showDocument?(t: DocText, name: string): void;
+  /** The person's saved Quick Parts (Insert > Quick Parts), and saving them with the settings. */
+  quickParts?(): QuickPart[];
+  setQuickParts?(list: QuickPart[]): void;
+  /** Design > Set as Default: the look new documents start with (kept in the settings). */
+  setNewDesign?(d: DocDesign | null): void;
   measure: Measure;
 }
 
@@ -84,10 +157,10 @@ const ignored = new Set<string>();
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 /** Commands that, in a text box, work on its text (others leave the box first). */
-const BOX_COMMANDS = /^(doc-(align-|justify|bold|italic|underline|sub|sup|formula|highlight|bullets|numbering|indent|outdent)|line-|font-|select-all$|undo$|redo$|zoom-|copy$|cut$|paste$|box-|find$|replace$|wrap-)/;
+const BOX_COMMANDS = /^(format-painter$|insert-symbol$|doc-(align-|justify|bold|italic|underline|sub|sup|formula|highlight|bullets|numbering|indent|outdent)|line-|font-|select-all$|undo$|redo$|zoom-|copy$|cut$|paste$|box-|find$|replace$|wrap-)/;
 
 /** Commands that, in a table cell, work there too (others leave the cell first). */
-const CELL_COMMANDS = /^(table-|tbl-|insert-structure$|structure-from-name-doc$|name-to-structure$|insert-picture$|edit-figure$|compound-number$|cross-reference$|insert-citation$)/;
+const CELL_COMMANDS = /^(table-|tbl-|insert-table$|insert-structure$|structure-from-name-doc$|name-to-structure$|insert-picture$|insert-object$|paste-object$|edit-figure$|compound-number$|cross-reference$|insert-citation$)/;
 
 /** A new table's look: Word's grid, the ACS rules in the text, or the ACS table drawn as a figure. */
 export const TABLE_KINDS: [string, string][] = [
@@ -108,11 +181,43 @@ export const WRAPS: [WrapKind | 'inline', string, string][] = [
 
 const lookExtentOf = (o: DocObject) => lookExtent(lookOf(o));
 
+/** A document tab's place while another tab shows: zoom and scroll, its view (View > Views), and the split pane's. */
+interface DocPlace {
+  zoom: number;
+  top: number;
+  left: number;
+  screen?: ScreenView;
+  perRow?: number;
+  sideways?: boolean;
+  split?: { zoom: number; top: number; left: number };
+}
+
+/** The view commands: View > Views. */
+const VIEW_COMMANDS: Record<string, DocViewKind> = {
+  'view-print': 'print', 'view-read': 'read', 'view-web': 'web', 'view-outline': 'outline', 'view-draft': 'draft',
+};
+
 /** Our own copy of document text, figures and all, for pasting back into a document. */
 const OWN_KIND = 'chem-illustrator-document';
 
 export class DocumentMode {
-  readonly view: DocView;
+  /** The pane being worked in: the document's view, or with View > Split, the one clicked last. */
+  view: DocView;
+  /** Every pane on the document (two while split). */
+  private views: DocView[] = [];
+  /** View > Split: the second pane, under the first, and the bar between them. */
+  private split: { view: DocView; host: HTMLDivElement; bar: HTMLDivElement } | null = null;
+  /** Where the caret was last in Outline view (to step over folded text in the direction it went). */
+  private lastFocus = 0;
+  /** How many paragraphs the text had (Outline's folded headings move with the text). */
+  private paraCountWas = 0;
+  /** Read Mode is showing, from this page (the left of the two). */
+  private reading = false;
+  private readPage = 0;
+  /** The arrangement and zoom before Read Mode, to go back to. */
+  private readWas: { zoom: number; perRow: number; sideways: boolean } | null = null;
+  /** The Outlining tab was put in front for Outline view (it goes when Outline does). */
+  private outlineTabFor: DocFile | null = null;
   tab: Tab | null = null;
   private ta: HTMLTextAreaElement;
   private panel: DocPanel;
@@ -124,10 +229,27 @@ export class DocumentMode {
     | { kind: 'text' }
     | { kind: 'box' }
     | { kind: 'resize'; id: number; w0: number; scale0: number; x0: number }
-    | { kind: 'move'; id: number; from: { x: number; y: number }; float: Float; moved: boolean }
+    | { kind: 'move'; id: number; from: { x: number; y: number }; float: Float; moved: boolean; others: [number, Float][] }
     | { kind: 'inline'; id: number; from: { x: number; y: number }; to: number | null }
+    | { kind: 'paint'; done: Set<string> }
     | null = null;
   private plainPaste = false;
+  /** Cells chosen together by dragging across them (Table commands work on all of them). */
+  private cellRange: ({ id: number } & CellBlock) | null = null;
+  /** The cell a drag across cells started in. */
+  private cellAnchor: { id: number; r: number; c: number } | null = null;
+  /** Table Design: styles, borders, margins, and text to table. */
+  readonly tables: DocTablesUI;
+  /** Restrict Editing, form fields, the index and the table of authorities. */
+  private indexes: DocIndexUI;
+  /** View > Navigation Pane. */
+  readonly nav: DocNav;
+  /** Insert > Cover Page, Blank Page, Quick Parts, Date and Time, and cross-references. */
+  readonly inserts: DocInsertUI;
+  /** Home > Borders, Shading and Sort. */
+  readonly paragraphs: DocParagraphUI;
+  readonly proofing: DocProofingUI;
+  readonly arranging: DocArrangeUI;
   private speller: Speller | null = null;
   private dictSeen: string[] | null = null;
   private checkCache = new Map<string, { spell: [number, number][]; issues: Issue[] }>();
@@ -136,17 +258,22 @@ export class DocumentMode {
   private finder: DocFind;
   /** The last copy made here: pasting the same text back brings its figures and fields too (and the references its citations cite). */
   private clip: (OwnCopy & { text: string }) | null = null;
+  /** The pixel size of a picture copied here on its own (it goes out as a PNG): pasted back, it is the copy above. */
+  private clipPicture: { w: number; h: number } | null = null;
   private refs: ReferencesDialog;
   /** Review > New Comment: comments beside the page. */
   readonly comments: DocComments;
+  /** View > Ruler: the paragraph's indents and tab stops above the pages. */
+  private ruler: Ruler;
+  /** Home > Styles > More Styles: every style, to apply, change and make. */
+  private stylesPane: StylesPane;
   private readonly closeMenuOutside = (e: Event) => { if (this.menu && !this.menu.contains(e.target as Node)) this.closeMenu(); };
 
   constructor(private host: DocModeHost) {
     const $ = <T extends HTMLElement>(s: string) => document.querySelector(s) as T;
     const docHost = $<HTMLDivElement>('#doc-host');
     this.view = new DocView(docHost);
-    this.view.overlay = () => this.overlay();
-    this.view.onMove = () => { this.placeInput(); this.showZoom(); this.comments?.place(); };
+    this.setupView(this.view);
     this.ribbon = $('#doc-ribbon');
     this.ta = document.createElement('textarea');
     this.ta.className = 'text-input doc-input';
@@ -161,7 +288,7 @@ export class DocumentMode {
       file: () => this.file,
       focus: () => this.focus(),
       flash: (msg, ms) => this.host.flash(msg, ms),
-      redraw: () => this.view.redraw(),
+      redraw: () => this.redraw(),
     });
     this.panel = new DocPanel($('#doc-body'), {
       file: () => this.file,
@@ -189,10 +316,114 @@ export class DocumentMode {
       pickFile: () => this.host.pickReferenceFile(),
       preferredChanged: () => this.host.preferredChanged?.(),
     });
+    this.ruler = new Ruler($('#doc-ruler'), {
+      geometry: () => this.rulerGeometry(),
+      setParas: (patch, what) => { if (this.file && !this.file.box) this.ed.setSelectedParas(patch, what); },
+      focus: () => this.focus(),
+    });
+    this.stylesPane = new StylesPane({
+      doc: () => { const f = this.file; return f && !f.box ? { t: f.t, para: this.ed.currentPara(), look: this.ed.currentStyle() } : null; },
+      applyPara: (id) => { if (this.file) { this.run(`style-id:${id}`); } },
+      applyChar: (id) => this.applyCharStyle(id),
+      newStyle: () => void this.newStyle(),
+      modify: (kind, id) => void this.modifyStyle(kind, id),
+      remove: (kind, id) => this.removeStyle(kind, id),
+      focus: () => this.focus(),
+    });
+    this.indexes = new DocIndexUI({
+      file: () => this.file,
+      flash: (msg, ms) => this.host.flash(msg, ms),
+      focus: () => this.focus(),
+      insertObject: (o, kind) => this.insertObject(o, kind),
+    });
+    this.tables = new DocTablesUI({
+      file: () => this.file,
+      target: () => this.tableTarget(),
+      block: () => this.chosenBlock(),
+      setTable: (id, t, kind) => this.setTable(id, t, kind),
+      textW: () => this.file?.layout().textW ?? 468,
+      flash: (msg, ms) => this.host.flash(msg, ms),
+      focus: () => this.focus(),
+      leaveCell: () => this.stopBox(),
+      startCell: (id, r, c) => { this.startCell(id, r, c); },
+      changed: () => { this.updateRibbon(); this.redraw(); },
+    });
+    this.nav = new DocNav($('#doc-pane'), {
+      text: () => this.file?.t ?? null,
+      caretPara: () => { const f = this.file; return f ? paraAt(f.ed.text, f.ed.start) : 0; },
+      goToPara: (p) => this.goToPara(p),
+      goToHit: (hit) => this.goToHit(hit),
+      apply: (t, kind, para) => {
+        const f = this.file;
+        if (!f) return;
+        this.stopBox();
+        const at = paraRange(rt.plainText(t.runs), para).start;
+        f.ed.update(t, kind, at, at);
+        this.goToPara(para);
+      },
+      level: (para, op) => this.navLevel(para, op),
+      deleteBlock: (para) => this.navDelete(para),
+      showFound: () => this.redraw(),
+      resized: () => { for (const v of this.views) v.resize(); this.redraw(); },
+      focus: () => this.focus(),
+    });
+    this.inserts = new DocInsertUI({
+      file: () => this.file,
+      ed: () => this.ed,
+      insertObject: (o, kind) => this.insertObject(o, kind),
+      stopBox: () => this.stopBox(),
+      flash: (msg, ms) => this.host.flash(msg, ms),
+      focus: () => this.focus(),
+      quickParts: () => this.host.quickParts?.() ?? [],
+      setQuickParts: (list) => this.host.setQuickParts?.(list),
+      author: () => reviewAuthor(),
+    });
+    this.paragraphs = new DocParagraphUI({
+      file: () => this.file,
+      ed: () => this.ed,
+      table: () => { const tg = this.tableTarget(); return tg ? { id: tg.id, t: tg.t } : null; },
+      setTable: (id, t, kind) => this.setTable(id, t, kind),
+      flash: (msg, ms) => this.host.flash(msg, ms),
+      focus: () => this.focus(),
+    });
+    this.arranging = new DocArrangeUI({
+      file: () => this.file,
+      picked: () => this.pickedObject(),
+      pick: (id) => {
+        const f = this.file;
+        const at = f ? objectOffsets(f.t.runs).get(id) : undefined;
+        if (!f || at === undefined) return;
+        this.stopBox();
+        f.ed.select(at, at + 1);
+        const c = f.ed.caret();
+        this.view.revealTop({ x1: c.x, y1: c.y1, x2: c.x, y2: c.y2 });
+        this.changed('selection');
+      },
+      float: (id) => this.setWrap(id, 'square'),
+      flash: (msg, ms) => this.host.flash(msg, ms),
+    });
+    this.proofing = new DocProofingUI({
+      file: () => this.file,
+      speller: () => this.speller,
+      checks: () => this.checksAll(),
+      addWord: (w) => setTypingPrefs({ dictionary: [...typingPrefs.dictionary, w] }),
+      ignoreWord: (w) => { ignored.add(w.toLowerCase()); this.speller?.ignore(w); this.checkCache.clear(); this.checked = null; this.redraw(); },
+      show: (a, b) => {
+        const f = this.file;
+        if (!f) return;
+        this.stopBox();
+        f.ed.select(a, b);
+        const c = f.ed.caret();
+        this.view.revealTop({ x1: c.x, y1: c.y1, x2: c.x, y2: c.y2 });
+        this.changed('selection');
+      },
+      flash: (msg, ms) => this.host.flash(msg, ms),
+      focus: () => this.focus(),
+    });
     this.wireInput();
-    this.wirePointer();
+    this.wirePointer(this.view);
     this.wireRibbon();
-    if (typingPrefs.spelling) void loadSpeller().then((sp) => { this.speller = sp; this.checked = null; this.view.redraw(); });
+    if (typingPrefs.spelling) void loadSpeller().then((sp) => { this.speller = sp; this.checked = null; this.redraw(); });
   }
 
   get file(): DocFile | null {
@@ -202,6 +433,21 @@ export class DocumentMode {
   /** Where typing goes: the text box being typed into, or the document. */
   private get ed() {
     return this.file!.textEd;
+  }
+
+  /** Format Painter, while the brush is held (set by the app): a click or drag in the text paints it. */
+  painter: ((ed: TextEditing) => void) | null = null;
+
+  /** Format Painter: the look of the selection (or of the text at the caret) where typing goes. */
+  pickLook(): TextLook | null {
+    return this.file && !this.reading ? this.ed.pickLook() : null;
+  }
+
+  /** Insert > Symbol: type a character where the caret is. False when the text can't be typed in (Read Mode). */
+  insertText(text: string): boolean {
+    if (!this.file || this.reading) return false;
+    this.ed.type(text);
+    return true;
   }
 
   /** Start typing into a text box (the caret at the end of its text, or at a point on it). */
@@ -237,9 +483,11 @@ export class DocumentMode {
     const f = this.file;
     if (!f) return null;
     const lay = f.layout();
+    // (in a table inside a cell, its own cell)
+    let best: { id: number; r: number; c: number; depth: number } | null = null;
     for (const [id, tb] of lay.tables) {
       const o = f.t.objects[id];
-      if (o?.kind !== 'table') continue;
+      if (o?.kind !== 'table' || (best && best.depth >= tb.depth)) continue;
       const W = tb.xs[tb.xs.length - 1];
       for (let r = 0; r < tb.rows.length; r++) {
         const at = tb.rows[r];
@@ -247,10 +495,11 @@ export class DocumentMode {
         let c = 0;
         while (c < tb.xs.length - 2 && p.x > at.x + tb.xs[c + 1]) c++;
         const cv = coveringCell(o.table, r, c);
-        return { id, r: cv.r, c: cv.c };
+        best = { id, r: cv.r, c: cv.c, depth: tb.depth };
+        break;
       }
     }
-    return null;
+    return best && { id: best.id, r: best.r, c: best.c };
   }
 
   /** The table picked on its own (a selection of just its character), if any. */
@@ -303,10 +552,19 @@ export class DocumentMode {
     let to: { r: number; c: number } | null;
     if (dir === 'left' || dir === 'right') to = nextCell(tg.t, tg.r, tg.c, back);
     else {
-      const r = tg.r + (back ? -1 : spanRows(tg.t, tg.r));
+      const r = tg.r + (back ? -1 : rowSpanOf(tg.t, tg.r, tg.c));
       to = r >= 0 && r < tg.t.rows.length ? coveringCell(tg.t, r, tg.c) : null;
     }
     if (to) { this.startCell(tg.id, to.r, to.c, back ? 'end' : 'start'); return; }
+    // out of a table inside a cell: into that cell, before or after the table
+    const holder = cellHolding(f.t, tg.id);
+    const ho = holder ? f.t.objects[holder.id] : undefined;
+    if (holder && ho?.kind === 'table' && this.startCell(holder.id, holder.r, holder.c)) {
+      const k = objectOffsets(ho.table.rows[holder.r][holder.c].runs).get(tg.id);
+      if (k !== undefined) f.box?.ed.setCaret(back ? k : k + 1);
+      this.changed('selection');
+      return;
+    }
     this.stopBox();
     const at = objectOffsets(f.t.runs).get(tg.id);
     if (at !== undefined) f.ed.setCaret(back ? at : at + 1);
@@ -354,7 +612,7 @@ export class DocumentMode {
     const lay = f.layout();
     switch (cmd) {
       case 'table-row-above': this.setTable(id, insertRow(t, r), 'Insert row', { r, c }); break;
-      case 'table-row-below': this.setTable(id, insertRow(t, r + 1), 'Insert row', { r: r + 1, c }); break;
+      case 'table-row-below': this.setTable(id, insertRow(t, r + rowSpanOf(t, r, c)), 'Insert row', { r: r + rowSpanOf(t, r, c), c }); break;
       case 'table-col-left': this.setTable(id, insertColumn(t, c), 'Insert column', { r, c }); break;
       case 'table-col-right': this.setTable(id, insertColumn(t, c + span), 'Insert column', { r, c: c + span }); break;
       case 'table-del-row':
@@ -366,6 +624,15 @@ export class DocumentMode {
         this.setTable(id, deleteColumn(t, c), 'Delete column', { r, c: Math.min(c, t.cols.length - 2) });
         break;
       case 'table-delete': {
+        // a table inside a cell: out of the cell's text
+        const holder = cellHolding(f.t, id);
+        const ho = holder ? f.t.objects[holder.id] : undefined;
+        if (holder && ho?.kind === 'table') {
+          const cell = ho.table.rows[holder.r][holder.c];
+          this.stopBox();
+          this.setTable(holder.id, setPart(ho.table, holder, { runs: cell.runs.filter((x) => x.obj !== id), paras: cell.paras }), 'Delete table', holder);
+          break;
+        }
         this.stopBox();
         const at = objectOffsets(f.t.runs).get(id);
         if (at !== undefined) { f.ed.select(at, at + 1); f.ed.replaceSelection([], undefined, 'Delete table'); }
@@ -373,12 +640,17 @@ export class DocumentMode {
       }
       case 'table-select': this.stopBox(true); break;
       case 'table-merge':
-        if (c + span >= t.cols.length) { this.host.flash('There is no cell to the right to join.'); return; }
+        if (!canMerge(t, r, c, 'right')) { this.host.flash(c + span >= t.cols.length ? 'There is no cell to the right to merge with.' : 'The cell to the right covers other rows: merge cells that line up.'); return; }
         this.setTable(id, mergeRight(t, r, c), 'Merge cells', { r, c });
         break;
-      case 'table-split': this.setTable(id, setSpan(t, r, c, 1), 'Split cells', { r, c }); break;
+      case 'table-merge-down':
+        if (!canMerge(t, r, c, 'down')) { this.host.flash(r + rowSpanOf(t, r, c) >= t.rows.length ? 'There is no cell below to merge with.' : 'The cell below is a different width: merge cells that line up.'); return; }
+        this.setTable(id, mergeDown(t, r, c), 'Merge cells', { r, c });
+        break;
+      case 'table-split': this.setTable(id, splitCell(t, r, c), 'Split cells', { r, c }); break;
+      case 'table-nest': void this.insertTable(true); break;
       case 'table-lines-grid': case 'table-lines-acs': case 'table-lines-none':
-        this.setTable(id, { ...t, lines: cmd.slice(12) as TableData['lines'] }, 'Table lines');
+        this.setTable(id, { ...t, lines: cmd.slice(12) as TableData['lines'], style: undefined }, 'Table lines');
         break;
       case 'table-valign-top': case 'table-valign-center': case 'table-valign-bottom': {
         const v = cmd.slice(13);
@@ -392,13 +664,174 @@ export class DocumentMode {
       case 'table-fill-width': this.setTable(id, { ...t, cols: t.cols.map((w) => (w * lay.textW) / t.cols.reduce((a, b) => a + b, 0)) }, 'Fit to page'); break;
       case 'table-head-more': this.setTable(id, { ...t, head: Math.min(t.rows.length, t.head + 1) }, 'Heading rows'); break;
       case 'table-head-less': this.setTable(id, { ...t, head: Math.max(0, t.head - 1) }, 'Heading rows'); break;
-      default: this.host.flash(`Unknown table command ${cmd}`);
+      case 'table-styles': {
+        const r0 = this.view.host.getBoundingClientRect();
+        this.tables.styleGallery(r0.left + 40, r0.top + 8);
+        break;
+      }
+      case 'table-borders': {
+        const r0 = this.view.host.getBoundingClientRect();
+        this.tables.bordersMenu(r0.left + 40, r0.top + 8);
+        break;
+      }
+      case 'table-painter': this.tables.setPainting(!this.tables.painting); break;
+      case 'table-gridlines':
+        this.view.gridlines = !this.view.gridlines;
+        if (this.split) this.split.view.gridlines = this.view.gridlines;
+        this.updateRibbon();
+        this.redraw();
+        break;
+      case 'table-margins': void this.tables.cellMarginsDialog(); break;
+      case 'table-to-text': void this.tables.tableToTextDialog(); break;
+      case 'table-split-table': this.tables.splitTable(); break;
+      case 'table-merge-cells': {
+        const b = this.rangeNow();
+        if (!b || !canMergeBlock(t, b)) { this.host.flash('Drag across the cells to merge first (a block that doesn\'t cut through a merged cell).'); return; }
+        this.cellRange = null;
+        this.setTable(id, mergeBlock(t, b), 'Merge cells', { r: b.r0, c: b.c0 });
+        break;
+      }
+      default: {
+        const look = /^table-look-(\w+)$/.exec(cmd);
+        if (look && LOOK_OPTIONS.some(([k]) => k === look[1])) { this.tables.toggleLook(look[1] as keyof TableLook); break; }
+        const border = /^table-border-(\w+)$/.exec(cmd);
+        if (border) { this.tables.borders(border[1] as Parameters<DocTablesUI['borders']>[0]); break; }
+        this.host.flash(`Unknown table command ${cmd}`);
+      }
     }
   }
 
-  /** Whether a cell is one the cell commands change: the cell typed into, or every cell of a picked table. */
+  /** Whether a cell is one the cell commands change: the cells dragged across, the cell typed into, or every cell of a picked table. */
   private inChosen(tg: { r: number; c: number }, r: number, c: number): boolean {
+    const b = this.rangeNow();
+    if (b) return r >= b.r0 && r <= b.r1 && c >= b.c0 && c <= b.c1;
     return !this.file?.box?.cell || (r === tg.r && c === tg.c);
+  }
+
+  /** The cells dragged across, while they are still in the table being worked on. */
+  private rangeNow(): CellBlock | null {
+    const b = this.cellRange;
+    const tg = this.tableTarget();
+    if (!b || !tg || tg.id !== b.id || b.r1 >= tg.t.rows.length || b.c1 >= tg.t.cols.length) return null;
+    return b;
+  }
+
+  /** The cells the border and margin commands work on: those dragged across, the cell typed into, or the whole table. */
+  private chosenBlock(): CellBlock | null {
+    const tg = this.tableTarget();
+    if (!tg) return null;
+    const b = this.rangeNow();
+    if (b) return b;
+    if (this.file?.box?.cell) return { r0: tg.r, c0: tg.c, r1: tg.r + rowSpanOf(tg.t, tg.r, tg.c) - 1, c1: tg.c + spanOf(tg.t, tg.r, tg.c) - 1 };
+    return { r0: 0, c0: 0, r1: tg.t.rows.length - 1, c1: tg.t.cols.length - 1 };
+  }
+
+  // ---------------------------------------------------------------- the Navigation pane
+
+  /** Go to a paragraph (a heading picked in the Navigation pane): the caret at its start, scrolled to the top. */
+  private goToPara(p: number): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    const text = f.ed.text;
+    const at = paraRange(text, Math.min(p, paraCount(text) - 1)).start;
+    f.ed.setCaret(at);
+    const c = f.ed.caret();
+    this.view.revealTop({ x1: c.x, y1: c.y1, x2: c.x, y2: c.y2 });
+    this.focus();
+    this.changed('selection');
+  }
+
+  /** Go to a paragraph of the document's text (an accessibility issue in it). */
+  revealPara(p: number): void {
+    this.goToPara(p);
+  }
+
+  /** Pick a structure, picture, chart or table (an accessibility issue about it), in the text or in a table cell. */
+  goToObject(id: number): boolean {
+    const f = this.file;
+    if (!f) return false;
+    const offsetIn = (runs: TextRun[]) => {
+      let at = 0;
+      for (const r of runs) { if (r.obj === id) return at; at += r.text.length; }
+      return -1;
+    };
+    const cell = cellHolding(f.t, id);
+    if (cell) {
+      const tb = f.t.objects[cell.id];
+      const runs = tb?.kind === 'table' ? tb.table.rows[cell.r]?.[cell.c]?.runs ?? [] : [];
+      const at = offsetIn(runs);
+      if (at < 0 || !this.startCell(cell.id, cell.r, cell.c, 'start')) return false;
+      f.box?.ed.select(at, at + 1);
+    } else {
+      const at = offsetIn(f.ed.t.runs);
+      if (at < 0) return false;
+      this.stopBox();
+      f.ed.select(at, at + 1);
+      const c = f.ed.caret();
+      this.view.revealTop({ x1: c.x, y1: c.y1, x2: c.x, y2: c.y2 });
+    }
+    this.focus();
+    this.changed('selection');
+    return true;
+  }
+
+  /** Alt Text… for the structure, picture or chart picked (or `id`). True when it was changed. */
+  async altText(id = this.pickedObject()): Promise<boolean> {
+    const f = this.file;
+    const o = id !== null ? f?.t.objects[id] : undefined;
+    if (!f || id === null || !o || (o.kind !== 'drawing' && o.kind !== 'picture')) {
+      this.host.flash('Click a structure, picture or chart first, then Alt Text.');
+      return false;
+    }
+    const what = o.kind === 'drawing' ? 'structure or scheme' : o.chart ? 'chart' : 'picture';
+    const note = o.kind === 'drawing' ? 'Screen readers read this out in place of the drawing, and Word keeps it as the picture\'s alt text. Left empty, the drawing is described by its SMILES.' : undefined;
+    const got = await askAltText(what, o.alt, note);
+    const cur = this.file?.t.objects[id];
+    if (got === null || !cur || (cur.kind !== 'drawing' && cur.kind !== 'picture') || this.file !== f) return false;
+    const next = { ...cur, alt: got || undefined } as DocObject;
+    if (!got) delete (next as { alt?: string }).alt;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Alt text');
+    return true;
+  }
+
+  /** Go to a place the Navigation pane's search found (in the text, or in a table cell). */
+  private goToHit(hit: { cell?: { id: number; r: number; c: number }; start: number; end: number }): void {
+    const f = this.file;
+    if (!f) return;
+    if (hit.cell) {
+      if (!this.startCell(hit.cell.id, hit.cell.r, hit.cell.c, 'start')) return;
+      f.box?.ed.select(hit.start, hit.end);
+    } else {
+      this.stopBox();
+      f.ed.select(hit.start, hit.end);
+    }
+    this.focus();
+    this.changed('selection');
+  }
+
+  /** Promote or demote a heading picked in the Navigation pane, with the headings under it. */
+  private navLevel(para: number, op: 'promote' | 'demote'): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    f.ed.update(changeLevel(f.t, { ...newOutline(), collapsed: [para] }, para, para, op), op === 'promote' ? 'Promote' : 'Demote');
+  }
+
+  /** Delete a heading with everything under it (the Navigation pane's right-click menu). */
+  private navDelete(para: number): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    const levels = fitParas(f.t.paras, paraCount(f.ed.text)).map((ps) => outlineLevel(f.t, ps));
+    const end = subtreeEnd(levels, para);
+    const text = f.ed.text;
+    let a = paraRange(text, para).start;
+    let b = end < levels.length ? paraRange(text, end).start : text.length;
+    // the last paragraphs: the break before them goes instead
+    if (end >= levels.length && a > 0) { a -= 1; b = text.length; }
+    f.ed.select(a, b);
+    f.ed.replaceSelection([], undefined, 'Delete heading');
   }
 
   /** Shade the cell typed into (or the whole table picked) with a colour, or take the shading off. */
@@ -433,6 +866,14 @@ export class DocumentMode {
     this.setTable(tg.id, t, 'Column alignment');
   }
 
+  /** Is there something for Undo (or Redo) to take back, in the cell being typed in or the document. */
+  canUndo(redo = false): boolean {
+    const f = this.file;
+    if (!f) return false;
+    const has = (ed: { canUndo: boolean; canRedo: boolean }) => (redo ? ed.canRedo : ed.canUndo);
+    return has(this.ed) || (!!f.box?.cell && has(f.ed));
+  }
+
   /** Undo and Redo: in a table cell, its typing first, then the document's changes (rows added…). */
   private undo(redo: boolean): void {
     const f = this.file!;
@@ -452,12 +893,19 @@ export class DocumentMode {
   /** Stop typing into the text box (`pick`: and pick the box, as Escape does in Word). */
   private stopBox(pick = false): void {
     const f = this.file;
+    this.cellRange = null;
     if (!f?.box) return;
     const id = f.box.id;
     f.endBox();
     if (pick) {
       const at = objectOffsets(f.t.runs).get(id);
-      if (at !== undefined) f.ed.select(at, at + 1);
+      // a footnote goes back to its number in the text (Word's Shift+F5)
+      if (at !== undefined && f.t.objects[id]?.kind === 'note') {
+        f.ed.setCaret(at + 1);
+        // what is typed after the number isn't raised like it
+        f.ed.setStyle({ sup: undefined });
+      }
+      else if (at !== undefined) f.ed.select(at, at + 1);
     }
     this.changed('selection');
   }
@@ -470,26 +918,45 @@ export class DocumentMode {
     this.tab?.document?.endBox();
     this.tab = tab;
     const f = tab?.document ?? null;
-    this.view.file = f;
+    for (const v of this.views) v.file = f;
     if (!f) {
       if (this.blink) { clearInterval(this.blink); this.blink = null; }
       this.panel.closeBoxes();
+      this.stylesPane.close();
+      this.ruler.shown = false;
       this.comments.update();
       return;
     }
     f.listener = (kind) => this.changed(kind);
+    f.onRefused = () => this.indexes.refused(f);
     // chemistry as it's typed: CH2Cl2 becomes a formula, -> an arrow… (Edit > Typing and Spelling)
     f.ed.onTyped = (typed) => afterTyping(f.ed, typed);
+    const st = tab!.sheetState as DocPlace | null;
+    // each tab (each window of a document) has its own view of it
+    f.view = st?.screen ?? PRINT_VIEW;
+    this.activate(this.views[0]);
+    this.view.perRow = st?.perRow ?? 1;
+    this.view.sideways = st?.sideways ?? false;
+    this.setSplit(!!st?.split && f.view.kind !== 'read');
     this.view.resize();
-    const st = tab!.sheetState as { zoom: number; top: number; left: number } | null;
     if (st) {
       this.view.zoom = st.zoom;
       this.view.sizeSpace();
       this.view.scroller.scrollTop = st.top;
       this.view.scroller.scrollLeft = st.left;
+      if (this.split && st.split) {
+        const v = this.split.view;
+        v.zoom = st.split.zoom;
+        v.sizeSpace();
+        v.scroller.scrollTop = st.split.top;
+        v.scroller.scrollLeft = st.split.left;
+      }
     } else if (this.view.scroller.clientWidth < f.layout().pageW * ACTUAL + 48) this.view.fitWidth();
     else this.view.setZoom(ACTUAL);
-    this.blink ??= setInterval(() => { this.caretOn = !this.caretOn; this.view.redraw(); }, 530);
+    this.paraCountWas = paraCount(f.ed.text);
+    this.showViewKind();
+    if (f.view.kind === 'read') this.startReading();
+    this.blink ??= setInterval(() => { this.caretOn = !this.caretOn; this.redraw(); }, 530);
     this.changed('selection');
     requestAnimationFrame(() => this.focus());
   }
@@ -498,7 +965,14 @@ export class DocumentMode {
   leave(): void {
     const t = this.tab;
     if (!t?.document) return;
-    t.sheetState = { zoom: this.view.zoom, top: this.view.scroller.scrollTop, left: this.view.scroller.scrollLeft };
+    const main = this.views[0], sp = this.split?.view;
+    const was = this.readWas;
+    t.sheetState = {
+      zoom: was?.zoom ?? main.zoom, top: main.scroller.scrollTop, left: main.scroller.scrollLeft,
+      screen: t.document.view, perRow: was?.perRow ?? main.perRow, sideways: was?.sideways ?? main.sideways,
+      split: sp ? { zoom: sp.zoom, top: sp.scroller.scrollTop, left: sp.scroller.scrollLeft } : undefined,
+    } satisfies DocPlace;
+    this.stopReading();
     t.document.listener = () => {};
     this.closeMenu();
     this.finder.close(false);
@@ -511,8 +985,8 @@ export class DocumentMode {
   /** Fonts finished loading: measure again. */
   fontsChanged(): void {
     this.file?.relayout();
-    this.view.sizeSpace();
-    this.view.redraw();
+    this.sizeSpaces();
+    this.redraw();
   }
 
   // ---------------------------------------------------------------- changes
@@ -520,16 +994,24 @@ export class DocumentMode {
   private changed(kind: 'text' | 'selection'): void {
     const f = this.file;
     if (!f) return;
+    // text with similar formatting stays selected until the caret moves or the text changes another way
+    if (this.similar && (this.similar.t !== f.t || f.ed.start !== this.similar.at[0] || f.ed.end !== this.similar.at[1])) this.similar = null;
     // the text box being typed into was taken away (Undo, Cut)
     if (f.box) {
       const bo = f.t.objects[f.box.id];
       const cell = f.box.cell;
-      const ok = cell ? bo?.kind === 'table' && !!bo.table.rows[cell.r]?.[cell.c] && !isCovered(bo.table, cell.r, cell.c) : bo?.kind === 'textbox';
+      const ok = cell ? bo?.kind === 'table' && !!bo.table.rows[cell.r]?.[cell.c] && !isCovered(bo.table, cell.r, cell.c) : bo?.kind === 'textbox' || bo?.kind === 'note';
       if (!ok) f.endBox();
     }
     this.caretOn = true;
+    if (kind === 'text') this.keepFolds();
+    // Outline: off text folded out of sight (this comes back here once moved)
+    if (this.snapShown()) {
+      if (kind === 'text') { this.sizeSpaces(); this.host.changed(); }
+      return;
+    }
     if (kind === 'text') {
-      this.view.sizeSpace();
+      this.sizeSpaces();
       this.host.changed();
       if (this.finder.open) this.finder.refresh();
     } else if (this.finder.open) this.finder.showCount();
@@ -540,7 +1022,12 @@ export class DocumentMode {
     this.panel.update();
     this.comments.followCaret();
     this.comments.update();
-    this.view.redraw();
+    this.updateOutlineRibbon();
+    this.ruler.update();
+    this.stylesPane.refresh();
+    this.nav.refresh();
+    if (this.arranging.paneOpen) this.arranging.refresh();
+    this.redraw();
   }
 
   /** Keep the caret in view after it moves. */
@@ -573,9 +1060,17 @@ export class DocumentMode {
     return o && (o.kind === 'drawing' || o.kind === 'picture' || o.kind === 'textbox') ? id! : null;
   }
 
-  private overlay(): Overlay {
+  private overlay(pane: DocView = this.view): Overlay {
     const f = this.file;
     if (!f) return { selection: null, caret: null, squiggles: [], picked: null, found: [], framed: null };
+    const ov = this.overlayNow(f);
+    // the caret shows in the pane being worked in, and not in Read Mode
+    if (pane !== this.view || f.view.kind === 'read') ov.caret = null;
+    if (f.view.kind === 'read') ov.squiggles = [];
+    return ov;
+  }
+
+  private overlayNow(f: DocFile): Overlay {
     if (f.box) {
       // typing into a text box: its caret and selection
       const ed = f.box.ed;
@@ -585,12 +1080,13 @@ export class DocumentMode {
       return {
         selection: null, caret: showCaret ? ed.caret() : null, squiggles: [], picked, framed: null,
         found: this.finder.open ? this.finder.hits : [],
-        editing: { id: f.box.id, cell: !!f.box.cell, selection: ed.collapsed || ed.composing || picked !== null ? [] : selectionRects(lay, ed.start, ed.end) },
+        editing: { id: f.box.id, cell: !!f.box.cell, selection: ed.collapsed || ed.composing || picked !== null || this.rangeNow() ? [] : selectionRects(lay, ed.start, ed.end) },
+        cells: this.rangeNow() ? this.cellRange : null,
       };
     }
     const ed = f.ed;
     const picked = this.pickedObject();
-    const framed = this.pickedField('bib')?.id ?? this.pickedField('toc')?.id ?? this.pickedTable();
+    const framed = this.pickedField('bib')?.id ?? this.pickedField('toc')?.id ?? this.pickedField('tof')?.id ?? this.pickedField('index')?.id ?? this.pickedField('toa')?.id ?? this.pickedTable();
     const showCaret = this.caretOn && (ed.collapsed || ed.composing !== null) && document.activeElement === this.ta;
     const c = showCaret ? ed.caret() : null;
     const squiggles: Overlay['squiggles'] = [];
@@ -607,11 +1103,118 @@ export class DocumentMode {
       found: this.finder.open ? this.finder.hits : [],
       framed,
       comments: this.comments.shading(),
+      ...(this.similar ? { also: this.similar.ranges } : {}),
     };
   }
 
+  // ---------------------------------------------------------------- Select and Go To
+
+  /** Home > Select > Select Text with Similar Formatting: every stretch that looks like the text at the caret, until the caret moves. */
+  private similar: { t: DocText; ranges: [number, number][]; at: [number, number] } | null = null;
+
+  private selectSimilar(): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    const ed = f.ed;
+    const paras = fitParas(f.t.paras, paraCount(ed.text));
+    const ranges = similarRanges(f.t.runs, ed.start, (p) => { const st = styleOf(f.t, paras[p]); return { font: st.font, size: st.size }; });
+    if (!ranges.length) { this.host.flash('There is no text here to match.'); return; }
+    ed.select(ranges[0][0], ranges[0][1]);
+    this.similar = { t: f.t, ranges, at: [ed.start, ed.end] };
+    this.host.flash(`${ranges.length} place${ranges.length === 1 ? '' : 's'} with this formatting selected: bold, italic, the font, size, colour, highlight or a style now changes them all.`, 6000);
+    this.redraw();
+  }
+
+  /** A text formatting change for every stretch of text with similar formatting. True when it was done here. */
+  private applySimilar(cmd: string, patch?: Partial<rt.RunStyle>): boolean {
+    const f = this.file;
+    const sim = this.similar;
+    if (!f || !sim || sim.t !== f.t || f.box) return false;
+    const toggles: Record<string, rt.Toggle> = { 'doc-bold': 'bold', 'doc-italic': 'italic', 'doc-underline': 'underline', 'doc-strike': 'strike', 'doc-sub': 'sub', 'doc-sup': 'sup', 'doc-small-caps': 'smallCaps', 'doc-all-caps': 'allCaps' };
+    const styles: Record<string, string> = { 'style-normal': 'Normal', 'style-title': 'Title', 'style-h1': 'Heading1', 'style-h2': 'Heading2', 'style-h3': 'Heading3', 'style-caption': 'Caption' };
+    let t = f.t;
+    if (patch) {
+      for (const [a, b] of sim.ranges) t = { ...t, runs: rt.applyStyle(t.runs, a, b, patch) };
+    } else if (toggles[cmd]) {
+      const key = toggles[cmd];
+      const p = rt.togglePatch(rt.commonStyle(t.runs, sim.ranges[0][0], sim.ranges[0][1]), key);
+      for (const [a, b] of sim.ranges) t = { ...t, runs: rt.applyStyle(t.runs, a, b, p) };
+    } else if (styles[cmd] || cmd.startsWith('style-id:')) {
+      const id = styles[cmd] ?? cmd.slice(9);
+      t = withStyle(t, id);
+      const done = new Set<number>();
+      for (const [a] of sim.ranges) { const p = paraAt(f.ed.text, a); if (!done.has(p)) { done.add(p); t = setParaStyle(t, p, p, id); } }
+    } else return false;
+    const ranges = sim.ranges;
+    f.ed.update(t, 'Format');
+    this.similar = { t: f.t, ranges, at: [f.ed.start, f.ed.end] };
+    this.redraw();
+    return true;
+  }
+
+  /** Text formatting from the ribbon's font, size and colour boxes: for the similar text when that is selected. */
+  private setTextStyle(patch: Partial<rt.RunStyle>): void {
+    if (!this.applySimilar('', patch)) this.ed.setStyle(patch);
+  }
+
+  /** Home > Select: Select All, Select Text with Similar Formatting, and the Selection Pane. */
+  private selectMenu(x: number, y: number): void {
+    popupMenu(x, y, [
+      ['Select All (Ctrl+A)', () => { this.run('select-all'); }],
+      ['Select Text with Similar Formatting', () => this.selectSimilar()],
+      ['Selection Pane…', () => this.arranging.selectionPane()],
+      null,
+      ['Go To… (Ctrl+G)', () => void this.goToDialog()],
+    ]);
+  }
+
+  /** Review > Show Markup: which changes are marked, whose, and whether formatting is tracked. */
+  private showMarkupMenu(x: number, y: number): void {
+    const f = this.file;
+    if (!f) return;
+    const v = f.review;
+    const tick = (on: boolean, label: string) => `${on ? '✓' : '\u2003'} ${label}`;
+    const set = (patch: Partial<ReviewView>) => { f.review = { ...f.review, ...patch }; this.view.paint(); };
+    const people = reviewers(f.t.runs);
+    const hidden = v.hidden ?? [];
+    popupMenu(x, y, [
+      [tick(v.insDel !== false, 'Insertions and Deletions'), () => set({ insDel: v.insDel === false })],
+      [tick(v.formatting !== false, 'Formatting'), () => set({ formatting: v.formatting === false })],
+      null,
+      [tick(!hidden.length, 'All Reviewers'), () => set({ hidden: hidden.length ? [] : people })],
+      ...people.map((p): [string, () => void] => [tick(!hidden.includes(p), p || 'Unknown'), () => set({ hidden: hidden.includes(p) ? hidden.filter((h) => h !== p) : [...hidden, p] })]),
+      null,
+      [tick(trackingFormatting(), 'Track Formatting Changes'), () => { setTrackFormatting(!trackingFormatting()); this.host.flash(trackingFormatting() ? 'Formatting changes will be tracked (bold, fonts, sizes, colours).' : 'Formatting changes won\'t be tracked; only text typed and deleted.'); }],
+    ]);
+  }
+
+  /** Home > Find > Go To (Ctrl+G, F5): a page, section, line, bookmark, comment, note, field, table, picture, equation or heading. */
+  private goToKind: GoToKind = 'page';
+  private async goToDialog(): Promise<void> {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    const marks = bookmarksOf(f.t).filter((b) => !b.name.startsWith('_')).map((b) => b.name);
+    const got = await ask('Go To', [
+      { name: 'what', label: 'Go to what', value: this.goToKind, options: GO_TO_KINDS.map(([v, label]) => ({ value: v, label })) },
+      { name: 'n', label: 'Enter a number or name', value: '', placeholder: '3, +1 (the next), −2, or a bookmark\'s name', suggestions: marks },
+    ], { ok: 'Go To', note: 'A number goes to that one; + and − go on or back from where the caret is (just + is the next one). Bookmarks go by name.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const kind = got.what as GoToKind;
+    this.goToKind = kind;
+    const at = goToOffset(kind, kind === 'bookmark' ? got.n : got.n.replace('−', '-'), f.t, f.layout(), f.ed.start);
+    const name = GO_TO_KINDS.find(([k]) => k === kind)?.[1].toLowerCase() ?? kind;
+    if (at === null) { this.host.flash(kind === 'bookmark' ? `There is no bookmark called ${got.n.trim()}.` : `There is no such ${name} in this document.`); return; }
+    f.ed.setCaret(at);
+    const c = f.ed.caret();
+    this.view.revealTop({ x1: c.x, y1: c.y1, x2: c.x, y2: c.y2 });
+    this.changed('selection');
+  }
+
   /** A citation or bibliography picked on its own (a selection of just its character). */
-  private pickedField<K extends 'cite' | 'bib' | 'toc'>(kind: K): { id: number; o: Extract<DocObject, { kind: K }> } | null {
+  private pickedField<K extends 'cite' | 'bib' | 'toc' | 'tof' | 'index' | 'toa' | 'note'>(kind: K): { id: number; o: Extract<DocObject, { kind: K }> } | null {
     const f = this.file;
     if (!f || f.ed.end - f.ed.start !== 1) return null;
     const id = rt.sliceRuns(f.ed.t.runs, f.ed.start, f.ed.end)[0]?.obj;
@@ -655,11 +1258,22 @@ export class DocumentMode {
       if (this.checkCache.size > used.size * 2 + 500) for (const k of [...this.checkCache.keys()]) if (!used.has(k)) this.checkCache.delete(k);
       this.checked = { t: f.t, spell, issues };
     }
-    // the word the caret is at the end of is still being typed
+    return this.typedOut(this.checked);
+  }
+
+  /** Every misspelled word and chemistry slip, the word being typed too (for the Spelling and Grammar pane). */
+  private checksAll(): { spell: [number, number][]; issues: Issue[] } {
+    this.checks();
+    return this.checked ? { spell: this.checked.spell, issues: this.checked.issues } : { spell: [], issues: [] };
+  }
+
+  /** The checks without the word the caret is at the end of (it is still being typed). */
+  private typedOut(checked: { spell: [number, number][]; issues: Issue[] }): { spell: [number, number][]; issues: Issue[] } {
+    const f = this.file!;
     const ed = f.ed;
     const at = ed.collapsed ? ed.focus : -1;
     const typing = ([a, b]: [number, number]) => at > a && at <= b;
-    return { spell: this.checked.spell.filter((s) => !typing(s)), issues: this.checked.issues.filter((i) => !typing([i.start, i.end])) };
+    return { spell: checked.spell.filter((s) => !typing(s)), issues: checked.issues.filter((i) => !typing([i.start, i.end])) };
   }
 
   private contextMenu(offset: number, clientX: number, clientY: number): boolean {
@@ -685,7 +1299,7 @@ export class DocumentMode {
     };
     if (issue) {
       item(`${issue.message}: change to ${issue.fixed}`, () => ed.fix(issue.edits, 'fix'));
-      item('Leave as written', () => { ignored.add(ed.text.slice(issue.start, issue.end).toLowerCase()); this.checkCache.clear(); this.checked = null; this.view.redraw(); });
+      item('Leave as written', () => { ignored.add(ed.text.slice(issue.start, issue.end).toLowerCase()); this.checkCache.clear(); this.checked = null; this.redraw(); });
     }
     if (word) {
       if (issue) menu.appendChild(document.createElement('hr'));
@@ -696,10 +1310,20 @@ export class DocumentMode {
       if (!sugg.length) item('No suggestions', null);
       menu.appendChild(document.createElement('hr'));
       item('Add to Dictionary', () => setTypingPrefs({ dictionary: [...typingPrefs.dictionary, text] }), 'Accept this word from now on (Edit > Typing and Spelling lists your words)');
-      item('Ignore', () => { ignored.add(text.toLowerCase()); this.speller?.ignore(text); this.checkCache.clear(); this.checked = null; this.view.redraw(); }, 'Accept this word until the program is closed');
+      item('Ignore', () => { ignored.add(text.toLowerCase()); this.speller?.ignore(text); this.checkCache.clear(); this.checked = null; this.redraw(); }, 'Accept this word until the program is closed');
+    }
+    // a link here
+    const linkHere = rt.sliceRuns(ed.t.runs, offset, offset + 1)[0]?.link ?? (offset > 0 ? rt.sliceRuns(ed.t.runs, offset - 1, offset)[0]?.link : undefined);
+    if (linkHere) {
+      if (word || issue) menu.appendChild(document.createElement('hr'));
+      if (ed.collapsed || !ed.linkHere()) ed.setCaret(offset);
+      item('Edit Link…', () => void this.editLink());
+      item('Open Link', () => void followLink(linkHere), 'Or Ctrl+click the link');
+      item('Copy Link', () => void navigator.clipboard?.writeText(linkHere).catch(() => {}));
+      item('Remove Link', () => ed.removeLink());
     }
     // the usual commands, as on the ribbon
-    if (word || issue) menu.appendChild(document.createElement('hr'));
+    if (word || issue || linkHere) menu.appendChild(document.createElement('hr'));
     const cmd = (label: string, name: string, title?: string) => item(label, () => { if (!this.run(name)) this.host.command(name); }, title);
     // an equation here
     const mathHere = [offset, offset - 1].map((at) => (at >= 0 ? rt.sliceRuns(ed.t.runs, at, at + 1)[0]?.obj : undefined)).find((x) => x !== undefined && this.file?.t.objects[x]?.kind === 'math');
@@ -710,7 +1334,7 @@ export class DocumentMode {
     // a tracked change here (Review tab)
     const change = this.file ? changesIn(this.file.t.runs).find((x) => x.start <= offset && offset <= x.end) : undefined;
     if (change) {
-      const what = `${change.kind === 'ins' ? 'Insertion' : 'Deletion'} by ${change.author || 'unknown'}`;
+      const what = `${changeName(change.kind)} by ${change.author || 'unknown'}`;
       const pick = (accept: boolean) => () => { if (ed.collapsed || ed.end <= change.start || ed.start >= change.end) ed.select(change.start, change.start); this.decideChange(accept); };
       item(`Accept ${what}`, pick(true));
       item(`Reject ${what}`, pick(false));
@@ -719,7 +1343,21 @@ export class DocumentMode {
     cmd('Cut', 'cut');
     cmd('Copy', 'copy');
     cmd('Paste', 'paste');
+    if (this.host.clipboardObject) cmd('Paste as Object', 'paste-object', 'Cells copied in Excel (or another program\'s object) kept whole: double-click to change them in their program');
+    cmd('Format Painter', 'format-painter', 'Copy the look of the text here (or of the selection) to the text you click or drag over next');
     menu.appendChild(document.createElement('hr'));
+    // a footnote's number, or typing in a note: to the other end, or the other kind
+    const fb = this.file?.box && !this.file.box.cell && this.file.t.objects[this.file.box.id]?.kind === 'note' ? this.file.box.id : null;
+    const note = fb ?? (this.file?.box ? null : this.noteAt(offset));
+    const no = note !== null ? this.file?.t.objects[note] : undefined;
+    if (note !== null && no?.kind === 'note') {
+      const what = no.end ? 'Endnote' : 'Footnote';
+      if (fb !== null) item(`Go to ${what} Reference`, () => this.stopBox(true), 'Back to its number in the text (Escape)');
+      else item(`Go to ${what}`, () => this.startBox(note), 'Its text, to type into');
+      item(no.end ? 'Convert to Footnote' : 'Convert to Endnote', () => { if (fb !== null) this.stopBox(); this.convertNote(note); });
+      cmd('Note Options…', 'note-options', 'How footnotes and endnotes are numbered');
+      menu.appendChild(document.createElement('hr'));
+    }
     cmd('New Comment', 'new-comment', 'A comment on the selection, or on the word here (Review tab)');
     const commented = this.comments.placed().filter((x) => x.start <= offset && offset <= x.end);
     if (commented.length) {
@@ -731,6 +1369,14 @@ export class DocumentMode {
     const picked = this.pickedObject();
     if (picked !== null) {
       if (this.file?.t.objects[picked]?.kind === 'drawing') cmd('Edit Drawing', 'edit-figure');
+      const po = this.file?.t.objects[picked];
+      if (po?.kind === 'picture' && po.chart) cmd('Edit Chart…', 'edit-chart');
+      if (po?.kind === 'picture' && po.embed) {
+        cmd('Open Object', 'open-object', `Open the ${objectKind(po.embed)} in its own program; save it there to change it here`);
+        item(po.embed.icon ? 'Show Contents' : 'Display as Icon', () => void this.embeddedIcon(picked, !po.embed?.icon), po.embed.icon ? 'Show what the object holds instead of its icon' : 'Show an icon with the file\'s name instead of what it holds');
+      }
+      if (po?.kind === 'picture' && !po.chart && !po.embed) cmd('Picture Format…', 'picture-format', 'Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions');
+      if (po?.kind === 'drawing' || po?.kind === 'picture') cmd('Alt Text…', 'alt-text', 'What it shows, for people who can\'t see it (screen readers); kept as its alt text in Word');
       cmd('Insert Caption…', 'insert-caption');
       const look = this.lookOf(picked);
       item(look?.frame ? 'Remove Frame' : 'Add Frame', () => this.setLook(picked, { frame: look?.frame ? undefined : 0.75, frameColor: undefined }), 'A thin black line round it (Format in the panel sets its width and colour)');
@@ -762,12 +1408,24 @@ export class DocumentMode {
       cmd('Delete Row', 'table-del-row');
       cmd('Delete Column', 'table-del-col');
       cmd('Delete Table', 'table-delete');
-      if (spanOf(tg.t, tg.r, tg.c) > 1) cmd('Split Cells', 'table-split', 'Undo a merge: the cell goes back to one column');
-      else cmd('Merge with Cell to the Right', 'table-merge');
+      if (canMerge(tg.t, tg.r, tg.c, 'right')) cmd('Merge with Cell to the Right', 'table-merge');
+      if (canMerge(tg.t, tg.r, tg.c, 'down')) cmd('Merge with Cell Below', 'table-merge-down', 'Join the cell with the one under it (down a column)');
+      if (spanOf(tg.t, tg.r, tg.c) > 1 || rowSpanOf(tg.t, tg.r, tg.c) > 1) cmd('Split Cells', 'table-split', 'Undo a merge: the cell goes back to single cells');
+      cmd('Insert Table in Cell…', 'table-nest', 'A table inside this cell (a nested table, kept as one in Word)');
       cmd('Fit Columns to Contents', 'table-fit', 'Each column as wide as its widest cell (structures at their own size)');
-      for (const [v, label] of [['grid', 'Grid Lines'], ['acs', 'ACS Rules'], ['none', 'No Lines']] as const) cmd(`${tg.t.lines === v ? '✓ ' : '   '}${label}`, `table-lines-${v}`);
+      for (const [v, label] of [['grid', 'Grid Lines'], ['acs', 'ACS Rules'], ['none', 'No Lines']] as const) cmd(`${!tg.t.style && tg.t.lines === v ? '✓ ' : '   '}${label}`, `table-lines-${v}`);
+      if (this.rangeNow() && canMergeBlock(tg.t, this.rangeNow()!)) cmd('Merge Cells', 'table-merge-cells', 'Join the cells chosen into one');
+      item('Table Styles…', () => this.tables.styleGallery(clientX, clientY), 'Lines, shading and bold headings as one look (Word\'s table styles)');
+      item('Borders…', () => this.tables.bordersMenu(clientX, clientY), 'Lines on the edges of the cells chosen');
+      cmd('Cell Margins…', 'table-margins', 'Room between the cells\' edges and their text');
+      cmd('Split Table', 'table-split-table', 'A new table from this row down');
+      cmd('Convert to Text…', 'table-to-text', 'The table\'s rows back into paragraphs');
       cmd('Select Table', 'table-select', 'Pick the whole table (to copy, cut or delete it)');
       menu.appendChild(document.createElement('hr'));
+    }
+    if (!tg && this.file && !this.file.box) {
+      const [pa, pb] = this.file.ed.selectedParas();
+      if (pb > pa) { cmd('Convert Text to Table…', 'text-to-table', 'The paragraphs chosen as a table, cut into cells at tabs or commas'); menu.appendChild(document.createElement('hr')); }
     }
     cmd('Paragraph…', 'box-para', 'Indents, spacing and line spacing');
     cmd('Style…', 'box-style', 'Change how this paragraph\'s style looks');
@@ -862,10 +1520,10 @@ export class DocumentMode {
     ta.addEventListener('compositionupdate', (e) => this.ed.compositionUpdate(e.data ?? ''));
     ta.addEventListener('compositionend', (e) => { this.ed.compositionEnd(e.data ?? ''); this.syncInput(); });
     ta.addEventListener('copy', (e) => this.copy(e, false));
-    ta.addEventListener('cut', (e) => this.copy(e, true));
-    ta.addEventListener('paste', (e) => { void this.paste(e); });
-    ta.addEventListener('focus', () => this.view.redraw());
-    ta.addEventListener('blur', () => this.view.redraw());
+    ta.addEventListener('cut', (e) => { if (this.reading) { this.copy(e, false); return; } this.copy(e, true); });
+    ta.addEventListener('paste', (e) => { if (this.reading) { e.preventDefault(); return; } void this.paste(e); });
+    ta.addEventListener('focus', () => this.redraw());
+    ta.addEventListener('blur', () => this.redraw());
   }
 
   /** Keep the selected text in the hidden field, selected, for the system's copy, screen readers and input methods. */
@@ -883,6 +1541,10 @@ export class DocumentMode {
     if (e.isComposing || e.keyCode === 229) return;
     if (this.menu && e.key === 'Escape') { e.preventDefault(); this.closeMenu(); return; }
     this.closeMenu();
+    if (e.key === 'Escape' && this.tables.painting) { e.preventDefault(); this.tables.setPainting(false); return; }
+    if (e.key === 'Escape' && this.cellRange) { e.preventDefault(); this.cellRange = null; this.redraw(); return; }
+    if (this.cellRange && !['Shift', 'Control', 'Alt', 'Meta'].includes(e.key) && !(e.ctrlKey || e.metaKey)) { this.cellRange = null; this.redraw(); }
+    if (this.reading) { this.readingKey(e); return; }
     const ed = this.ed;
     const run = (f: () => void) => { e.preventDefault(); f(); };
     const chord = chordOf(e);
@@ -894,6 +1556,7 @@ export class DocumentMode {
         if (this.run(cmd) || this.host.command(cmd)) { e.preventDefault(); return; }
       }
       const action = keymap.lookup('text', chord);
+      if (action && parseAction(action).arg === 'link') return run(() => void this.editLink());
       if (action) return run(() => ed.toggle(parseAction(action).arg as rt.Toggle));
     }
     const shift = e.shiftKey;
@@ -912,12 +1575,18 @@ export class DocumentMode {
       });
     }
     if (e.key === 'PageDown' || e.key === 'PageUp') return run(() => this.pageMove(e.key === 'PageDown' ? 1 : -1, shift));
+    // a document protected for filling in forms: Tab goes from field to field, Space or Enter fills one in
+    if (this.file?.t.protect?.edit === 'forms' && !ctrl && !e.altKey) {
+      if (e.key === 'Tab' && this.indexes.nextField(shift)) return run(() => {});
+      const form = this.indexes.pickedForm();
+      if (form !== null && (e.key === ' ' || e.key === 'Enter' || e.key === 'F2')) return run(() => void this.indexes.fill(form));
+    }
     if (!ctrl && !e.altKey) {
       switch (e.key) {
         case 'Enter': return run(() => this.enter(shift));
         case 'Backspace': return run(() => ed.backspace(word));
         case 'Delete': return run(() => ed.deleteForward(word));
-        case 'Tab': return run(() => (this.file?.box?.cell ? this.tabCell(shift) : ed.indent(shift ? -1 : 1)));
+        case 'Tab': return run(() => (this.file?.box?.cell ? this.tabCell(shift) : this.tabKey(shift)));
         case 'Escape': return run(() => { if (this.file?.box) this.stopBox(true); else if (!ed.collapsed) ed.setCaret(ed.focus); });
       }
     }
@@ -939,6 +1608,7 @@ export class DocumentMode {
 
   private beforeInput(e: InputEvent): void {
     if (!this.file || e.isComposing) return;
+    if (this.reading) { e.preventDefault(); return; }
     const t = e.inputType;
     const ed = this.ed;
     if (t === 'insertCompositionText') return;
@@ -1026,13 +1696,19 @@ export class DocumentMode {
         return;
       }
     }
+    // (anything else copied here: the last drawing copied isn't what a paste elsewhere should find)
+    this.host.copiedOther?.();
+    this.clipPicture = null;
     const sel = ed.selected();
     const shown = fieldTexts(f.t);
+    // a table on its own goes as cells (tab-separated and an HTML table), for a sheet, a slide, Excel and Word
+    const lone = sel.runs.length === 1 && sel.runs[0].obj !== undefined ? f.t.objects[sel.runs[0].obj] : undefined;
+    const table = lone?.kind === 'table' ? { ...lone.table, rows: lone.table.rows.map((row) => row.map((c) => ({ ...c, runs: c.runs.filter((r) => r.obj === undefined) }))) } : null;
     // fields show their text in other programs; figures are left out of plain text
     const plainRuns = sel.runs.map((r) => (r.obj !== undefined ? { ...r, obj: undefined, text: shown.get(r.obj) ?? '' } : r));
-    const plain = richToPlain({ runs: plainRuns, paras: sel.paras });
+    const plain = table ? tableTsv(table) : richToPlain({ runs: plainRuns, paras: sel.paras });
     e.clipboardData.setData('text/plain', plain);
-    e.clipboardData.setData('text/html', richToHtml({ runs: plainRuns, paras: sel.paras }, { defaultSize: 11 }));
+    e.clipboardData.setData('text/html', table ? tableHtml(table) : richToHtml({ runs: plainRuns, paras: sel.paras }, { defaultSize: 11 }));
     const objects: Record<number, DocObject> = {};
     // with the structures in any table's cells
     const add = (id: number) => {
@@ -1049,6 +1725,12 @@ export class DocumentMode {
     const runs = sel.runs.map((r) => { if (!r.cmt) return r; const { cmt: _, ...rest } = r; return rest; });
     this.clip = { text: plain, runs, paras: sel.paras, objects, references };
     try { e.clipboardData.setData('application/x-' + OWN_KIND, JSON.stringify({ runs, paras: sel.paras, objects, references })); } catch { /* not every browser allows own types */ }
+    // a picture on its own also goes as a PNG, for other programs and the other modes (which takes
+    // the clipboard over: pasted back here, it is known by its size and comes back as copied)
+    if (lone?.kind === 'picture' && this.host.copyPicture) {
+      const px = lone.px ?? null;
+      void this.host.copyPicture(lone.src).then((m) => { this.clipPicture = px; this.host.flash(m); }, (err) => this.host.flash('Could not copy the picture: ' + String(err)));
+    }
     if (cut) ed.replaceSelection([], undefined, 'cut');
   }
 
@@ -1079,9 +1761,29 @@ export class DocumentMode {
     if (own && !plain) { this.pasteOwn(own); return; }
     const got = await this.host.readPaste(e);
     const ed = f.textEd;
-    if (got.drawing) { this.insertObject({ kind: 'drawing', contents: got.drawing }, 'Paste structure'); return; }
-    if (got.picture && !got.text && !got.html && !html) { this.dropPicture(got.picture.bytes, got.picture.mime); return; }
+    // the picture copied here last (copied as a PNG): the copy, with its crop, look and chart
+    const cp = this.clipPicture, gp = got.picture;
+    const gs = gp && cp && !plain && this.clip ? imageSize(gp.bytes, gp.mime) : null;
+    if (gs && gs.w === cp!.w && gs.h === cp!.h) { this.pasteOwn(this.clip!); this.caretAfterPaste(); return; }
+    if (got.drawing) {
+      // a pasted figure leaves the caret after it (as pasted text does), so typing doesn't replace it
+      this.insertObject({ kind: 'drawing', contents: got.drawing }, 'Paste structure');
+      this.caretAfterPaste();
+      return;
+    }
+    if (got.picture && !got.text && !got.html && !html) { this.dropPicture(got.picture.bytes, got.picture.mime); this.caretAfterPaste(); return; }
     const h = plain ? '' : html || got.html || '';
+    // cells (from a sheet, a slide's table, Excel or Word) become a table in the text
+    const cells = plain || f.box ? null : h ? (onlyTable(h) ? pastedTable(h, null) : null) : tsvTable(text0 || got.text || '');
+    if (cells) {
+      const N = styleOf(f.t, {});
+      const t0 = tableFromCells(cells, this.host.measure, N.size, { head: 0 });
+      // as wide as its text needs, up to the width of the text
+      const room = f.layout().textW, wide = t0.cols.reduce((a, b) => a + b, 0);
+      const k = wide > room ? room / wide : 1;
+      this.insertTableObject({ ...t0, cols: t0.cols.map((w) => Math.floor(w * k * 100) / 100), lines: 'grid', head: 0, align: Array(t0.cols.length).fill('left') }, 'Paste table', false);
+      return;
+    }
     const rich = h ? htmlToRich(h) : null;
     if (rich) {
       // pasted text takes the font and size of the text it goes into, unless it brings its own
@@ -1094,6 +1796,14 @@ export class DocumentMode {
     }
     const text = text0 || got.text || '';
     if (text) ed.pastePlain(text);
+  }
+
+  /** After a pasted figure (insertObject picks it): the caret goes after it, in the cell or the text. */
+  private caretAfterPaste(): void {
+    const f = this.file;
+    if (!f) return;
+    const ed = f.box?.cell ? f.box.ed : f.ed;
+    ed.setCaret(ed.end, false);
   }
 
   /** Paste text copied in a document here, with new ids for its figures and fields. */
@@ -1116,8 +1826,8 @@ export class DocumentMode {
       if (o.kind === 'table') objects[id] = { ...o, table: { ...o.table, rows: o.table.rows.map((row) => row.map((cell) => ({ ...cell, runs: remap(cell.runs) }))) } };
     }
     const b = f.box?.cell ? f.box : null;
-    // into a table cell: no tables, text boxes or bibliographies inside it
-    const runs = remap(own.runs).filter((r) => !b || r.obj === undefined || !['table', 'textbox', 'bib', 'toc'].includes(objects[r.obj]?.kind));
+    // into a table cell: no text boxes, bibliographies or notes inside it (a table goes in as a table in the cell)
+    const runs = remap(own.runs).filter((r) => !b || r.obj === undefined || !['textbox', 'bib', 'toc', 'tof', 'index', 'toa', 'note'].includes(objects[r.obj]?.kind));
     // references cited by pasted citations join the list (unless it has them)
     const have = new Set((f.t.references ?? []).map((r) => r.id));
     const adding = (own.references ?? []).filter((r) => !have.has(r.id));
@@ -1132,25 +1842,510 @@ export class DocumentMode {
     ed.replace(ed.start, ed.end, runs, own.paras.length > 1 ? own.paras : undefined, null);
   }
 
+  // ---------------------------------------------------------------- views (View > Views, Split, Read Mode)
+
+  private setupView(v: DocView): void {
+    v.overlay = () => this.overlay(v);
+    v.onMove = () => {
+      if (v === this.view) this.placeInput();
+      this.showZoom();
+      if (v === this.views[0]) { this.comments?.place(); this.ruler?.update(); }
+      if (this.reading) this.showReadPages();
+    };
+    v.onResize = () => { if (v === this.views[0]) this.fitSheet(); };
+    this.views.push(v);
+  }
+
+  /** Work in this pane (the other one of a split keeps its place). */
+  private activate(v: DocView): void {
+    if (this.view === v) return;
+    this.view = v;
+    // the hidden text field goes with the caret
+    const focused = document.activeElement === this.ta;
+    v.host.append(this.ta);
+    if (focused) this.focus();
+    this.placeInput();
+    this.showZoom();
+    this.redraw();
+  }
+
+  /** Draw every pane again. */
+  redraw(): void {
+    for (const v of this.views) v.redraw();
+  }
+
+  private sizeSpaces(): void {
+    for (const v of this.views) v.sizeSpace();
+  }
+
+  /** Web Layout and Outline wrap the text to the window: keep the width they wrap to the window's. */
+  private fitSheet(): void {
+    const f = this.file;
+    if (!f) return;
+    const v = f.view;
+    if (v.kind !== 'web' && v.kind !== 'outline') return;
+    const w = this.views[0].sheetWidth();
+    if (Math.abs((v.width ?? 0) - w) < 1) return;
+    f.view = { ...v, width: w };
+  }
+
+  /** View > Views: show the document another way (the text is the same in every view). */
+  private setViewKind(kind: DocViewKind): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    const was = f.view;
+    if (was.kind === 'read' && kind !== 'read') this.stopReading();
+    if (was.kind === kind) {
+      // Read Mode's button again: back to Print Layout
+      if (kind === 'read') this.setViewKind('print');
+      return;
+    }
+    f.view = { kind, outline: was.outline ?? (kind === 'outline' ? newOutline() : undefined) };
+    this.fitSheet();
+    if (kind === 'read') this.startReading();
+    else {
+      for (const v of this.views) {
+        // the views without pages start at a size to read (Multiple Pages may have left the zoom small)
+        if (continuous(kind) && v.zoom < ACTUAL * 0.75) v.setZoom(ACTUAL);
+        v.sizeSpace();
+        v.redraw();
+      }
+      if (continuous(kind)) this.view.scroller.scrollLeft = 0;
+    }
+    this.lastFocus = f.ed.focus;
+    this.showViewKind();
+    this.changed('selection');
+  }
+
+  /** The view buttons and menu items show the view and the page arrangement; the Outlining tab shows in Outline. */
+  private showViewKind(): void {
+    this.showRuler();
+    const f = this.file;
+    if (!f) return;
+    const kind = f.view.kind;
+    const set = (cmd: string, on: boolean) => {
+      for (const b of document.querySelectorAll<HTMLElement>(`[data-doc="${cmd}"]`)) if (b.hasAttribute('aria-pressed')) b.setAttribute('aria-pressed', String(on));
+      for (const b of document.querySelectorAll<HTMLElement>(`[data-cmd="${cmd}"]`)) b.setAttribute('aria-checked', String(on));
+    };
+    for (const [cmd, k] of Object.entries(VIEW_COMMANDS)) set(cmd, k === kind);
+    const pages = !continuous(kind) && kind !== 'read';
+    set('view-vertical', pages && !this.view.sideways);
+    set('view-sideways', pages && this.view.sideways);
+    set('view-multiple', pages && this.view.perRow > 1);
+    set('view-split', !!this.split);
+    const tab = this.ribbon.querySelector<HTMLButtonElement>('[data-doc-tab="outlining"]');
+    if (tab) {
+      tab.hidden = kind !== 'outline';
+      if (kind === 'outline' && this.outlineTabFor !== f) { this.outlineTabFor = f; tab.click(); }
+      if (kind !== 'outline') {
+        if (this.outlineTabFor && tab.getAttribute('aria-selected') === 'true') this.ribbon.querySelector<HTMLButtonElement>('[data-doc-tab="home"]')?.click();
+        this.outlineTabFor = null;
+      }
+    }
+    for (const x of this.views) x.host.classList.toggle('doc-endless', continuous(kind));
+    this.updateOutlineRibbon();
+  }
+
+  /** Vertical, Side to Side, Multiple Pages and One Page: how the pages are laid out (in Print Layout). */
+  private arrange(sideways: boolean, perRow: number, fit: boolean): void {
+    const f = this.file;
+    if (!f) return;
+    if (f.view.kind !== 'print') this.setViewKind('print');
+    const v = this.view;
+    const page = v.currentPage();
+    v.sideways = sideways;
+    v.perRow = sideways ? 1 : perRow;
+    v.sizeSpace();
+    if (fit) v.fitPages();
+    v.scrollToPage(sideways ? page - (page % 2) : page);
+    v.redraw();
+    this.showViewKind();
+    this.changed('selection');
+  }
+
+  /** View > Split: a second pane under the first, on the same document, scrolled on its own. */
+  private setSplit(on: boolean): void {
+    if (on === !!this.split) return;
+    const main = this.views[0];
+    if (on) {
+      const bar = document.createElement('div');
+      bar.className = 'doc-split-bar';
+      bar.title = 'Drag to move the split; double-click to remove it';
+      const host = document.createElement('div');
+      host.className = 'doc-host doc-host-2';
+      main.host.after(bar, host);
+      const v = new DocView(host);
+      v.file = this.file;
+      this.setupView(v);
+      this.wirePointer(v);
+      this.split = { view: v, host, bar };
+      bar.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        bar.setPointerCapture(e.pointerId);
+        const pane = bar.parentElement!.getBoundingClientRect();
+        const move = (ev: PointerEvent) => {
+          const below = Math.max(60, Math.min(pane.height - 100, pane.bottom - ev.clientY - 28));
+          host.style.flexBasis = `${below}px`;
+        };
+        const up = () => { bar.removeEventListener('pointermove', move); bar.removeEventListener('pointerup', up); this.focus(); };
+        bar.addEventListener('pointermove', move);
+        bar.addEventListener('pointerup', up);
+      });
+      bar.addEventListener('dblclick', () => this.setSplit(false));
+      main.resize();
+      v.resize();
+      v.zoom = main.zoom;
+      v.sizeSpace();
+      v.scroller.scrollTop = main.scroller.scrollTop;
+      v.scroller.scrollLeft = main.scroller.scrollLeft;
+      v.redraw();
+    } else {
+      const sp = this.split!;
+      if (this.view === sp.view) this.activate(main);
+      this.views = this.views.filter((x) => x !== sp.view);
+      sp.view.file = null;
+      sp.bar.remove();
+      sp.host.remove();
+      this.split = null;
+      main.resize();
+    }
+    this.showViewKind();
+  }
+
+  // Read Mode: the pages two at a time, filling the window with nothing else, turned with the keys or the wheel
+
+  private startReading(): void {
+    const f = this.file;
+    if (!f) return;
+    this.setSplit(false);
+    const v = this.views[0];
+    this.activate(v);
+    this.readWas ??= { zoom: v.zoom, perRow: v.perRow, sideways: v.sideways };
+    const page = v.currentPage();
+    this.reading = true;
+    document.body.classList.add('doc-reading');
+    document.querySelector<HTMLElement>('#doc-readbar')!.hidden = false;
+    v.scroller.classList.add('doc-turning');
+    v.sideways = true;
+    v.perRow = 1;
+    v.turnPages = (dir) => this.turn(dir);
+    v.resize();
+    v.fitPages();
+    this.readPage = page - (page % 2);
+    v.scrollToPage(this.readPage);
+    this.showReadPages();
+    this.focus();
+  }
+
+  private stopReading(): void {
+    if (!this.reading) return;
+    const v = this.views[0];
+    this.reading = false;
+    document.body.classList.remove('doc-reading');
+    document.querySelector<HTMLElement>('#doc-readbar')!.hidden = true;
+    v.scroller.classList.remove('doc-turning');
+    v.turnPages = null;
+    const w = this.readWas;
+    this.readWas = null;
+    const page = this.readPage;
+    if (w) {
+      v.perRow = w.perRow;
+      v.sideways = w.sideways;
+      v.resize();
+      v.setZoom(w.zoom);
+    }
+    v.scrollToPage(page);
+  }
+
+  /** Read Mode: the next two pages, or the two before (-1). */
+  private turn(dir: 1 | -1 | 'first' | 'last'): void {
+    const lay = this.file?.layout();
+    if (!lay) return;
+    const n = lay.pages.length;
+    const step = n > 1 ? 2 : 1;
+    let p = dir === 'first' ? 0 : dir === 'last' ? n - 1 : this.readPage + dir * step;
+    p = Math.max(0, Math.min(n - 1, p));
+    p -= p % step;
+    this.readPage = p;
+    this.views[0].scrollToPage(p);
+    this.showReadPages();
+  }
+
+  private showReadPages(): void {
+    const lay = this.file?.layout();
+    const el = document.querySelector<HTMLElement>('#doc-read-pages');
+    if (!lay || !el) return;
+    const n = lay.pages.length;
+    const a = this.readPage + 1, b = Math.min(n, this.readPage + 2);
+    el.textContent = n > 1 && b > a ? `Pages ${a}–${b} of ${n}` : `Page ${a} of ${n}`;
+  }
+
+  /** Read Mode's keys: the arrows, Page Up and Down, Space, Home and End turn the pages; Esc goes back to Print Layout. */
+  private readingKey(e: KeyboardEvent): void {
+    const ctrl = isMac ? e.metaKey : e.ctrlKey;
+    const k = e.key;
+    if (ctrl && (k.toLowerCase() === 'c' || k.toLowerCase() === 'a')) {
+      if (k.toLowerCase() === 'a') { e.preventDefault(); this.ed.selectAll(); }
+      return;
+    }
+    if (k === 'Escape') { e.preventDefault(); this.setViewKind('print'); return; }
+    if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(k)) { e.preventDefault(); this.turn(1); return; }
+    if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(k)) { e.preventDefault(); this.turn(-1); return; }
+    if (k === 'Home' || k === 'End') { e.preventDefault(); this.turn(k === 'Home' ? 'first' : 'last'); return; }
+    // the app's own keys (Save, Print…) still work; typing doesn't
+    if ((e.ctrlKey || e.metaKey || e.altKey || /^F\d+$/.test(k)) && this.host.key(e)) { e.preventDefault(); return; }
+    if (k.length === 1 || k === 'Enter' || k === 'Backspace' || k === 'Delete' || k === 'Tab') e.preventDefault();
+  }
+
+  // Outline: headings by level, folded and moved as blocks
+
+  private outline(): OutlineState {
+    return this.file?.view.outline ?? newOutline();
+  }
+
+  private setOutline(o: OutlineState): void {
+    const f = this.file;
+    if (!f) return;
+    f.view = { ...f.view, outline: o };
+    this.sizeSpaces();
+    this.changed('selection');
+  }
+
+  private levels(): number[] {
+    const t = this.file!.t;
+    return fitParas(t.paras, paraCount(rt.plainText(t.runs))).map((ps) => outlineLevel(t, ps));
+  }
+
+  /** A click on a heading's mark: the heading and everything under it picked; on body text, its paragraph. */
+  private pickOutline(p: number): void {
+    const f = this.file!;
+    const text = f.ed.text;
+    const last = Math.max(p, subtreeEnd(this.levels(), p) - 1);
+    f.ed.select(paraRange(text, p).start, paraRange(text, last).end);
+  }
+
+  /** A double-click on a heading's mark: fold it, or unfold it. */
+  private outlineFold(p: number): void {
+    const levels = this.levels();
+    if (!levels[p] || subtreeEnd(levels, p) <= p + 1) return;
+    const text = this.file!.ed.text;
+    this.file!.ed.setCaret(paraRange(text, p).end);
+    this.setOutline(toggleFold(this.outline(), p));
+  }
+
+  /** The Outlining tab's Level: the paragraphs picked become headings of a level, or body text (0). */
+  private setOutlineLevel(L: number): void {
+    const f = this.file;
+    if (!f) return;
+    const [a, b] = this.ed.selectedParas();
+    const id = L ? `Heading${L}` : 'Normal';
+    this.ed.update(setParaStyle(withHeadings(f.t), a, b, id), 'Outline level');
+  }
+
+  private outlineCommand(cmd: string): void {
+    const f = this.file;
+    if (!f) return;
+    this.stopBox();
+    const ed = f.ed;
+    const [a, b] = ed.selectedParas();
+    const o = this.outline();
+    const level = /^outline-level-(\d)$/.exec(cmd);
+    if (level) { this.setOutline({ ...o, level: Number(level[1]) }); return; }
+    switch (cmd) {
+      case 'outline-promote': case 'outline-demote': case 'outline-heading1': case 'outline-body': {
+        const op = cmd.slice('outline-'.length) as OutlineOp;
+        const names: Record<OutlineOp, string> = { promote: 'Promote', demote: 'Demote', heading1: 'Promote to Heading 1', body: 'Demote to Body Text' };
+        ed.update(changeLevel(f.t, o, a, b, op), names[op]);
+        break;
+      }
+      case 'outline-up': case 'outline-down': {
+        const r = moveParas(f.t, o, a, b, cmd === 'outline-up' ? -1 : 1);
+        if (!r) break;
+        const before = paraRange(ed.text, a).start;
+        const anchor = ed.anchor - before, focus = ed.focus - before;
+        const text = rt.plainText(r.t.runs);
+        const start = paraRange(text, r.first).start;
+        // the folded headings move with their paragraphs
+        f.view = { ...f.view, outline: { ...o, collapsed: o.collapsed.map(r.moved).sort((x, y) => x - y) } };
+        ed.update(r.t, cmd === 'outline-up' ? 'Move Up' : 'Move Down', start + anchor, start + focus);
+        break;
+      }
+      case 'outline-expand': case 'outline-collapse':
+        this.setOutline(foldHeadings(f.t, o, a, b, cmd === 'outline-collapse'));
+        break;
+      case 'outline-all': this.setOutline({ ...o, level: 0, collapsed: [] }); break;
+      case 'outline-first': this.setOutline({ ...o, firstLine: !o.firstLine }); break;
+      case 'outline-format': this.setOutline({ ...o, formatting: !o.formatting }); break;
+    }
+  }
+
+  private updateOutlineRibbon(): void {
+    const f = this.file;
+    if (!f || f.view.kind !== 'outline') return;
+    const o = this.outline();
+    const r = this.ribbon;
+    const level = r.querySelector<HTMLSelectElement>('#doc-outline-level');
+    const L = outlineLevel(f.t, f.ed.currentPara());
+    if (level && document.activeElement !== level) level.value = String(L);
+    const show = r.querySelector<HTMLSelectElement>('#doc-outline-show');
+    if (show && document.activeElement !== show) show.value = String(o.level);
+    const fmt = r.querySelector<HTMLInputElement>('#doc-outline-format');
+    if (fmt) fmt.checked = o.formatting;
+    const first = r.querySelector<HTMLInputElement>('#doc-outline-first');
+    if (first) first.checked = o.firstLine;
+  }
+
+  /**
+   * Outline: the caret never stays in text folded out of sight. It steps over it in the
+   * direction it was going (to the next paragraph shown, or the end of the one before).
+   * True when it moved.
+   */
+  private snapShown(): boolean {
+    const f = this.file;
+    if (!f || f.box || f.view.kind !== 'outline') return false;
+    const ed = f.ed;
+    if (ed.composing !== null) return false;
+    const lines = f.layout().text.lines;
+    const at = ed.focus;
+    if (!lines.length || lines.some((l) => at >= l.start && at <= l.end)) { this.lastFocus = at; return false; }
+    const fwd = at >= this.lastFocus;
+    let to: number;
+    if (fwd) { const l = lines.find((x) => x.start > at); to = l ? l.start : lines[lines.length - 1].end; }
+    else { const l = [...lines].reverse().find((x) => x.end < at); to = l ? l.end : lines[0].start; }
+    this.lastFocus = to;
+    ed.select(ed.collapsed ? to : ed.anchor, to);
+    return true;
+  }
+
+  /** Outline: folded headings stay on their paragraphs when paragraphs are added or taken away before them. */
+  private keepFolds(): void {
+    const f = this.file;
+    if (!f) return;
+    const n = paraCount(f.ed.text);
+    const d = n - this.paraCountWas;
+    this.paraCountWas = n;
+    const o = f.view.outline;
+    if (!d || !o?.collapsed.length) return;
+    const at = paraAt(f.ed.text, f.ed.start) - Math.max(d, 0);
+    f.view = { ...f.view, outline: shiftFolds(o, at, d) };
+  }
+
+  // ---------------------------------------------------------------- links and bookmarks
+
+  /** The link under a point of the page: in the text box or cell being typed into, else in the body. */
+  private linkAtPoint(p: { x: number; y: number }): string | null {
+    const f = this.file;
+    if (!f) return null;
+    if (f.box) {
+      const s = linkAtPoint(f.box.ed.layout(), f.box.ed.t.runs, p.x, p.y);
+      if (s) return s.link;
+    }
+    return linkAtPoint(f.layout().text, f.t.runs, p.x, p.y)?.link ?? null;
+  }
+
+  /** Insert > Link (Ctrl+K): link the selection, change the link the caret is in, or type a new one. */
+  private async editLink(): Promise<void> {
+    const f = this.file;
+    if (!f || this.reading) return;
+    const ed = this.ed;
+    const here = ed.linkHere();
+    const range = here && ed.collapsed ? here : { start: ed.start, end: ed.end };
+    const shown = ed.text.slice(range.start, range.end);
+    const got = await askLink({
+      text: /[\n\uFFFC]/.test(shown) ? null : shown, link: here?.link,
+      places: docPlaces(f.t), placeTitle: 'Place in this document',
+    });
+    this.focus();
+    if (!got || this.file !== f) return;
+    if ('remove' in got) { ed.removeLink(); return; }
+    let link = got.link;
+    // a heading gets a hidden bookmark for the link to find it by
+    if (link.startsWith('#heading:')) {
+      const placed = placeLink(f.t, link);
+      link = placed.link;
+      f.ed.update({ ...f.t, paras: placed.t.paras }, 'Bookmark');
+    }
+    ed.setLink(link, got.text);
+  }
+
+  /** Go to a place in the document a link points to (#name); false when there is no such bookmark. */
+  goToPlace(link: string): boolean {
+    const f = this.file;
+    if (!f || !link.startsWith('#')) return false;
+    const para = bookmarkPara(f.t, link.slice(1));
+    if (para < 0) return false;
+    if (f.box) this.stopBox();
+    const at = paraRange(f.ed.text, para).start;
+    f.ed.setCaret(at);
+    this.revealCaret();
+    this.focus();
+    return true;
+  }
+
+  /** A place's name for a link's tooltip. */
+  placeName(link: string): string | null {
+    return this.file ? placeName(this.file.t, link) : null;
+  }
+
+  /** Insert > Bookmark: name the paragraph the caret is in, or go to or delete a bookmark. */
+  private async bookmarkDialog(): Promise<void> {
+    const f = this.file;
+    if (!f || this.reading) return;
+    if (f.box) { this.host.flash('Bookmarks go in the body of the document: click outside the text box or table first.'); return; }
+    const marks = bookmarksOf(f.t).filter((b) => !b.name.startsWith('_'));
+    const para = paraAt(f.ed.text, f.ed.start);
+    const here = marks.find((b) => b.para === para);
+    const got = await ask('Bookmark', [
+      { name: 'name', label: 'Bookmark name', value: here?.name ?? '', placeholder: 'Results', suggestions: marks.map((b) => b.name),
+        help: 'Names the paragraph the caret is in, so a link (Insert > Link > Place in this document) can go to it. Type a name already used to go to it or delete it.' },
+      { name: 'what', label: 'Then', value: 'add', options: [{ value: 'add', label: 'Add the bookmark here' }, { value: 'go', label: 'Go to the bookmark' }, { value: 'delete', label: 'Delete the bookmark' }] },
+    ], { ok: 'OK' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const name = bookmarkName(got.name);
+    if (!got.name.trim()) return;
+    if (got.what === 'go') { if (!this.goToPlace(`#${name}`)) this.host.flash(`There is no bookmark called ${name}.`); return; }
+    if (got.what === 'delete') {
+      if (bookmarkPara(f.t, name) < 0) { this.host.flash(`There is no bookmark called ${name}.`); return; }
+      f.ed.update(removeBookmark(f.t, name), 'Delete Bookmark');
+      this.host.flash(`Bookmark ${name} deleted (links to it no longer go anywhere).`);
+      return;
+    }
+    f.ed.update(addBookmark(f.t, para, name), 'Bookmark');
+    this.host.flash(name === got.name.trim() ? `Bookmark ${name} added.` : `Bookmark ${name} added (a bookmark's name is letters, digits and underscores).`);
+  }
+
   // ---------------------------------------------------------------- the mouse
 
-  private wirePointer(): void {
-    const s = this.view.scroller;
-    s.addEventListener('pointerdown', (e) => this.pointerDown(e));
-    s.addEventListener('pointermove', (e) => this.pointerMove(e));
+  private wirePointer(v: DocView): void {
+    const s = v.scroller;
+    s.addEventListener('pointerdown', (e) => { if (e.button === 0) this.activate(v); this.pointerDown(e); });
+    s.addEventListener('pointermove', (e) => {
+      // the mouse over the other pane: its own cursor (the pane being worked in stays the same)
+      if (this.dragging || v === this.view) { this.pointerMove(e); return; }
+      const was = this.view;
+      this.view = v;
+      try { this.pointerMove(e); } finally { this.view = was; }
+    });
     s.addEventListener('pointerup', (e) => {
       const d = this.dragging;
       this.dragging = null;
       try { s.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
       if (d?.kind === 'move' && d.moved) this.reanchor(d.id);
       if (d?.kind === 'inline') this.dropInline(d.id, d.to);
+      if ((d?.kind === 'text' || d?.kind === 'box') && this.painter && this.file && !this.reading) this.painter(this.ed);
     });
     s.addEventListener('dblclick', (e) => {
       const f = this.file;
-      if (!f) return;
+      if (!f || this.reading) return;
+      this.activate(v);
       const id = this.objectAt(e.clientX, e.clientY);
       if (id !== null && f.t.objects[id]?.kind === 'bib') { e.preventDefault(); void this.manageReferences(); return; }
       if (id !== null && f.t.objects[id]?.kind === 'toc') { e.preventDefault(); void this.tocOptions(id); return; }
+      if (id !== null && f.t.objects[id]?.kind === 'tof') { e.preventDefault(); void this.tofOptions(id); return; }
+      if (id !== null && f.t.objects[id]?.kind === 'index') { e.preventDefault(); void this.indexes.indexOptions(id); return; }
+      if (id !== null && f.t.objects[id]?.kind === 'toa') { e.preventDefault(); void this.indexes.toaOptions(id); return; }
       if (id !== null && f.t.objects[id]?.kind === 'math') { e.preventDefault(); void this.editEquation(id); return; }
       if (f.box?.cell && id !== null && id !== f.box.id && f.t.objects[id]?.kind === 'drawing') { e.preventDefault(); this.editFigure(id); return; }
       if (f.box) { e.preventDefault(); return; }
@@ -1161,21 +2356,38 @@ export class DocumentMode {
       const o = offsetAt(f.layout().text, p.x, p.y);
       for (const at of [o, o - 1]) {
         const obj = at >= 0 ? rt.sliceRuns(f.t.runs, at, at + 1)[0]?.obj : undefined;
+        if (obj !== undefined && f.t.objects[obj]?.kind === 'form') {
+          e.preventDefault();
+          f.ed.select(at, at + 1);
+          void this.indexes.formOptions(obj);
+          return;
+        }
         if (obj !== undefined && f.t.objects[obj]?.kind === 'cite') {
           e.preventDefault();
           f.ed.select(at, at + 1);
           void this.insertCitation();
           return;
         }
+        // a footnote's number: to its text, as in Word
+        if (obj !== undefined && f.t.objects[obj]?.kind === 'note') {
+          e.preventDefault();
+          this.startBox(obj);
+          return;
+        }
       }
     });
     s.addEventListener('contextmenu', (e) => {
       if (!this.file) return;
+      this.activate(v);
+      if (this.reading) return;
       const p = this.view.toDoc(e.clientX, e.clientY);
       // in a table: into the cell clicked (unless a structure in the cell typed into is picked)
       const cell = this.cellAt(p);
       const b = this.file.box;
       if (cell && !(b?.cell && b.id === cell.id && b.cell.r === cell.r && b.cell.c === cell.c)) this.startCell(cell.id, cell.r, cell.c, p);
+      // in a footnote: typing there, so the menu is about it
+      const hit = this.objectAt(e.clientX, e.clientY);
+      if (hit !== null && hit !== b?.id && this.file.t.objects[hit]?.kind === 'note') this.startBox(hit, p);
       const o = offsetAt(this.file.layout().text, p.x, p.y);
       if (this.contextMenu(o, e.clientX, e.clientY)) e.preventDefault();
     });
@@ -1198,7 +2410,7 @@ export class DocumentMode {
   /** Near the edge of a placed object (where a text box is picked or moved rather than typed into). */
   private nearEdge(id: number, p: { x: number; y: number }): boolean {
     const o = this.file?.layout().objects.find((x) => x.id === id);
-    if (!o) return false;
+    if (!o || this.file?.t.objects[id]?.kind === 'note') return false;
     const m = 5 / this.view.zoom;
     return p.x - o.x < m || o.x + o.w - p.x < m || p.y - o.y < m || o.y + o.h - p.y < m;
   }
@@ -1214,9 +2426,45 @@ export class DocumentMode {
     this.closeMenu();
     this.focus();
     const p = this.view.toDoc(e.clientX, e.clientY);
+    // a link: Ctrl+click follows it, as in Word (a plain click in Read Mode)
+    if (((isMac ? e.metaKey : e.ctrlKey) || this.reading) && !e.shiftKey && !e.altKey) {
+      const link = this.linkAtPoint(p);
+      if (link) { void followLink(link); return; }
+    }
     const now0 = performance.now();
     const c0 = this.clicks;
     const n = now0 - c0.time < 450 && Math.hypot(e.clientX - c0.at.x, e.clientY - c0.at.y) < 4 ? c0.n + 1 : 1;
+    // Outline: a heading's mark picks it with everything under it; a double-click folds or unfolds it
+    const mark = this.view.markAt(e.clientX, e.clientY);
+    if (mark !== null) {
+      Object.assign(c0, { n, time: now0, at: { x: e.clientX, y: e.clientY } });
+      this.stopBox();
+      if (n === 2) this.outlineFold(mark);
+      else this.pickOutline(mark);
+      return;
+    }
+    // Read Mode: text can be picked (to copy) but nothing is moved or typed into
+    if (this.reading) {
+      Object.assign(c0, { n, time: now0, at: { x: e.clientX, y: e.clientY } });
+      const o = offsetAt(f.layout().text, p.x, p.y);
+      if (n === 2) f.ed.selectWord(o);
+      else if (n >= 3) f.ed.selectParagraph(o);
+      else f.ed.setCaret(o, e.shiftKey);
+      this.dragging = { kind: 'text' };
+      s.setPointerCapture(e.pointerId);
+      return;
+    }
+    // a document protected for filling in forms: a click on a form field fills it in
+    if (f.t.protect?.edit === 'forms' && !f.box && !e.shiftKey) {
+      const o = offsetAt(f.layout().text, p.x, p.y);
+      for (const at of [o, o - 1]) {
+        const obj = at >= 0 ? rt.sliceRuns(f.t.runs, at, at + 1)[0]?.obj : undefined;
+        if (obj === undefined || f.t.objects[obj]?.kind !== 'form') continue;
+        f.ed.select(at, at + 1);
+        void this.indexes.fill(obj);
+        return;
+      }
+    }
     // the picked figure's corner handle resizes it (one in a table cell too)
     const picked = this.pickedObject();
     if (picked !== null) {
@@ -1245,6 +2493,16 @@ export class DocumentMode {
       s.setPointerCapture(e.pointerId);
     };
     const cell = e.shiftKey ? null : this.cellAt(p);
+    this.cellRange = null;
+    this.cellAnchor = cell;
+    // Border Painter: a click on a cell's edge gives it the pen's line
+    if (this.tables.painting && cell) {
+      const d = { kind: 'paint' as const, done: new Set<string>() };
+      this.paintAt(p, d.done);
+      this.dragging = d;
+      s.setPointerCapture(e.pointerId);
+      return;
+    }
     if (f.box) {
       const id = f.box.id;
       if (f.box.cell && cell?.id === id) {
@@ -1266,13 +2524,14 @@ export class DocumentMode {
     if (id !== null && !e.shiftKey) {
       const obj = f.t.objects[id];
       // a click inside a text box types into it; its edge picks it, to move it or change its look
-      if (obj?.kind === 'textbox' && !this.nearEdge(id, p)) { this.startBox(id, p); this.dragging = { kind: 'box' }; s.setPointerCapture(e.pointerId); return; }
+      if ((obj?.kind === 'textbox' || obj?.kind === 'note') && !this.nearEdge(id, p)) { this.startBox(id, p); this.dragging = { kind: 'box' }; s.setPointerCapture(e.pointerId); return; }
       const at = objectOffsets(f.t.runs).get(id);
       if (at !== undefined) {
         ed.select(at, at + 1);
         // a floating figure is moved by dragging it
         const fl = floatOf(obj);
-        if (fl) { this.dragging = { kind: 'move', id, from: p, float: fl, moved: false }; s.setPointerCapture(e.pointerId); }
+        // (a group moves together)
+        if (fl) { this.dragging = { kind: 'move', id, from: p, float: fl, moved: false, others: groupOf(f.t, id).filter((x) => x !== id).map((x) => [x, floatOf(f.t.objects[x])!]) }; s.setPointerCapture(e.pointerId); }
         // one in line with the text is dragged to another place in the text, as in Word
         else if (obj?.kind !== 'table' && !f.box) { this.dragging = { kind: 'inline', id, from: p, to: null }; s.setPointerCapture(e.pointerId); }
         return;
@@ -1305,8 +2564,14 @@ export class DocumentMode {
       const hs = 8 / this.view.zoom;
       const corner = !!box && Math.abs(p.x - (box.x + box.w)) <= hs && Math.abs(p.y - (box.y + box.h)) <= hs;
       // a structure: a hand, since a double-click opens it for drawing (and a click picks it)
+      const link = id === null || o?.kind === 'table' || o?.kind === 'textbox' ? this.linkAtPoint(p) : null;
+      const tip = link ? linkTip(link, !this.reading) : '';
+      if (this.view.scroller.title !== tip) this.view.scroller.title = tip;
+      if (link && (this.reading || (isMac ? e.metaKey : e.ctrlKey))) { this.view.scroller.style.cursor = 'pointer'; return; }
+      if (this.tables.painting && this.cellAt(p)) { this.view.scroller.style.cursor = 'crosshair'; return; }
+      if (this.painter && !this.reading) { this.view.scroller.style.cursor = BRUSH; return; }
       this.view.scroller.style.cursor = corner ? 'nwse-resize' : id === null || o?.kind === 'table' ? 'text'
-        : o?.kind === 'textbox' ? (this.nearEdge(id, p) ? 'move' : 'text')
+        : o?.kind === 'textbox' ? (this.nearEdge(id, p) ? 'move' : 'text') : o?.kind === 'note' ? 'text'
         : floatOf(o) ? 'move' : o?.kind === 'drawing' ? 'pointer' : 'default';
       return;
     }
@@ -1321,7 +2586,11 @@ export class DocumentMode {
     if (d.kind === 'move') {
       const dx = p.x - d.from.x, dy = p.y - d.from.y;
       if (!d.moved && Math.hypot(dx, dy) * this.view.zoom < 3) return;
-      this.setFloat(d.id, { ...d.float, x: d.float.x + dx, y: d.float.y + dy }, d.moved ? null : 'Move');
+      if (d.others.length) {
+        const f2 = this.file!;
+        const moved = withFloats(f2.t, [[d.id, { x: d.float.x + dx, y: d.float.y + dy }], ...d.others.map(([x, fl]): [number, Partial<Float>] => [x, { x: fl.x + dx, y: fl.y + dy }])]);
+        f2.ed.update(moved, d.moved ? null : 'Move');
+      } else this.setFloat(d.id, { ...d.float, x: d.float.x + dx, y: d.float.y + dy }, d.moved ? null : 'Move');
       d.moved = true;
       return;
     }
@@ -1333,8 +2602,21 @@ export class DocumentMode {
       this.view.scroller.style.cursor = 'move';
       return;
     }
+    if (d.kind === 'paint') { this.paintAt(p, d.done); return; }
     if (d.kind === 'box') {
       if (this.clicks.n !== 1 || !f.box) return;
+      // dragged out of the cell into others of its table: those cells are chosen together
+      const a = this.cellAnchor;
+      const here = a && f.box.cell ? this.cellAt(p) : null;
+      const o = a ? f.t.objects[a.id] : undefined;
+      if (a && here && here.id === a.id && (here.r !== a.r || here.c !== a.c) && o?.kind === 'table') {
+        const b = blockOf(o.table, a, here);
+        const was = this.cellRange;
+        this.cellRange = { id: a.id, ...b };
+        if (!was || was.r0 !== b.r0 || was.r1 !== b.r1 || was.c0 !== b.c0 || was.c1 !== b.c1) { this.updateRibbon(); this.redraw(); }
+        return;
+      }
+      if (this.cellRange && here && a && here.r === a.r && here.c === a.c) { this.cellRange = null; this.redraw(); }
       f.box.ed.setCaret(offsetAt(f.box.ed.layout(), p.x, p.y), true);
       return;
     }
@@ -1344,6 +2626,30 @@ export class DocumentMode {
     if (e.clientY < r.top + 10) this.view.scroller.scrollTop -= 20;
     else if (e.clientY > r.bottom - 10) this.view.scroller.scrollTop += 20;
     f.ed.setCaret(offsetAt(f.layout().text, p.x, p.y), true);
+  }
+
+  /** Border Painter: the edge of the cell under a point nearest it gets the pen's line (each edge once a drag). */
+  private paintAt(p: { x: number; y: number }, done: Set<string>): void {
+    const f = this.file;
+    const cell = this.cellAt(p);
+    if (!f || !cell) return;
+    const o = f.t.objects[cell.id];
+    const tb = f.layout().tables.get(cell.id);
+    if (o?.kind !== 'table' || !tb) return;
+    const t = o.table;
+    const at = tb.rows[cell.r];
+    if (!at) return;
+    const x1 = at.x + tb.xs[cell.c], x2 = at.x + tb.xs[cell.c + spanOf(t, cell.r, cell.c)];
+    const y1 = at.y;
+    let y2 = at.y;
+    for (let r = cell.r; r < cell.r + rowSpanOf(t, cell.r, cell.c); r++) y2 += tb.hs[r] ?? 0;
+    const sides: [BorderSide, number][] = [['top', p.y - y1], ['bottom', y2 - p.y], ['left', p.x - x1], ['right', x2 - p.x]];
+    sides.sort((a, b) => a[1] - b[1]);
+    const side = sides[0][0];
+    const key = `${cell.id}:${cell.r}:${cell.c}:${side}`;
+    if (done.has(key)) return;
+    done.add(key);
+    this.setTable(cell.id, paintEdge(t, cell.r, cell.c, side, this.tables.pen), 'Border Painter');
   }
 
   /** An in-line figure dragged to another place in the text: move it there (one undo step) and keep it picked. */
@@ -1367,7 +2673,7 @@ export class DocumentMode {
   insertObject(o: DocObject, kind = 'Insert', look: Partial<rt.RunStyle> = {}): number {
     const f = this.file!;
     const b = f.box?.cell ? f.box : null;
-    if (b && (o.kind === 'table' || o.kind === 'textbox' || o.kind === 'bib' || o.kind === 'toc')) this.stopBox();
+    if (b && (o.kind === 'table' || o.kind === 'textbox' || o.kind === 'bib' || o.kind === 'toc' || o.kind === 'tof' || o.kind === 'index' || o.kind === 'toa')) this.stopBox();
     else if (b) {
       // into the table cell typed into: the object joins the document, its character the cell's text
       const id = nextObjectId(f.t);
@@ -1391,7 +2697,8 @@ export class DocumentMode {
       const text = ed.text;
       const p = paraAt(text, at);
       const r = paraRange(text, p);
-      if (r.end - r.start === 1) ed.setParas(p, p, { align: 'center', firstLine: undefined }, 'align');
+      // (part of the insert's undo step, so one Undo takes the figure out)
+      if (r.end - r.start === 1) ed.setParas(p, p, { align: 'center', firstLine: undefined }, null);
       ed.select(at, at + 1);
     }
     return id;
@@ -1414,7 +2721,7 @@ export class DocumentMode {
     const room = this.view.scroller.clientWidth - 48, page = f.layout().pageW;
     if (room < page * this.view.zoom) this.view.fitWidth();
     else if (this.view.zoom < ACTUAL) { if (room >= page * ACTUAL) this.view.setZoom(ACTUAL); else this.view.fitWidth(); }
-    else this.view.redraw();
+    else this.redraw();
   }
 
   /** Open a figure in the drawing tools; the document gets the changed drawing on Done. */
@@ -1426,10 +2733,22 @@ export class DocumentMode {
     else this.drawNew();
   }
 
-  editFigure(id: number): void {
+  editFigure(id: number, tools = false): void {
     const f = this.file;
     const o = f?.t.objects[id];
+    if (o?.kind === 'picture' && o.chart) { void this.editChart(id); return; }
+    if (o?.kind === 'picture' && o.embed) { void this.openEmbedded(id); return; }
     if (!f || !o || o.kind !== 'drawing') return;
+    // a diagram opens its text and look (Edit Drawing still opens the drawing tools on it)
+    if (!tools && this.host.editDiagram && o.contents.shapes.some((s) => s.diagram)) {
+      void this.host.editDiagram(o.contents).then((c) => {
+        const cur = this.file === f ? f.t.objects[id] : undefined;
+        if (!c || cur?.kind !== 'drawing') return;
+        f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { ...cur, contents: c } } } as DocText, 'Edit diagram');
+        this.focus();
+      });
+      return;
+    }
     const spot = this.cellSpot();
     this.host.editDrawing(o.contents, 'Figure', (c) => {
       if (this.file === f) this.backToCell(spot);
@@ -1440,6 +2759,73 @@ export class DocumentMode {
       f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { ...cur, contents: c } } } as DocText, 'Edit figure');
       this.focus();
     });
+  }
+
+  /** Insert > Chart: a chart with its own data, at the caret. */
+  private async insertChart(): Promise<void> {
+    const f = this.file!;
+    const spot = this.cellSpot();
+    const room = f.layout().textW;
+    const w = Math.min(360, room), h = w * 0.6;
+    const got = await editChart(newChartBox('column', w, h), true, (m, ms) => this.host.flash(m, ms));
+    if (this.file !== f) return;
+    this.backToCell(spot);
+    if (!got || got === 'delete') { this.focus(); return; }
+    const size = chartPoints(got.chart);
+    this.insertObject({ kind: 'picture', src: chartBoxPng(got, size.w, size.h), w: size.w, h: size.h, px: { w: got.chart.w, h: got.chart.h }, chart: got }, 'Insert chart');
+    this.focus();
+  }
+
+  /** A chart's data and settings (double-click it); it keeps the size it is shown at unless changed there. */
+  private async editChart(id: number): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'picture' || !o.chart) return;
+    const spot = this.cellSpot();
+    const k = o.scale ?? 1;
+    const got = await editChart(sizedBox(o.chart, o.w * k, o.h * k), false, (m, ms) => this.host.flash(m, ms));
+    if (this.file !== f) return;
+    this.backToCell(spot);
+    const cur = f.t.objects[id];
+    if (!got || cur?.kind !== 'picture' || !cur.chart) { this.focus(); return; }
+    if (f.box?.cell) f.box.recorded = false;
+    if (got === 'delete') {
+      const at = objectOffsets(f.t.runs).get(id);
+      if (at !== undefined && !f.box) { f.ed.select(at, at + 1); f.ed.replaceSelection([], undefined, 'Delete chart'); }
+      else this.host.flash('Click the chart and press Delete to take it out.');
+      this.focus();
+      return;
+    }
+    const size = chartPoints(got.chart);
+    const next: DocObject = { ...cur, chart: got, src: chartBoxPng(got, size.w, size.h), w: size.w, h: size.h, px: { w: got.chart.w, h: got.chart.h }, scale: undefined };
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Edit chart');
+    this.focus();
+  }
+
+  /**
+   * Picture Format…: a picture's corrections, colours, see-through, Remove Background and crop
+   * (to a shape or proportions). Cropping to proportions keeps its width and changes its height.
+   */
+  async formatPicture(id: number): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'picture' || o.chart) return;
+    const spot = this.cellSpot();
+    const got = await pictureFormat({ src: o.src, fx: o.fx, crop: o.crop, w: o.w, h: o.h });
+    if (this.file !== f) return;
+    this.backToCell(spot);
+    const cur = f.t.objects[id];
+    if (!got || cur?.kind !== 'picture') { this.focus(); return; }
+    if (f.box?.cell) f.box.recorded = false;
+    const next: DocObject = { ...cur, fx: got.fx };
+    if (!got.fx) delete next.fx;
+    if (got.crop) {
+      const c = got.crop;
+      if (c.l || c.t || c.r || c.b) next.crop = c; else delete next.crop;
+      if (got.aspect) next.h = Math.round((cur.w / got.aspect) * 100) / 100;
+    }
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Picture format');
+    this.focus();
   }
 
   /** Make a figure or picture bigger or smaller (1 is its own size). */
@@ -1504,6 +2890,7 @@ export class DocumentMode {
     if (!o) return;
     const cur = floatOf(o);
     if (wrap === 'inline') { if (cur) this.setFloat(id, null); return; }
+    if (o.kind === 'picture' && o.embed) { this.host.flash('Embedded objects stay in line with the text, as Word keeps them.'); return; }
     if (cur) { this.setFloat(id, { ...cur, wrap }); return; }
     // from its line: keep it where it is, measured from the top of its paragraph and the left margin
     const lay = f.layout();
@@ -1563,6 +2950,16 @@ export class DocumentMode {
     this.focus();
   }
 
+  /** Insert > Diagram: a SmartArt-style diagram from text, as a drawing in the text at the caret (double-click to change it). */
+  async insertDiagram(): Promise<void> {
+    if (!this.file || !this.host.editDiagram) return;
+    const f = this.file;
+    const c = await this.host.editDiagram(null);
+    if (!c || this.file !== f) { this.focus(); return; }
+    this.insertObject({ kind: 'drawing', contents: c }, 'Insert diagram');
+    this.focus();
+  }
+
   /** Insert > Text Box: a box of text on the page, at the left margin beside the paragraph the caret is in. */
   insertTextBox(): void {
     const f = this.file!;
@@ -1591,14 +2988,29 @@ export class DocumentMode {
     // in a text box, the text buttons work on its text; other commands leave it first
     if (f.box && !BOX_COMMANDS.test(cmd) && !(f.box.cell && CELL_COMMANDS.test(cmd))) this.stopBox();
     if (/^table-/.test(cmd)) { this.tableCommand(cmd); return true; }
+    if (/^outline-/.test(cmd)) { this.outlineCommand(cmd); return true; }
+    const kind = VIEW_COMMANDS[cmd];
+    if (kind) { this.setViewKind(kind); return true; }
+    if (this.applySimilar(cmd)) { this.focus(); return true; }
     const ed = this.ed;
     const style = (id: string) => {
       const [a, b] = ed.selectedParas();
-      ed.update(setParaStyle(f.t, a, b, id), 'Style');
+      ed.update(setParaStyle(withStyle(f.t, id), a, b, id), 'Style');
     };
     const line = (v: number) => ed.setSelectedParas({ line: Math.abs(v - 1) < 1e-6 ? undefined : v }, 'spacing');
+    if (cmd.startsWith('style-id:')) { style(cmd.slice(9)); this.focus(); return true; }
+    const bd = /^border-(bottom|top|left|right|none|all|outside|inside|horizontal)$/.exec(cmd);
+    if (bd) { this.paragraphs.border(bd[1] as BorderChoice); return true; }
+    const cover = /^cover-(.+)$/.exec(cmd);
+    if (cover) { void this.inserts.cover(cover[1]); return true; }
+    const design = /^design-(theme|fonts|colors|styleset|spacing)-(.+)$/.exec(cmd);
+    if (design) { this.design(design[1], design[2]); this.focus(); return true; }
+    const pick = /^(case|multilevel|bulletlib|watermark)-(.*)$/.exec(cmd);
+    if (pick) { this.pickCommand(pick[1], pick[2]); this.focus(); return true; }
     const align = (j: 'left' | 'center' | 'right' | 'justify') => ed.setSelectedParas({ align: j === 'left' ? undefined : j }, 'align');
     switch (cmd) {
+      case 'text-to-table': void this.tables.textToTableDialog(); break;
+      case 'nav-pane': this.nav.toggle(); this.updateRibbon(); break;
       case 'doc-align-left': align('left'); break;
       case 'doc-align-center': align('center'); break;
       case 'doc-align-right': align('right'); break;
@@ -1609,6 +3021,29 @@ export class DocumentMode {
       case 'style-h2': style('Heading2'); break;
       case 'style-h3': style('Heading3'); break;
       case 'style-caption': style('Caption'); break;
+      case 'style-h4': case 'style-h5': case 'style-h6': case 'style-h7': case 'style-h8': case 'style-h9': style(`Heading${cmd.slice(7)}`); break;
+      case 'styles-pane': this.stylesPane.toggle(this.ribbon.querySelector<HTMLElement>('[data-doc="styles-pane"]')); return true;
+      case 'doc-strike': ed.toggle('strike'); break;
+      case 'doc-small-caps': ed.toggle('smallCaps'); break;
+      case 'doc-all-caps': ed.toggle('allCaps'); break;
+      case 'change-case': {
+        // Word's Shift+F3: UPPERCASE, then lowercase, then Capitalize Each Word
+        const [a, b] = ed.collapsed ? [ed.start, ed.start] : [ed.start, ed.end];
+        const text = ed.text.slice(a, b || a);
+        const letters = text.replace(/[^\p{L}]/gu, '');
+        ed.changeCase(letters && letters === letters.toUpperCase() ? 'lower' : letters && letters === letters.toLowerCase() ? 'title' : 'upper');
+        break;
+      }
+      case 'clear-formatting': case 'clear-char-formatting': {
+        if (f.box) { ed.setStyle({ bold: undefined, italic: undefined, underline: undefined, strike: undefined, smallCaps: undefined, allCaps: undefined, highlight: undefined, color: undefined, sub: undefined, sup: undefined, cstyle: undefined }); break; }
+        const [a, b] = ed.selectedParas();
+        ed.update(clearFormatting(f.t, ed.start, ed.end, a, b, cmd === 'clear-char-formatting'), cmd === 'clear-formatting' ? 'Clear Formatting' : 'Clear text formatting');
+        break;
+      }
+      case 'para-tabs': void this.tabsDialog(); return true;
+      case 'view-ruler': this.setRuler(!this.ruler.shown); return true;
+      case 'page-color-none': this.setPageLook({ pageColor: undefined }, 'Page Color'); break;
+      case 'page-borders': void this.pageBorders(); return true;
       case 'line-single': line(1); break;
       case 'line-1-5': line(1.5); break;
       case 'line-double': line(2); break;
@@ -1643,6 +3078,9 @@ export class DocumentMode {
       case 'insert-structure': this.drawNew(); break;
       case 'structure-from-name-doc': case 'name-to-structure': void this.fromName(); break;
       case 'insert-picture': void this.insertPicture(); break;
+      case 'insert-object': void this.insertEmbedded(); break;
+      case 'paste-object': void this.pasteObject(); break;
+      case 'open-object': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || !o.embed) { this.host.flash('Click an embedded object first (or double-click it).'); break; } void this.openEmbedded(id); break; }
       case 'insert-text-box': this.insertTextBox(); break;
       case 'wrap-inline': case 'wrap-square': case 'wrap-topBottom': case 'wrap-behind': case 'wrap-front': {
         const id = this.pickedObject() ?? f.box?.id ?? null;
@@ -1651,16 +3089,60 @@ export class DocumentMode {
         break;
       }
       case 'insert-table': void this.insertTable(); break;
+      case 'insert-chart': void this.insertChart(); break;
+      case 'edit-chart': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || !o.chart) { this.host.flash('Click a chart first (or double-click it).'); break; } void this.editChart(id); break; }
+      case 'picture-format': { const id = this.pickedObject(); const o = id !== null ? f.t.objects[id] : undefined; if (id === null || o?.kind !== 'picture' || o.chart || o.embed) { this.host.flash(o?.kind === 'picture' && o.embed ? 'An embedded object shows its program\'s picture: change it by opening the object.' : 'Click a picture first.'); break; } void this.formatPicture(id); break; }
+      case 'alt-text': void this.altText(); break;
       case 'insert-caption': void this.insertCaption(); break;
       case 'cross-reference': void this.crossReference(); break;
       case 'compound-number': void this.compoundNumber(); break;
       case 'insert-citation': void this.insertCitation(); break;
       case 'insert-bibliography': this.insertBibliography(); break;
       case 'insert-toc': void this.insertToc(); break;
+      case 'insert-tof': void this.insertTof(); break;
+      case 'mark-entry': void this.indexes.markEntry(); break;
+      case 'insert-index': void this.indexes.insertIndex(); break;
+      case 'mark-citation': void this.indexes.markCitation(); break;
+      case 'insert-toa': void this.indexes.insertToa(); break;
+      case 'restrict-editing': void this.indexes.restrictEditing(); break;
+      case 'insert-form-text': void this.indexes.insertFormField('text'); break;
+      case 'insert-form-check': void this.indexes.insertFormField('check'); break;
+      case 'insert-form-drop': void this.indexes.insertFormField('drop'); break;
+      case 'insert-footnote': this.insertNote(false); break;
+      case 'insert-endnote': this.insertNote(true); break;
+      case 'note-options': void this.noteOptions(); break;
       case 'insert-equation': void this.insertEquation(); break;
+      case 'insert-link': void this.editLink(); break;
+      case 'remove-link': if (!ed.linkHere()) { this.host.flash('Put the caret in a link first.'); break; } ed.removeLink(); break;
+      case 'open-link': { const l = ed.linkHere(); if (!l) { this.host.flash('Put the caret in a link first.'); break; } void followLink(l.link); break; }
+      case 'insert-bookmark': void this.bookmarkDialog(); break;
+      case 'insert-date': void this.inserts.dateTime(); return true;
+      case 'doc-go-to': void this.goToDialog(); return true;
+      case 'select-similar': this.selectSimilar(); return true;
+      case 'insert-field': void this.inserts.field(); return true;
+      case 'doc-property': void this.inserts.property(); return true;
+      case 'doc-properties': void this.inserts.properties(); return true;
+      case 'blank-page': this.inserts.blankPage(); break;
+      case 'remove-cover': this.inserts.removeCover(); break;
+      case 'borders-shading': void this.paragraphs.bordersDialog(); return true;
+      case 'shading-none': this.paragraphs.shade(undefined); break;
+      case 'para-sort': void this.paragraphs.sortDialog(); return true;
+      case 'spelling-grammar': this.proofing.spelling(this.ribbon.querySelector<HTMLElement>('[data-doc="spelling-grammar"]')); return true;
+      case 'thesaurus': void this.proofing.lookUp(this.ribbon.querySelector<HTMLElement>('[data-doc="thesaurus"]')); return true;
+      case 'word-count': { const f = this.file; if (!f) return true; const lay = f.layout(); this.proofing.wordCount(lay.pages.length, lay.text.lines.length, this.ribbon.querySelector<HTMLElement>('[data-doc="word-count"]')); return true; }
       case 'edit-equation': { const m = this.pickedMath(); if (m === null) { this.host.flash('Click an equation first (or double-click it).'); break; } void this.editEquation(m); break; }
       case 'track-changes': void this.toggleTracking(); break;
       case 'review-name': void this.askReviewName(); break;
+      case 'design-default': void this.designDefault(); return true;
+      case 'selection-pane': this.arranging.selectionPane(this.ribbon.querySelector<HTMLElement>('[data-doc="selection-pane"]')); return true;
+      case 'markup-all': case 'markup-simple': case 'markup-none': case 'markup-original': {
+        const f = this.file;
+        if (!f) return true;
+        f.review = { ...f.review, mode: cmd.slice(7) as MarkupView };
+        this.view.paint();
+        break;
+      }
+      case 'compare-docs': case 'combine-docs': void this.compare(cmd === 'combine-docs'); break;
       case 'new-comment': void this.comments.add(); return true;
       case 'delete-comment': this.comments.remove(); break;
       case 'delete-all-comments': this.comments.removeAll(); break;
@@ -1671,7 +3153,14 @@ export class DocumentMode {
       case 'accept-all': case 'reject-all': this.decideAll(cmd === 'accept-all'); break;
       case 'next-change': case 'prev-change': this.goToChange(cmd === 'next-change'); break;
       case 'manage-references': void this.manageReferences(); break;
-      case 'edit-figure': { const id = this.pickedObject(); if (id === null) { this.host.flash('Click a structure or scheme first, then Edit Drawing (or double-click it).'); break; } this.editFigure(id); break; }
+      case 'edit-figure': { const id = this.pickedObject(); if (id === null) { this.host.flash('Click a structure or scheme first, then Edit Drawing (or double-click it).'); break; } this.editFigure(id, true); break; }
+      case 'view-vertical': this.arrange(false, 1, false); break;
+      case 'view-sideways': if (this.view.sideways) this.arrange(false, 1, false); else this.arrange(true, 1, true); break;
+      case 'view-multiple': this.arrange(false, this.view.perRow > 1 ? 1 : 2, true); break;
+      case 'view-one-page': this.arrange(this.view.sideways, 1, true); break;
+      case 'view-split': this.setSplit(!this.split); this.focus(); break;
+      case 'read-next': this.turn(1); break;
+      case 'read-prev': this.turn(-1); break;
       case 'zoom-in': this.view.setZoom(this.view.zoom * 1.25); this.showZoom(); break;
       case 'zoom-out': this.view.setZoom(this.view.zoom * 0.8); this.showZoom(); break;
       case 'zoom-fit': this.view.fitWidth(); this.showZoom(); break;
@@ -1687,14 +3176,18 @@ export class DocumentMode {
         this.updateRibbon();
         return true;
       case 'header-edit': this.panel.open('hf', null, 'hf-header0'); return true;
+      case 'hf-picture': void this.headerPicture(); return true;
+      case 'hf-plain': this.headerPlain(); return true;
       case 'footer-edit': this.panel.open('hf', null, 'hf-footer1'); return true;
       case 'numbers-s': {
-        const s = f.t.hf.prefix === 'S';
-        ed.update({ ...f.t, hf: { ...f.t.hf, prefix: s ? '' : 'S', numbers: f.t.hf.numbers === 'none' ? 'footer-center' : f.t.hf.numbers } } as DocText, 'Page numbers');
+        const hf = this.section().hf;
+        const s = hf.prefix === 'S';
+        this.setSection({ hf: { ...hf, prefix: s ? '' : 'S', numbers: hf.numbers === 'none' ? 'footer-center' : hf.numbers } }, 'Page numbers');
         break;
       }
+      case 'page-number-format': void this.pageNumberFormat(); return true;
       default: {
-        const m = /^(margins|paper|orient|numbers|columns)-(.+)$/.exec(cmd);
+        const m = /^(margins|paper|orient|numbers|columns|breaks|linenums|hyphen)-(.*)$/.exec(cmd);
         if (!m || !this.layoutCommand(m[1], m[2])) return false;
       }
     }
@@ -1722,12 +3215,25 @@ export class DocumentMode {
     this.focus();
   }
 
-  /** Layout tab: margins, paper, orientation and page numbers. */
+  /** The section the caret is in (its page setup, header and footer, numbering and line numbers). */
+  private section(): Section {
+    const f = this.file!;
+    return sectionAt(sectionsOf(f.t), paraAt(f.ed.text, f.ed.focus));
+  }
+
+  /** Change the section the caret is in. */
+  private setSection(patch: SectionPatch, label: string): void {
+    const f = this.file!;
+    f.ed.update(changeSection(f.t, this.section().index, patch), label);
+  }
+
+  /** Layout tab: margins, paper, orientation, columns and page numbers (of the section the caret is in), breaks and line numbers. */
   private layoutCommand(what: string, v: string): boolean {
     const f = this.file!;
-    const t = f.t;
-    const page = (p: Partial<PageSetup>) => f.ed.update({ ...t, page: { ...t.page, ...p } } as DocText, 'Page setup');
-    const land = t.page.w > t.page.h;
+    const sec = this.section();
+    const pg = sec.page;
+    const page = (p: Partial<PageSetup>) => this.setSection({ page: { ...pg, ...p } }, 'Page setup');
+    const land = pg.w > pg.h;
     if (what === 'margins') {
       const m: Record<string, [number, number]> = { normal: [1, 1], narrow: [0.5, 0.5], moderate: [1, 0.75], wide: [1, 2] };
       if (!m[v]) return false;
@@ -1737,16 +3243,170 @@ export class DocumentMode {
       if (!size) return false;
       page(land ? { w: size.h, h: size.w } : { ...size });
     } else if (what === 'orient') {
-      if ((v === 'landscape') !== land) page({ w: t.page.h, h: t.page.w });
+      if ((v === 'landscape') !== land) page({ w: pg.h, h: pg.w });
     } else if (what === 'columns') {
       if (v === 'more') { this.panel.open('page', this.ribbon.querySelector<HTMLElement>('#doc-columns'), 'pg-cols'); return true; }
       const n = Number(v);
       if (!(n >= 1 && n <= 4)) return false;
       page({ cols: n > 1 ? n : undefined });
     } else if (what === 'numbers') {
-      f.ed.update({ ...t, hf: { ...t.hf, numbers: v as NumberPlace } } as DocText, 'Page numbers');
+      this.setSection({ hf: { ...sec.hf, numbers: v as NumberPlace } }, 'Page numbers');
+    } else if (what === 'breaks') {
+      if (v === 'page' || v === 'column') this.pageBreak(v === 'column');
+      else if (v in BREAK_NAMES) this.sectionBreak(v as BreakKind);
+      else if (v !== '') return false;
+      this.updateRibbon();
+    } else if (what === 'linenums') {
+      const L = sec.lines;
+      if (v === 'none') this.setSection({ lines: undefined }, 'Line numbers');
+      else if (v === 'continuous' || v === 'page' || v === 'section') this.setSection({ lines: { start: 1, countBy: 1, ...L, restart: v } }, 'Line numbers');
+      else if (v === 'suppress') {
+        const [a, b] = f.ed.selectedParas();
+        const off = !fitParas(f.t.paras, paraCount(f.ed.text))[a]?.noLineNumbers;
+        f.ed.setParas(a, b, { noLineNumbers: off || undefined }, 'spacing');
+        this.updateRibbon();
+      } else if (v === 'options') { void this.lineNumberOptions(); return true; }
+      else return false;
+    } else if (what === 'hyphen') {
+      if (v === 'none' || v === 'auto') f.ed.update({ ...f.t, hyphen: { ...f.t.hyphen, auto: v === 'auto' } } as DocText, 'Hyphenation');
+      else if (v === 'para') {
+        const [a, b] = f.ed.selectedParas();
+        const off = !fitParas(f.t.paras, paraCount(f.ed.text))[a]?.noHyphen;
+        f.ed.setParas(a, b, { noHyphen: off || undefined }, 'Hyphenation');
+        this.updateRibbon();
+      } else if (v === 'options') { void this.hyphenOptions(); return true; }
+      else return false;
+      this.updateRibbon();
     } else return false;
     return true;
+  }
+
+  /**
+   * A picture (a logo or crest) in the header or footer of the section the caret is in, at its
+   * left, centre or right: the header becomes Word's paragraphs (its text and page number kept),
+   * with the picture at the start of that part.
+   */
+  private async headerPicture(): Promise<void> {
+    const f = this.file;
+    if (!f) return;
+    const sec = this.section();
+    const hf = sec.hf;
+    const got = await ask('Picture in Header or Footer', [
+      { name: 'where', label: 'Put it in the', value: 'header', options: [{ value: 'header', label: 'Header' }, { value: 'footer', label: 'Footer' }] },
+      { name: 'which', label: 'On', value: '', options: [{ value: '', label: hf.oddEven ? 'Odd pages' : 'Every page' }, ...(hf.firstPage ? [{ value: 'first', label: 'The first page' }] : []), ...(hf.oddEven ? [{ value: 'even', label: 'Even pages' }] : [])] },
+      { name: 'zone', label: 'At the', value: '0', options: [{ value: '0', label: 'Left' }, { value: '1', label: 'Centre' }, { value: '2', label: 'Right' }] },
+      { name: 'height', label: 'Height', value: '0.5', unit: 'in' },
+    ], { ok: 'Choose Picture…', note: 'For this section. Saved as a picture in Word\'s header or footer. Plain Text (in the Header and Footer settings) takes it out again.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const pic = await this.host.pickPicture();
+    if (!pic || this.file !== f) return;
+    const px = imageSize(pic.bytes, pic.mime) ?? { w: 400, h: 300 };
+    const h = Math.max(6, parseLength(got.height, 'in') ?? 36);
+    const w = (h * px.w) / Math.max(1, px.h);
+    const kind = got.where === 'footer' ? 'footer' : 'header';
+    const key = (got.which ? `${got.which}${kind === 'header' ? 'Header' : 'Footer'}` : kind) as HfKey;
+    const objects = { ...f.t.objects };
+    let next = nextObjectId(f.t);
+    const pid = next++;
+    objects[pid] = { kind: 'picture', src: dataUrl(pic.bytes, pic.mime), w, h, px };
+    const N = styleOf(f.t, undefined);
+    const look: rt.RunStyle = { font: N.font, size: Math.min(10, N.size) };
+    let body = hf.bodies?.[key];
+    if (!body) {
+      const numbers = numbersFor(hf, key);
+      const at = numbers !== 'none' && numbers.startsWith(kind) && (!key.startsWith('first') || hf.onFirst) ? ['left', 'center', 'right'].indexOf(numbers.split('-')[1]) : -1;
+      const W = Math.max(36, sec.page.w - sec.page.left - sec.page.right);
+      body = bodyFromZones(zonesFor(hf, key), at, hf.prefix, look, W, () => { const id = next++; objects[id] = { kind: 'field', code: 'page' }; return id; });
+    }
+    body = insertInZone(body, Number(got.zone) || 0, { ...look, obj: pid, text: OBJECT_CHAR });
+    f.ed.update(changeSection({ ...f.t, objects }, sec.index, { hf: { ...hf, bodies: { ...hf.bodies, [key]: body } } }), 'Header picture');
+    this.updateRibbon();
+  }
+
+  /** Header and footer > Plain Text: the section's headers and footers back to their plain text (pictures, tables and formatting taken out). */
+  private headerPlain(): void {
+    const f = this.file;
+    if (!f) return;
+    const sec = this.section();
+    if (!sec.hf.bodies) { this.host.flash('This section\'s header and footer are plain text already.'); return; }
+    const { bodies: _b, ...hf } = sec.hf;
+    this.setSection({ hf }, 'Plain header and footer');
+  }
+
+  /** Layout > Hyphenation > Hyphenation Options: on or off, the hyphenation zone, how many hyphens in a row, and words in capitals. */
+  private async hyphenOptions(): Promise<void> {
+    const f = this.file;
+    if (!f) return;
+    const h = f.t.hyphen ?? { auto: false };
+    const got = await ask('Hyphenation', [
+      { name: 'auto', label: 'Automatically hyphenate the document', value: String(!!h.auto), type: 'checkbox' },
+      { name: 'caps', label: 'Hyphenate words in CAPS', value: String(h.caps !== false), type: 'checkbox' },
+      { name: 'zone', label: 'Hyphenation zone', value: showLength(h.zone ?? DEFAULT_ZONE, 'in'), unit: 'in', placeholder: '0.25 in' },
+      { name: 'limit', label: 'Limit consecutive hyphens to', value: h.limit ? String(h.limit) : 'No limit', suggestions: ['No limit', '1', '2', '3', '4'] },
+    ], { ok: 'OK', note: 'A word is broken only where English allows (US English patterns) and only when leaving it whole would leave more room at the end of the line than the zone. Words with digits, formulas and words under 5 letters are never broken. Saved as Word\'s hyphenation settings.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const zone = parseLength(got.zone, 'in');
+    const limit = Number.parseInt(got.limit, 10);
+    f.ed.update({ ...f.t, hyphen: { auto: got.auto === 'true', ...(zone !== null && zone >= 0 ? { zone } : {}), ...(limit > 0 ? { limit } : {}), ...(got.caps === 'true' ? {} : { caps: false }) } } as DocText, 'Hyphenation');
+    this.updateRibbon();
+  }
+
+  /**
+   * A section break at the caret: what follows starts a new section (on a new page, the next
+   * even or odd page, or the same page), with this section's page setup and line numbers, its
+   * header and footer linked to this one's and its page numbers carrying on, as in Word.
+   */
+  private sectionBreak(kind: BreakKind): void {
+    const ed = this.ed;
+    const s = this.section();
+    ed.enter(false);
+    const p = paraAt(ed.text, ed.focus);
+    ed.setParas(p, p, { section: newBreak(s, kind), pageBreak: undefined, colBreak: undefined }, 'break');
+    this.host.flash(`Section break (${BREAK_NAMES[kind]}): the text after it is section ${s.index + 2}, with its own page setup, header and footer, and page and line numbers.`);
+  }
+
+  /** Line Numbers > Line Numbering Options: where they start, every how many, how far from the text, and when they start again. */
+  private async lineNumberOptions(): Promise<void> {
+    const f = this.file!;
+    const sec = this.section();
+    const L = sec.lines;
+    const got = await ask('Line Numbers', [
+      { name: 'on', label: 'Add line numbering', type: 'checkbox', value: 'true' },
+      { name: 'start', label: 'Start at', type: 'number', value: String(L?.start ?? 1) },
+      { name: 'countBy', label: 'Count by', type: 'number', value: String(L?.countBy ?? 1), help: 'Show every nth number (5: 5, 10, 15…); every line is still counted' },
+      { name: 'distance', label: 'From text', value: L?.distance !== undefined ? showLength(L.distance, 'in') : '', placeholder: 'Auto (0.25 in)', unit: 'in' },
+      { name: 'restart', label: 'Numbering', value: L?.restart ?? 'page', options: [
+        { value: 'page', label: 'Restart each page' }, { value: 'section', label: 'Restart each section' }, { value: 'continuous', label: 'Continuous' },
+      ] },
+    ], { ok: 'Apply', note: sectionsOf(f.t).length > 1 ? `For section ${sec.index + 1} (the one the caret is in). Turn them off for a paragraph with Line Numbers > Suppress for Current Paragraph.` : 'Numbers down the left margin, as journals ask for in manuscripts under review. Turn them off for a paragraph with Line Numbers > Suppress for Current Paragraph.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    if (got.on !== 'true') { this.setSection({ lines: undefined }, 'Line numbers'); return; }
+    const num = (v: string, d: number, min: number) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n >= min ? n : d; };
+    const dist = got.distance.trim() ? parseLength(got.distance, 'in') : null;
+    const lines: LineNumbers = { start: num(got.start, 1, 0), countBy: num(got.countBy, 1, 1), restart: got.restart as LineNumbers['restart'] };
+    if (dist !== null && dist >= 0) lines.distance = dist;
+    this.setSection({ lines }, 'Line numbers');
+  }
+
+  /** Insert > Page Number > Format: 1, 2, 3 or i, ii, iii, and where this section's numbering starts. */
+  private async pageNumberFormat(): Promise<void> {
+    const f = this.file!;
+    const sec = this.section();
+    const FORMATS: PageNumFormat[] = ['decimal', 'lowerRoman', 'upperRoman', 'lowerLetter', 'upperLetter'];
+    const first = sec.index === 0;
+    const got = await ask('Page Number Format', [
+      { name: 'format', label: 'Number format', value: sec.format, options: FORMATS.map((v) => ({ value: v, label: [1, 2, 3].map((n) => pageNumText(n, v)).join(', ') })) },
+      ...(first ? [] : [{ name: 'cont', label: 'Continue from previous section', type: 'checkbox' as const, value: String(sec.restart === undefined) }]),
+      { name: 'start', label: first ? 'Start at' : 'Or start at', type: 'number', value: String(sec.restart ?? 1) },
+    ], { ok: 'Apply', note: first ? (sectionsOf(f.t).length > 1 ? 'For the first section. Front matter is often numbered i, ii, iii, with a section break (Layout > Breaks) before the text, numbered 1, 2, 3 from its first page.' : 'Front matter is often numbered i, ii, iii: put a section break (Layout > Breaks > Next Page) before the text and number that section 1, 2, 3 from its first page.') : `For section ${sec.index + 1} (the one the caret is in).` });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const n = Math.round(Number(got.start));
+    const start = Number.isFinite(n) ? n : 1;
+    this.setSection({ format: got.format as PageNumFormat, restart: first || got.cont !== 'true' ? start : undefined }, 'Page numbers');
   }
 
   /** Ctrl+Enter: what follows the caret starts a new page. */
@@ -1793,8 +3453,111 @@ export class DocumentMode {
     this.dropPicture(pic.bytes, pic.mime);
   }
 
-  private async insertTable(): Promise<void> {
+  /**
+   * Insert > Object: another program's file kept whole in the document, shown as its contents
+   * (a workbook's cells, a PDF's first page, a picture) or as an icon. Double-clicking it opens
+   * the file in its program, and saving it there changes it here; Word does the same with it.
+   */
+  private async insertEmbedded(): Promise<void> {
     const f = this.file!;
+    if (!this.host.pickObjectFile || !this.host.objectPicture) { this.host.flash('Objects can only be put in from the app.'); return; }
+    const spot = this.cellSpot();
+    const file = await this.host.pickObjectFile();
+    this.focus();
+    if (!file || this.file !== f) return;
+    const shows = showsContents(file.name);
+    const got = await ask('Insert Object', [{ name: 'icon', label: 'Display as icon', type: 'checkbox', value: String(!shows) }], {
+      ok: 'Insert',
+      note: `${file.name} goes in the document whole, shown as ${shows ? 'what it holds' : 'an icon'}. Double-click it to open it in its own program (the Windows app): what you save there comes back here. Word opens it the same way.`,
+    });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const icon = got.icon === 'true';
+    const pic = await this.host.objectPicture(file.name, file.bytes, icon);
+    if (this.file !== f) return;
+    this.backToCell(spot);
+    this.insertObject({ kind: 'picture', src: pic.src, w: pic.w, h: pic.h, ...(pic.px ? { px: pic.px } : {}), embed: embedFile(file.name, file.bytes, icon) }, 'Insert object');
+    this.focus();
+  }
+
+  /** Paste as Object: another program's object on the clipboard (cells copied in Excel), kept whole as Word's Paste Special keeps it. */
+  private async pasteObject(): Promise<void> {
+    const f = this.file!;
+    if (!this.host.clipboardObject) { this.host.flash('Pasting objects from other programs needs the Windows app.'); return; }
+    const spot = this.cellSpot();
+    const got = await this.host.clipboardObject();
+    if (this.file !== f) return;
+    if (!got) { this.host.flash('There is no object on the clipboard: copy cells in Excel (or an object in another program) first.'); return; }
+    this.backToCell(spot);
+    let pic: ObjectPicture | null = null;
+    if (got.picture) {
+      const px = imageSize(got.picture.bytes, got.picture.mime);
+      if (px) pic = { src: dataUrl(got.picture.bytes, got.picture.mime), w: px.w * 0.75, h: px.h * 0.75, ...(got.picture.mime === 'image/x-emf' || got.picture.mime === 'image/svg+xml' ? {} : { px }) };
+    }
+    if (!pic) {
+      const inside = fileInside(got.embed);
+      pic = this.host.objectPicture && inside ? await this.host.objectPicture(inside.name, inside.bytes, false) : null;
+    }
+    if (!pic || this.file !== f) { this.host.flash('The object came with no picture to show.'); return; }
+    this.insertObject({ kind: 'picture', src: pic.src, w: pic.w, h: pic.h, ...(pic.px ? { px: pic.px } : {}), embed: got.embed }, 'Paste object');
+    this.focus();
+  }
+
+  /**
+   * Open an embedded object's file in its program. Each time it is saved there the object takes
+   * the new file and, unless it shows as an icon, a new picture of it.
+   */
+  private async openEmbedded(id: number): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'picture' || !o.embed) return;
+    const file = fileInside(o.embed);
+    if (!file) { this.host.flash(`This ${objectKind(o.embed)} can't be opened here; it is kept as it is, and Word opens it.`, 8000); return; }
+    if (!this.host.openObjectFile) { this.host.flash('Objects open in their programs from the app.'); return; }
+    const err = await this.host.openObjectFile(file, (bytes) => void this.objectSaved(f, id, file.name, bytes));
+    if (err) this.host.flash(err, 8000);
+  }
+
+  /** An embedded object's file was saved in its program: take it back, with a new picture. */
+  private async objectSaved(f: DocFile, id: number, name: string, bytes: Uint8Array): Promise<void> {
+    const cur = f.t.objects[id];
+    if (cur?.kind !== 'picture' || !cur.embed) return;
+    const embed = withFile(cur.embed, { name, bytes });
+    if (!embed) { this.host.flash(`The changes to ${name} can't be put back in this kind of object.`); return; }
+    const pic = this.host.objectPicture && !embed.icon ? await this.host.objectPicture(name, bytes, !!embed.icon) : null;
+    const now = f.t.objects[id];
+    if (now?.kind !== 'picture' || !now.embed) return;
+    const next: DocObject = pic ? { ...now, embed, src: pic.src, w: pic.w, h: pic.h, px: pic.px, scale: undefined } : { ...now, embed };
+    if (!pic || !pic.px) delete (next as { px?: unknown }).px;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Edit object');
+    this.host.flash(`${name} was saved: the document has its changes.`);
+  }
+
+  /** Show an embedded object as its icon, or as what it holds. */
+  private async embeddedIcon(id: number, icon: boolean): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'picture' || !o.embed || !this.host.objectPicture) return;
+    const inside = fileInside(o.embed);
+    const name = inside?.name ?? o.embed.name ?? `${objectKind(o.embed)}.${o.embed.ext}`;
+    if (!icon && !inside) { this.host.flash(`What this ${objectKind(o.embed)} holds can't be shown here.`); return; }
+    const pic = await this.host.objectPicture(name, inside?.bytes ?? new Uint8Array(0), icon);
+    const cur = f.t.objects[id];
+    if (cur?.kind !== 'picture' || !cur.embed) return;
+    const embed = { ...cur.embed };
+    if (icon) embed.icon = true; else delete embed.icon;
+    const next: DocObject = { ...cur, embed, src: pic.src, w: pic.w, h: pic.h, scale: undefined };
+    if (pic.px) next.px = pic.px; else delete next.px;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, icon ? 'Display as icon' : 'Show contents');
+    this.focus();
+  }
+
+  private async insertTable(nest = false): Promise<void> {
+    const f = this.file!;
+    // typing in a table cell: the new table goes inside the cell
+    const host = this.tableTarget();
+    const inCell = !!(f.box?.cell && host) || nest;
+    if (nest && !f.box?.cell) { this.host.flash('Click in a table cell first.'); return; }
     const got = await ask('Insert Table', [
       { name: 'rows', label: 'Rows', value: '4', type: 'number' },
       { name: 'cols', label: 'Columns', value: '3', type: 'number' },
@@ -1805,6 +3568,17 @@ export class DocumentMode {
     const rows = Math.max(1, Math.min(500, Math.round(Number(got.rows) || 4)));
     const cols = Math.max(1, Math.min(60, Math.round(Number(got.cols) || 3)));
     this.lastTableKind = got.kind;
+    if (inCell && host && got.kind !== 'drawing' && f.box?.cell) {
+      // as wide as the cell inside its margins, the columns sharing it
+      const hm = cellMargins(host.t, host.r, host.c);
+      const room = host.t.cols.slice(host.c, host.c + spanOf(host.t, host.r, host.c)).reduce((a, b) => a + b, 0) - hm.left - hm.right;
+      const N = styleOf(f.t, {});
+      const lines = got.kind === 'acs' ? 'acs' : got.kind === 'none' ? 'none' : 'grid';
+      const t0 = emptyTable(rows, cols, N.size);
+      const w = Math.max(6, Math.floor((room / cols) * 100) / 100);
+      this.insertNestedTable({ ...t0, cols: Array(cols).fill(w), lines, head: lines === 'grid' ? 0 : t0.head, align: Array(cols).fill('left') });
+      return;
+    }
     if (got.kind === 'drawing') {
       const id = this.insertObject({ kind: 'drawing', contents: this.host.newTable(rows, cols, f.t.drawingStyle) }, 'Insert table');
       this.editFigure(id);
@@ -1821,12 +3595,30 @@ export class DocumentMode {
     this.insertTableObject(table);
   }
 
+  /** Put a table into the cell typed into, as a paragraph of its own in the cell, and type into its first cell. */
+  private insertNestedTable(table: TableData): void {
+    const f = this.file!;
+    const b = f.box;
+    if (!b?.cell) return;
+    const id = nextObjectId(f.t);
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'table', table } } } as DocText, 'Insert table');
+    const bed = b.ed;
+    const style = bed.typingStyle();
+    const text = bed.text;
+    const nl = { ...style, text: '\n' };
+    const runs = [...(bed.start > 0 && text[bed.start - 1] !== '\n' ? [nl] : []), objectRun(id, style), ...(bed.end < text.length && text[bed.end] !== '\n' ? [nl] : [])];
+    b.recorded = true;
+    bed.replace(bed.start, bed.end, runs, undefined, 'edit');
+    b.recorded = false;
+    this.startCell(id, 0, 0, 'start');
+  }
+
   /** Put a table in the text as a paragraph of its own (after the caret's paragraph text), and type into its first cell. */
-  private insertTableObject(table: TableData): void {
+  private insertTableObject(table: TableData, kind = 'Insert table', type = true): void {
     const f = this.file!;
     const ed = f.ed;
     const id = nextObjectId(f.t);
-    ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'table', table } } } as DocText, 'Insert table');
+    ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'table', table } } } as DocText, kind);
     const text = ed.text;
     const p = paraAt(text, ed.start);
     const r = paraRange(text, p);
@@ -1843,18 +3635,25 @@ export class DocumentMode {
     // a table's paragraph has no spacing or indent of its own (as in Word)
     const tp = paraAt(ed.text, objectOffsets(f.t.runs).get(id)!);
     ed.setParas(tp, tp, { spaceBefore: 0, spaceAfter: 0, firstLine: 0, indent: undefined, list: undefined }, null);
-    this.startCell(id, 0, 0, 'start');
+    // (a pasted table leaves the caret in the paragraph after it)
+    if (type) this.startCell(id, 0, 0, 'start');
+    else ed.setCaret(Math.min(ed.text.length, objectOffsets(f.t.runs).get(id)! + 2), false);
   }
 
   /**
    * References > Insert Caption: a numbered caption paragraph ("Figure 2. ") under the
-   * paragraph the caret is in (above it for a table, as journals set them), ready to type into.
+   * paragraph the caret is in, or above it (for a scheme or table, as journals set them, or
+   * when asked), ready to type into.
    */
+  /** Where the last caption went (kept while the program is open). */
+  private captionPlace: 'usual' | 'above' | 'below' = 'usual';
+
   private async insertCaption(): Promise<void> {
     const f = this.file!;
     const got = await ask('Insert Caption', [
       { name: 'name', label: 'Label', value: 'Figure', options: CAPTION_NAMES.map((n) => ({ value: n, label: n })) },
       { name: 'prefix', label: 'Before the number', value: '', options: [{ value: '', label: 'Nothing (Figure 1)' }, { value: 'S', label: 'S (Figure S1, for Supporting Information)' }] },
+      { name: 'place', label: 'Position', value: this.captionPlace, options: [{ value: 'usual', label: 'As journals set them (Scheme and Table above, others below)' }, { value: 'above', label: 'Above the selected item' }, { value: 'below', label: 'Below the selected item' }] },
     ], { ok: 'Insert', note: 'Captions number themselves in order, and references to them follow when they move.' });
     this.focus();
     if (!got || this.file !== f) return;
@@ -1864,7 +3663,8 @@ export class DocumentMode {
     const text = ed.text;
     const p = paraAt(text, ed.focus);
     const r = paraRange(text, p);
-    const above = got.name === 'Table';
+    this.captionPlace = got.place === 'above' || got.place === 'below' ? got.place : 'usual';
+    const above = got.place === 'above' || (got.place !== 'below' && (got.name === 'Table' || got.name === 'Scheme'));
     const cap = runStyleOf(f.t.styles.Caption);
     const runs = captionRuns(got.name, got.prefix, id, cap);
     const len = runs.reduce((a, x) => a + x.text.length, 0);
@@ -1886,24 +3686,7 @@ export class DocumentMode {
 
   /** References > Cross-reference: "Figure 2" in the text, following that caption's number. */
   private async crossReference(): Promise<void> {
-    const f = this.file!;
-    const shown = fieldTexts(f.t);
-    const at = objectOffsets(f.t.runs);
-    const text = f.ed.text;
-    const isCaption = (id: number) => { const o = f.t.objects[id]; return o?.kind === 'seq' && o.name !== COMPOUND; };
-    const caps = [...at.entries()].filter(([id]) => isCaption(id)).sort((a, b) => a[1] - b[1]).map(([id, off]) => {
-      const start = text.lastIndexOf('\n', off - 1) + 1;
-      const end = text.indexOf('\n', off);
-      const words = text.slice(start, end < 0 ? text.length : end).replace(OBJECT_CHAR, shown.get(id) ?? '');
-      return { id, label: words.length > 70 ? words.slice(0, 68) + '…' : words };
-    });
-    if (!caps.length) { this.host.flash('There are no captions to refer to yet: References > Insert Caption adds one.', 6000); return; }
-    const got = await ask('Cross-reference', [{ name: 'target', label: 'Refer to', value: String(caps[0].id), options: caps.map((c) => ({ value: String(c.id), label: c.label })) }], {
-      ok: 'Insert', note: 'Puts the caption\'s label and number in the text ("Figure 2"). It changes by itself when captions are added, removed or moved.',
-    });
-    this.focus();
-    if (!got || this.file !== f) return;
-    this.insertObject({ kind: 'ref', target: Number(got.target) }, 'Insert cross-reference');
+    await this.inserts.crossReference();
   }
 
   /**
@@ -2062,6 +3845,129 @@ export class DocumentMode {
     f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'toc', levels } } } as DocText, 'Table of contents levels');
   }
 
+  /**
+   * References > Insert Table of Figures: the captions of one label (Figure, Scheme, Table,
+   * Chart, or all of them) with their page numbers, in a paragraph of its own after the one the
+   * caret is in, with a heading. Like the contents it changes by itself; double-click it to
+   * choose another label.
+   */
+  private async insertTof(): Promise<void> {
+    const f = this.file!;
+    const name = await this.askTofName('Figure', 'Insert');
+    if (name === null || this.file !== f) return;
+    const ed = f.ed;
+    const id = nextObjectId(f.t);
+    const kind = 'Insert table of figures';
+    ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'tof', name } } } as DocText, kind);
+    const text = ed.text;
+    const p = paraAt(text, ed.focus);
+    const r = paraRange(text, p);
+    const head = { ...runStyleOf(f.t.styles.Heading1 ?? styleOf(f.t, undefined)) };
+    const normal = runStyleOf(styleOf(f.t, undefined));
+    const empty = r.start === r.end;
+    const title = name ? `List of ${name === 'Chart' ? 'Charts' : `${name}s`}` : 'List of Figures, Schemes and Tables';
+    const runs: TextRun[] = [...(empty ? [] : [{ ...normal, text: '\n' }]), { ...head, text: title }, { ...head, text: '\n' }, objectRun(id, normal)];
+    ed.replace(empty ? r.start : r.end, empty ? r.start : r.end, runs, undefined, null);
+    const h = empty ? p : p + 1;
+    // the heading looks like a heading but is in Normal, so the contents leave it out
+    let t = setParaStyle(f.t, h, h + 1, 'Normal');
+    const hr = paraRange(rt.plainText(t.runs), h);
+    t = { ...t, runs: rt.applyStyle(t.runs, hr.start, hr.end, head), paras: t.paras.map((x, i) => (i === h ? { ...x, keepNext: true, spaceBefore: 0, spaceAfter: 8 } : x)) };
+    ed.update(t, null);
+    const at = objectOffsets(f.t.runs).get(id);
+    if (at !== undefined) ed.setCaret(at + 1);
+    if (!tofEntries(f.t, name).length) this.host.flash(`The table of figures lists the ${name ? `${name} ` : ''}captions made with References > Insert Caption. Add captions and they appear here with their page numbers.`, 9000);
+  }
+
+  private async askTofName(now: string, ok: string): Promise<string | null> {
+    const got = await ask('Table of Figures', [
+      { name: 'name', label: 'Captions listed', value: now, options: TOF_NAMES.map((n) => ({ value: n, label: n ? `${n} captions` : 'All captions (figures, schemes, tables, charts)' })) },
+    ], { ok, note: 'It lists each caption with its page number and updates by itself as captions change or move. In Word, right-click it and choose Update Field after editing there.' });
+    return got ? got.name : null;
+  }
+
+  /** Double-click on a table of figures: the captions it lists. */
+  private async tofOptions(id: number): Promise<void> {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'tof') return;
+    const name = await this.askTofName(o.name, 'Apply');
+    if (name === null || name === o.name || this.file !== f) return;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { kind: 'tof', name } } } as DocText, 'Table of figures captions');
+  }
+
+  // ---------------------------------------------------------------- footnotes and endnotes
+
+  /**
+   * References > Insert Footnote (Ctrl+Alt+F) or Insert Endnote (Ctrl+Alt+D): the next number in
+   * superscript at the caret, and the caret in the note's own text (at the foot of the page, or
+   * after the text), as in Word. Escape goes back to the number; deleting the number deletes the note.
+   */
+  private insertNote(end: boolean): void {
+    const f = this.file!;
+    if (f.box) {
+      this.host.flash(`${end ? 'Endnotes' : 'Footnotes'} go in the document's text: click in the text first (not in a text box, table cell or note).`, 6000);
+      return;
+    }
+    const st = noteStyle(f.t);
+    const id = this.insertObject({ kind: 'note', end: end || undefined, runs: [{ ...runStyleOf(st), text: '' }] }, end ? 'Insert endnote' : 'Insert footnote', { sup: true, sub: undefined });
+    // what is typed next in the text isn't in superscript
+    f.ed.setStyle({ sup: undefined });
+    this.startBox(id);
+  }
+
+  /** The footnote or endnote whose number is at an offset in the text (or just before it). */
+  private noteAt(offset: number): number | null {
+    const f = this.file;
+    if (!f) return null;
+    for (const at of [offset, offset - 1]) {
+      const obj = at >= 0 ? rt.sliceRuns(f.t.runs, at, at + 1)[0]?.obj : undefined;
+      if (obj !== undefined && f.t.objects[obj]?.kind === 'note') return obj;
+    }
+    return null;
+  }
+
+  /** A footnote made an endnote, or an endnote a footnote. */
+  private convertNote(id: number): void {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'note') return;
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: { ...o, end: o.end ? undefined : true } } } as DocText, o.end ? 'Convert to footnote' : 'Convert to endnote');
+  }
+
+  /**
+   * References > Footnote Options (Word's Footnote and Endnote dialog): how footnotes and endnotes
+   * are numbered, and turning all of one kind into the other.
+   */
+  private async noteOptions(): Promise<void> {
+    const f = this.file!;
+    const FORMATS: NoteFormat[] = ['decimal', 'lowerRoman', 'upperRoman', 'lowerLetter', 'upperLetter', 'chicago'];
+    const options = FORMATS.map((v) => ({ value: v, label: [1, 2, 3].map((n) => noteLabel(n, v)).join(', ') }));
+    const notes = Object.values(f.t.objects).filter((o) => o.kind === 'note');
+    const feet = notes.filter((o) => o.kind === 'note' && !o.end).length, ends = notes.length - feet;
+    const got = await ask('Footnotes and Endnotes', [
+      { name: 'foot', label: 'Footnotes numbered', value: f.t.notes?.foot ?? FOOT_FORMAT, options },
+      { name: 'end', label: 'Endnotes numbered', value: f.t.notes?.end ?? END_FORMAT, options },
+      { name: 'convert', label: 'Convert', value: '', options: [
+        { value: '', label: 'Leave them as they are' },
+        { value: 'toEnd', label: `All footnotes to endnotes (${feet})` },
+        { value: 'toFoot', label: `All endnotes to footnotes (${ends})` },
+        { value: 'swap', label: 'Swap footnotes and endnotes' },
+      ] },
+    ], { ok: 'Apply', note: 'Footnotes sit at the foot of their page, endnotes after the text. Insert them with References > Insert Footnote (Ctrl+Alt+F) or Insert Endnote (Ctrl+Alt+D); delete one by deleting its number in the text.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const foot = got.foot as NoteFormat, end = got.end as NoteFormat;
+    const objects = { ...f.t.objects };
+    for (const [k, o] of Object.entries(objects)) {
+      if (o.kind !== 'note') continue;
+      const toEnd = got.convert === 'toEnd' ? true : got.convert === 'toFoot' ? false : got.convert === 'swap' ? !o.end : !!o.end;
+      if (toEnd !== !!o.end) objects[Number(k)] = { ...o, end: toEnd || undefined };
+    }
+    const fmts = { ...(foot !== FOOT_FORMAT ? { foot } : {}), ...(end !== END_FORMAT ? { end } : {}) };
+    f.ed.update({ ...f.t, objects, notes: Object.keys(fmts).length ? fmts : undefined } as DocText, 'Footnote options');
+  }
+
   // ---------------------------------------------------------------- equations
 
   /** The equation picked (a selection of just its character), or the one just before the caret. */
@@ -2133,9 +4039,47 @@ export class DocumentMode {
     this.host.flash(on ? `Tracking changes as ${reviewAuthor()}: what you type is underlined and what you delete is struck through, until accepted or rejected (Review tab).` : 'Changes are no longer tracked. Changes already marked stay until accepted or rejected.', 7000);
   }
 
+  /**
+   * Review > Compare (or Combine): two documents, open in tabs or chosen from files, and a new
+   * document with the differences as tracked changes, as Word makes.
+   */
+  private async compare(combine: boolean): Promise<void> {
+    const f = this.file!;
+    const open = this.host.openDocuments?.() ?? [];
+    const here = open.find((d) => d.t === f.t) ?? { name: 'This document', t: f.t };
+    const others = open.filter((d) => d.t !== f.t);
+    const FILE = '__file';
+    const choices = [here, ...others].map((d, i) => ({ value: String(i), label: d.name }));
+    choices.push({ value: FILE, label: 'Choose a Word file…' });
+    const got = await ask(combine ? 'Combine Documents' : 'Compare Documents', [
+      { name: 'a', label: 'Original document', value: '0', options: choices },
+      { name: 'b', label: 'Revised document', value: others.length ? '1' : FILE, options: choices },
+      { name: 'who', label: combine ? 'Label untracked changes in the revised document with' : 'Label changes with', value: reviewAuthor() || 'Revised', help: combine ? 'Changes already tracked in either document keep their own names.' : 'The name shown on each change found.' },
+      { name: 'level', label: 'Show changes at', value: 'word', options: [{ value: 'word', label: 'Word level (whole words)' }, { value: 'char', label: 'Character level (letter by letter)' }] },
+    ], {
+      ok: combine ? 'Combine' : 'Compare',
+      note: combine
+        ? 'Puts two reviewers\' copies of one document together in a new document: each reviewer\'s tracked changes, with their names, ready to accept or reject (Review > Accept and Reject).'
+        : 'Opens a new document: the revised document with what changed since the original marked as tracked changes (deleted text struck through, new text underlined). Both are compared with their own tracked changes accepted. Formatting-only changes are not marked.',
+    });
+    if (!got) return;
+    const list = [here, ...others];
+    const take = async (v: string) => (v === FILE ? (await this.host.pickDocument?.()) ?? null : list[Number(v)] ?? null);
+    const a = await take(got.a);
+    if (!a) return;
+    const b = await take(got.b);
+    if (!b) return;
+    if (a.t === b.t) { this.host.flash('Choose two different documents to compare.'); return; }
+    const opts = { author: got.who.trim() || 'Revised', level: got.level === 'char' ? 'char' as const : 'word' as const };
+    const { doc, changes } = combine ? combineDocuments(a.t, b.t, opts) : compareDocuments(a.t, b.t, opts);
+    const stem = (n: string) => n.replace(/\.docx$/i, '');
+    this.host.showDocument?.(doc, combine ? `Combined ${stem(a.name)}` : `Compared ${stem(b.name)}`);
+    this.host.flash(changes ? `${changes} change${changes === 1 ? '' : 's'} found. Go through them with Review > Next, Accept and Reject.` : 'The documents read the same: no changes found.', 7000);
+  }
+
   /** The name put on your changes (kept in your settings). */
   async askReviewName(): Promise<boolean> {
-    const got = await ask('Your Name', [{ name: 'name', label: 'Name shown on your changes', value: reviewAuthor() }], { ok: 'Save', note: 'Word shows this name on your changes too. Change it any time here or in Edit > Preferences.' });
+    const got = await ask('Your Name', [{ name: 'name', label: 'Name shown on your changes', value: reviewAuthor() }], { ok: 'Save', note: 'Word shows this name on your changes too. Change it any time here or in Edit > Settings.' });
     if (!got || !got.name.trim()) return false;
     setReviewAuthor(got.name);
     this.host.reviewNameChanged?.();
@@ -2181,7 +4125,266 @@ export class DocumentMode {
     ed.select(c.start, c.end);
     this.revealCaret();
     const when = c.date ? new Date(c.date) : null;
-    this.host.flash(`${c.kind === 'ins' ? 'Inserted' : 'Deleted'} by ${c.author || 'unknown'}${when && !isNaN(+when) ? `, ${when.toLocaleString()}` : ''}.`, 5000);
+    this.host.flash(`${c.kind === 'ins' ? 'Inserted' : c.kind === 'del' ? 'Deleted' : 'Formatting changed'} by ${c.author || 'unknown'}${when && !isNaN(+when) ? `, ${when.toLocaleString()}` : ''}.`, 5000);
+  }
+
+  // ---------------------------------------------------------------- text, lists, styles, tabs and the page's look
+
+  /**
+   * Tab, as in Word: at the start of a list item (or with several paragraphs picked) the level
+   * or indent changes; anywhere else a tab goes in the text, up to the next tab stop.
+   */
+  private tabKey(shift: boolean): void {
+    const ed = this.ed;
+    const [a, b] = ed.selectedParas();
+    const para = ed.currentPara();
+    const atStart = ed.collapsed && ed.start === paraRange(ed.text, a).start;
+    if (shift || a !== b || (para.list && (atStart || !ed.collapsed))) ed.indent(shift ? -1 : 1);
+    else ed.type('\t');
+  }
+
+  /** The ribbon's lists of choices: Change Case, the bullet library, Multilevel List and Watermark. */
+  private pickCommand(what: string, v: string): void {
+    const f = this.file!;
+    const ed = this.ed;
+    if (what === 'case') {
+      if (v === 'allcaps') ed.toggle('allCaps');
+      else if (['sentence', 'lower', 'upper', 'title', 'toggle'].includes(v)) ed.changeCase(v as rt.CaseMode);
+    } else if (what === 'bulletlib') {
+      const bullet = v === 'default' ? undefined : BULLET_LIBRARY[Number(v)];
+      ed.setSelectedParas({ list: 'bullet', bullet, cont: undefined }, 'list');
+    } else if (what === 'multilevel') {
+      const scheme = LIST_SCHEMES.find((x) => x.id === v)?.id;
+      // a scheme is for the whole list: every item of the numbered lists picked takes it
+      const [a, b] = ed.selectedParas();
+      const paras = fitParas(f.t.paras, paraCount(ed.text));
+      let first = a, last = b;
+      while (first > 0 && paras[first - 1]?.list === 'number' && paras[a]?.list === 'number') first--;
+      while (last + 1 < paras.length && paras[last + 1]?.list === 'number' && paras[b]?.list === 'number') last++;
+      const box = !!f.box;
+      if (box) ed.setSelectedParas({ list: 'number', scheme: scheme || undefined, cont: undefined }, 'list');
+      else ed.setParas(first, last, { list: 'number', scheme: scheme || undefined }, 'list');
+    } else if (what === 'watermark') {
+      if (v === 'remove') this.setPageLook({ watermark: undefined }, 'Remove Watermark');
+      else if (v === 'custom') void this.customWatermark();
+      else if (WATERMARKS[Number(v)]) this.setPageLook({ watermark: { ...(f.t.watermark ?? defaultWatermark()), text: WATERMARKS[Number(v)] } }, 'Watermark');
+    }
+  }
+
+  /** Design > Document Formatting: a theme, its fonts or colours, a style set, or paragraph spacing. */
+  private design(what: string, v: string): void {
+    const f = this.file;
+    if (!f) return;
+    if (f.box) this.stopBox();
+    const t = f.t;
+    const next = what === 'theme' ? setTheme(t, v) : what === 'fonts' ? setThemeFonts(t, v) : what === 'colors' ? setThemeColors(t, v)
+      : what === 'styleset' ? setStyleSet(t, v) : setParaSpacing(t, v === 'default' ? null : v);
+    if (next === t) return;
+    f.ed.update(next, what === 'styleset' ? 'Style Set' : what === 'spacing' ? 'Paragraph Spacing' : 'Theme');
+  }
+
+  /** Design > Set as Default: new documents start with this one's theme, style set and spacing. */
+  private async designDefault(): Promise<void> {
+    const d = this.file?.t.design;
+    const what = d ? [d.theme && `the ${d.theme} theme`, !d.theme && d.fonts && `${d.fonts} fonts`, !d.theme && d.colors && `${d.colors} colours`, d.styleSet && `the ${d.styleSet} style set`, d.spacing && `${d.spacing} spacing`].filter(Boolean).join(', ') : '';
+    const got = await ask('Set as Default', [], { ok: what ? 'Set as Default' : 'Use the Standard Look', note: what ? `New documents will start with ${what}. (Documents already made keep their own look.)` : 'This document uses the standard look, so new documents will too.' });
+    if (!got) return;
+    this.host.setNewDesign?.(d && Object.keys(d).length ? d : null);
+    this.host.flash(what ? 'New documents will start with this design.' : 'New documents will start with the standard look.');
+  }
+
+  /** Change the whole document's look (watermark, page colour, page borders): one undo step. */
+  private setPageLook(patch: Partial<Pick<DocText, 'watermark' | 'pageColor' | 'pageBorder'>>, label: string): void {
+    const f = this.file;
+    if (!f) return;
+    const t = { ...f.t, ...patch };
+    for (const k of ['watermark', 'pageColor', 'pageBorder'] as const) if (t[k] === undefined) delete t[k];
+    f.ed.update(t, label);
+  }
+
+  /** Design > Watermark > Custom Watermark: the words, font, colour and layout. */
+  private async customWatermark(): Promise<void> {
+    const f = this.file!;
+    const w: Watermark = f.t.watermark ?? defaultWatermark();
+    const got = await ask('Watermark', [
+      { name: 'text', label: 'Text', value: w.text, suggestions: WATERMARKS },
+      { name: 'font', label: 'Font', value: w.font, suggestions: ['Calibri', 'Arial', 'Times New Roman', 'Inter', 'IBM Plex Sans'] },
+      { name: 'color', label: 'Colour', value: w.color, type: 'color' },
+      { name: 'layout', label: 'Layout', value: w.layout, options: [{ value: 'diagonal', label: 'Diagonal' }, { value: 'horizontal', label: 'Horizontal' }] },
+      { name: 'faded', label: 'Semitransparent', value: String(w.faded), type: 'checkbox' },
+    ], { ok: 'Apply', note: 'Words across every page, behind the text. Saved in Word files as Word’s own watermark, so Word shows and edits it too.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    if (!got.text.trim()) { this.setPageLook({ watermark: undefined }, 'Remove Watermark'); return; }
+    this.setPageLook({ watermark: { text: got.text.trim(), font: got.font.trim() || 'Calibri', color: got.color || '#c0c0c0', layout: got.layout === 'horizontal' ? 'horizontal' : 'diagonal', faded: got.faded === 'true' } }, 'Watermark');
+  }
+
+  /** Design > Page Borders: a line round every page. */
+  private async pageBorders(): Promise<void> {
+    const f = this.file!;
+    const b: PageBorder = f.t.pageBorder ?? defaultPageBorder();
+    const got = await ask('Page Borders', [
+      { name: 'on', label: 'A border round every page', value: String(!!f.t.pageBorder), type: 'checkbox' },
+      { name: 'style', label: 'Style', value: b.style, options: [{ value: 'single', label: 'Single line' }, { value: 'double', label: 'Double line' }, { value: 'thick', label: 'Thick and thin' }, { value: 'dotted', label: 'Dotted' }, { value: 'dashed', label: 'Dashed' }] },
+      { name: 'width', label: 'Width', value: String(b.width), unit: 'pt', options: ['0.25', '0.5', '0.75', '1', '1.5', '2.25', '3', '4.5', '6'].map((x) => ({ value: x, label: `${x} pt` })) },
+      { name: 'color', label: 'Colour', value: b.color, type: 'color' },
+      { name: 'from', label: 'Measure from', value: b.from, options: [{ value: 'page', label: 'Edge of page' }, { value: 'text', label: 'Text' }] },
+      { name: 'space', label: 'Distance', value: String(b.space), unit: 'pt', type: 'number' },
+    ], { ok: 'OK', note: 'Saved in Word files as Word’s own page border. From the edge of the page, Word allows up to 31 pt; from the text, up to 31 pt outside the margins.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    if (got.on !== 'true') { this.setPageLook({ pageBorder: undefined }, 'Page Borders'); return; }
+    const style = (['single', 'double', 'thick', 'dotted', 'dashed'] as const).find((x) => x === got.style) ?? 'single';
+    const space = Math.max(0, Math.min(31, Number(got.space) || 0));
+    this.setPageLook({ pageBorder: { style, width: Math.max(0.25, Math.min(6, Number(got.width) || 0.5)), color: got.color || '#000000', from: got.from === 'text' ? 'text' : 'page', space } }, 'Page Borders');
+  }
+
+  /** Paragraph > Tabs: the tab stops of the paragraphs picked, typed in (as the ruler sets them). */
+  private async tabsDialog(): Promise<void> {
+    const f = this.file!;
+    const cur = this.ed.currentPara().tabs ?? [];
+    const KIND: Record<string, TabStopKind> = { left: 'left', l: 'left', centre: 'center', center: 'center', c: 'center', right: 'right', r: 'right', decimal: 'decimal', d: 'decimal' };
+    const LEAD: Record<string, 'dot' | 'hyphen' | 'underscore'> = { dot: 'dot', dots: 'dot', '.': 'dot', hyphen: 'hyphen', dash: 'hyphen', '-': 'hyphen', line: 'underscore', underscore: 'underscore', _: 'underscore' };
+    const shown = cur.map((t) => `${showLength(t.pos, 'in')} in ${t.kind === 'center' ? 'centre' : t.kind}${t.leader ? ` ${t.leader === 'underscore' ? 'line' : t.leader}` : ''}`).join('\n');
+    const got = await ask('Tabs', [
+      { name: 'tabs', label: 'Tab stops, one per line', value: shown, type: 'textarea', placeholder: '1 in left\n3.25 in decimal\n6.5 in right dot' },
+    ], { ok: 'OK', note: 'Each line: where (from the left margin, in inches unless you give cm, mm or pt), then left, centre, right or decimal, then dot, hyphen or line for a leader. Past the last one, tabs stop every half inch. The ruler (View > Ruler) sets them by clicking too.' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const tabs: TabStop[] = [];
+    for (const line of got.tabs.split('\n')) {
+      const m = /^\s*(-?[\d.]+\s*(?:in|inch|inches|"|cm|mm|pt)?)\s*(\w+)?\s*(\S+)?\s*$/i.exec(line);
+      if (!m) continue;
+      const pos = parseLength(m[1], 'in');
+      if (pos === null || pos <= 0) continue;
+      const kind = KIND[(m[2] ?? 'left').toLowerCase()] ?? 'left';
+      const leader = m[3] ? LEAD[m[3].toLowerCase()] : undefined;
+      tabs.push(leader ? { pos, kind, leader } : { pos, kind });
+    }
+    tabs.sort((a, b) => a.pos - b.pos);
+    this.ed.setSelectedParas({ tabs: tabs.length ? tabs : undefined }, 'tabs');
+  }
+
+  /** View > Ruler on or off (remembered). */
+  private setRuler(on: boolean): void {
+    docRulerPrefs.shown = on;
+    docRulerPrefs.changed?.();
+    this.showRuler();
+    this.focus();
+  }
+
+  /** Show the ruler as the settings say (not in Read Mode, which has no editing). */
+  showRuler(): void {
+    const on = docRulerPrefs.shown && !!this.file && this.file.view.kind !== 'read';
+    this.ruler.shown = on;
+    for (const b of this.ribbon.querySelectorAll<HTMLButtonElement>('[data-doc="view-ruler"]')) b.setAttribute('aria-pressed', String(docRulerPrefs.shown));
+  }
+
+  /** Where the paragraph the caret is in sits on screen, for the ruler (none while typing in a text box or cell). */
+  private rulerGeometry(): RulerGeometry | null {
+    const f = this.file;
+    if (!f || f.box) return null;
+    const lay = f.layout();
+    const c = f.ed.caret();
+    const l = lay.text.lines[c.line];
+    const p = lay.pages.find((pg) => c.line >= pg.first && c.line < pg.end) ?? lay.pages[0];
+    if (!p) return null;
+    const pg = p.setup;
+    const y = l?.y ?? p.top;
+    const sx = (x: number) => this.view.toScreen(x, y).x;
+    const colL = l?.band?.[0] ?? p.x + pg.left;
+    const colR = l?.band?.[1] ?? p.x + p.w - pg.right;
+    return { colLeft: sx(colL), colRight: sx(colR), pageLeft: sx(p.x), pageRight: sx(p.x + p.w), zoom: this.view.zoom, para: f.ed.currentPara() };
+  }
+
+  /** The Styles pane's character styles: the selection (or the word at the caret) in one, or out of them all (null). */
+  private applyCharStyle(id: string | null): void {
+    const f = this.file;
+    if (!f || f.box) return;
+    const ed = this.ed;
+    let a = ed.start, b = ed.end;
+    if (a === b) {
+      const w = /[\p{L}\p{N}]/u;
+      while (a > 0 && w.test(ed.text[a - 1])) a--;
+      while (b < ed.text.length && w.test(ed.text[b])) b++;
+    }
+    if (a === b) { this.host.flash('Select the words to put in the character style first.'); return; }
+    ed.update(id ? applyCharStyle(f.t, a, b, id) : clearCharStyle(f.t, a, b), id ? 'Character style' : 'Clear character style');
+    this.focus();
+  }
+
+  /** Styles pane > New Style: a paragraph style from the paragraph the caret is in, or a character style from the words picked. */
+  private async newStyle(): Promise<void> {
+    const f = this.file;
+    if (!f || f.box) return;
+    const ed = this.ed;
+    const got = await ask('New Style', [
+      { name: 'name', label: 'Name', value: '' , placeholder: 'Experimental heading' },
+      { name: 'kind', label: 'Style type', value: ed.collapsed ? 'para' : 'char', options: [{ value: 'para', label: 'Paragraph (the whole paragraph’s look and spacing)' }, { value: 'char', label: 'Character (the look of the words picked)' }] },
+    ], { ok: 'Make Style', note: 'The new style takes the look of the text the caret is in, and is given to it. Change it later with Modify; every paragraph or word in it follows.' });
+    this.focus();
+    if (!got || this.file !== f || !got.name.trim()) return;
+    const look = ed.currentStyle();
+    const [a] = ed.selectedParas();
+    const made = got.kind === 'char' ? newCharStyle(f.t, got.name, ed.start, ed.end, look, ed.currentPara()) : newParaStyle(f.t, got.name, a, look);
+    ed.update(made.t, 'New style');
+    this.host.flash(`Made the style “${got.name.trim()}”. It is saved with the document, and in Word files as a Word style.`);
+  }
+
+  /** Styles pane > Modify: a paragraph style in the Style box; a character style here. */
+  private async modifyStyle(kind: 'para' | 'char', id: string): Promise<void> {
+    const f = this.file;
+    if (!f) return;
+    if (kind === 'para') {
+      // the Style box changes the caret's paragraph style: put the caret in one of its paragraphs first, if any
+      const paras = fitParas(f.t.paras, paraCount(rt.plainText(f.t.runs)));
+      const cur = (this.ed.currentPara().style ?? 'Normal') === id;
+      const at = cur ? -1 : paras.findIndex((p) => (p.style ?? 'Normal') === id);
+      if (!cur && at < 0) { this.host.flash('Give a paragraph this style first (click it in the list), then Modify changes how it looks.'); return; }
+      if (at >= 0) f.ed.setCaret(paraRange(f.ed.text, at).start);
+      this.panel.open('style', this.ribbon.querySelector<HTMLElement>('[data-doc="styles-pane"]'));
+      return;
+    }
+    const s: CharStyle = charStylesOf(f.t)[id];
+    if (!s) return;
+    const yesNo = (v: boolean | undefined) => (v === undefined ? 'same' : v ? 'on' : 'off');
+    const tri = [{ value: 'same', label: 'As the paragraph' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }];
+    const got = await ask(`Modify Style: ${s.name}`, [
+      { name: 'name', label: 'Name', value: s.name },
+      { name: 'font', label: 'Font', value: s.font ?? '', placeholder: 'As the paragraph' },
+      { name: 'size', label: 'Size', value: s.size ? String(s.size) : '', unit: 'pt', placeholder: 'As the paragraph' },
+      { name: 'bold', label: 'Bold', value: yesNo(s.bold), options: tri },
+      { name: 'italic', label: 'Italic', value: yesNo(s.italic), options: tri },
+      { name: 'underline', label: 'Underline', value: String(!!s.underline), type: 'checkbox' },
+      { name: 'smallCaps', label: 'Small caps', value: String(!!s.smallCaps), type: 'checkbox' },
+      { name: 'colorOn', label: 'Own colour', value: String(!!s.color), type: 'checkbox' },
+      { name: 'color', label: 'Colour', value: s.color ?? '#000000', type: 'color' },
+    ], { ok: 'OK', note: 'Every word in this style changes with it (except what was formatted by hand).' });
+    this.focus();
+    if (!got || this.file !== f) return;
+    const tv = (v: string) => (v === 'on' ? true : v === 'off' ? false : undefined);
+    const next: CharStyle = { id: s.id, name: got.name.trim() || s.name, custom: s.custom };
+    if (got.font.trim()) next.font = got.font.trim();
+    const size = Number(got.size);
+    if (got.size.trim() && size > 0) next.size = size;
+    const bold = tv(got.bold), italic = tv(got.italic);
+    if (bold !== undefined) next.bold = bold;
+    if (italic !== undefined) next.italic = italic;
+    if (got.underline === 'true') next.underline = true;
+    if (got.smallCaps === 'true') next.smallCaps = true;
+    if (s.allCaps) next.allCaps = true;
+    if (s.strike) next.strike = true;
+    if (got.colorOn === 'true') next.color = got.color;
+    f.ed.update(modifyCharStyle(f.t, next), 'Change style');
+  }
+
+  /** Styles pane > Delete (only styles made here). */
+  private removeStyle(_kind: 'para' | 'char', id: string): void {
+    const f = this.file;
+    if (!f) return;
+    const next = deleteStyle(f.t, id);
+    if (next === f.t) { this.host.flash('Only styles you made can be deleted (the standard ones can be changed with Modify).'); return; }
+    f.ed.update(next, 'Delete style');
   }
 
   // ---------------------------------------------------------------- the ribbon
@@ -2206,14 +4409,65 @@ export class DocumentMode {
       const cmd = b.dataset.doc!;
       const box = /^box-(para|style|page|hf)$/.exec(cmd);
       if (box) { this.panel.open(box[1] as DocBoxKey, b); return; }
+      // the table galleries open under their buttons
+      // the menus that open under their buttons
+      const menus: Record<string, (x: number, y: number) => void> = {
+        'para-borders': (x, y) => this.paragraphs.bordersMenu(x, y),
+        'quick-parts': (x, y) => this.inserts.quickPartsMenu(x, y),
+        'cover-page': (x, y) => this.inserts.coverMenu(x, y),
+        'doc-select': (x, y) => this.selectMenu(x, y),
+        'show-markup': (x, y) => this.showMarkupMenu(x, y),
+        'arrange-position': (x, y) => this.arranging.positionMenu(x, y),
+        'arrange-rotate': (x, y) => this.arranging.rotateMenu(x, y),
+        'arrange-forward': (x, y) => this.arranging.orderMenu(x, y, true),
+        'arrange-backward': (x, y) => this.arranging.orderMenu(x, y, false),
+        'arrange-group': (x, y) => this.arranging.groupMenu(x, y, b),
+      };
+      if (menus[cmd] && this.file) {
+        const br = b.getBoundingClientRect();
+        menus[cmd](br.left, br.bottom + 2);
+        return;
+      }
+      if (cmd === 'table-styles' || cmd === 'table-borders') {
+        const br = b.getBoundingClientRect();
+        if (cmd === 'table-styles') this.tables.styleGallery(br.left, br.bottom + 2);
+        else this.tables.bordersMenu(br.left, br.bottom + 2);
+        return;
+      }
       if (!this.run(cmd)) this.host.command(cmd);
     });
+    // Design's galleries, from the themes and style sets
+    const fill = (id: string, names: string[], extra: [string, string][] = []) => {
+      const sel = r.querySelector<HTMLSelectElement>(id);
+      if (!sel) return;
+      for (const [v, label] of [...extra, ...names.map((n): [string, string] => [n, n])]) {
+        const o = document.createElement('option');
+        o.value = v;
+        o.textContent = label;
+        if (!v) o.hidden = true;
+        sel.append(o);
+      }
+    };
+    fill('#doc-theme', THEMES.map((x) => x.name), [['', 'Mixed']]);
+    fill('#doc-styleset', STYLE_SETS.map((x) => x.name));
+    fill('#doc-theme-colors', THEME_COLORS.map((x) => x.name), [['', 'Theme\'s']]);
+    fill('#doc-theme-fonts', THEME_FONTS.map((x) => x.name), [['', 'Theme\'s']]);
+    fill('#doc-para-spacing', PARA_SPACINGS.map((x) => x.name), [['default', 'Style Set\'s']]);
+    for (const o of r.querySelectorAll<HTMLOptionElement>('#doc-styleset option')) o.title = STYLE_SETS.find((x) => x.name === o.value)?.description ?? '';
+    for (const o of r.querySelectorAll<HTMLOptionElement>('#doc-theme-fonts option')) { const tf = THEME_FONTS.find((x) => x.name === o.value); if (tf) o.textContent = `${tf.name} (${tf.heading}${tf.body !== tf.heading ? ` / ${tf.body}` : ''})`; }
     // selects that run a command: margins, paper, orientation, page numbers
     for (const sel of r.querySelectorAll<HTMLSelectElement>('select[data-doc-prefix]')) {
       sel.addEventListener('change', () => { const v = sel.value; this.run(`${sel.dataset.docPrefix}-${v}`); if (v !== 'custom' && v !== 'more') this.focus(); });
     }
-    // zoom, under the pages
-    for (const b of document.querySelectorAll<HTMLButtonElement>('#doc-statusbar [data-doc]')) {
+    // Outlining: the paragraph's level, the levels shown, and how body text shows
+    const level = r.querySelector<HTMLSelectElement>('#doc-outline-level')!;
+    level.addEventListener('change', () => { this.setOutlineLevel(Number(level.value)); this.focus(); });
+    const show = r.querySelector<HTMLSelectElement>('#doc-outline-show')!;
+    show.addEventListener('change', () => { this.run(show.value === '0' ? 'outline-all' : `outline-level-${show.value}`); this.focus(); });
+    r.querySelector<HTMLInputElement>('#doc-outline-format')!.addEventListener('change', () => { this.run('outline-format'); this.focus(); });
+    r.querySelector<HTMLInputElement>('#doc-outline-first')!.addEventListener('change', () => { this.run('outline-first'); this.focus(); });
+    // zoom and the views, under the pages; turning the pages in Read Mode
+    for (const b of document.querySelectorAll<HTMLButtonElement>('#doc-statusbar [data-doc], #doc-readbar [data-doc]')) {
       b.addEventListener('mousedown', (e) => e.preventDefault());
       b.addEventListener('click', () => this.run(b.dataset.doc!));
     }
@@ -2228,9 +4482,13 @@ export class DocumentMode {
         if (e.key === 'Escape') { e.preventDefault(); this.focus(); }
       });
     };
-    go(font, () => { if (font.value.trim() && this.file) this.ed.setStyle({ font: font.value.trim() }); });
-    go(size, () => { const v = Number(size.value); if (v > 0 && v <= 1638 && this.file) this.ed.setStyle({ size: v }); });
-    colour.addEventListener('change', () => { if (this.file) this.ed.setStyle({ color: colour.value.toLowerCase() === '#000000' ? undefined : colour.value }); this.focus(); });
+    go(font, () => { if (font.value.trim() && this.file) this.setTextStyle({ font: font.value.trim() }); });
+    go(size, () => { const v = Number(size.value); if (v > 0 && v <= 1638 && this.file) this.setTextStyle({ size: v }); });
+    colour.addEventListener('change', () => { if (this.file) this.setTextStyle({ color: colour.value.toLowerCase() === '#000000' ? undefined : colour.value }); this.focus(); });
+    const shading = r.querySelector<HTMLInputElement>('#doc-shading');
+    shading?.addEventListener('change', () => { this.paragraphs.shade(shading.value); });
+    const pageCol = r.querySelector<HTMLInputElement>('#doc-page-colour')!;
+    pageCol.addEventListener('change', () => { this.setPageLook({ pageColor: pageCol.value.toLowerCase() === '#ffffff' ? undefined : pageCol.value }, 'Page Color'); this.focus(); });
     // Layout > Paragraph: indents (inches) and spacing (points); any unit can be typed
     const para = (id: string, unit: 'in' | 'pt', patch: (n: number) => Partial<ParaStyle>) => {
       const el = r.querySelector<HTMLInputElement>(id)!;
@@ -2247,6 +4505,18 @@ export class DocumentMode {
       const n = Math.round(Number(head.value));
       if (tg && Number.isFinite(n)) this.setTable(tg.id, { ...tg.t, head: Math.max(0, Math.min(tg.t.rows.length, n)) }, 'Heading rows');
     });
+    // Table Design: the style options, and the pen the borders are drawn with
+    for (const box of r.querySelectorAll<HTMLInputElement>('[data-tbl-look]')) {
+      box.addEventListener('change', () => { this.tables.toggleLook(box.dataset.tblLook as keyof TableLook); this.focus(); });
+    }
+    const penStyle = r.querySelector<HTMLSelectElement>('#doc-pen-style')!;
+    for (const [v, label] of BORDER_STYLES) penStyle.append(new Option(label, v));
+    penStyle.addEventListener('change', () => { this.tables.setPen({ style: penStyle.value as BorderLine['style'] }); this.focus(); });
+    const penWidth = r.querySelector<HTMLSelectElement>('#doc-pen-width')!;
+    for (const w of BORDER_WIDTHS) penWidth.append(new Option(`${w} pt`, String(w)));
+    penWidth.addEventListener('change', () => { this.tables.setPen({ w: Number(penWidth.value) }); this.focus(); });
+    const penColour = r.querySelector<HTMLInputElement>('#doc-pen-colour')!;
+    penColour.addEventListener('change', () => { this.tables.setPen({ color: penColour.value.toLowerCase() }); this.focus(); });
     const shade = r.querySelector<HTMLInputElement>('#doc-tbl-shade')!;
     shade.addEventListener('change', () => { this.shade(shade.value.toLowerCase() === '#ffffff' ? undefined : shade.value); this.focus(); });
     const width = r.querySelector<HTMLInputElement>('#doc-tbl-width')!;
@@ -2282,6 +4552,8 @@ export class DocumentMode {
     press('doc-sub', !!s.sub);
     press('doc-sup', !!s.sup);
     press('doc-formula', !!s.formula);
+    press('doc-strike', !!s.strike);
+    press('doc-small-caps', !!s.smallCaps);
     press('doc-highlight', !!s.highlight);
     const align = para.align ?? 'left';
     press('doc-align-left', align === 'left');
@@ -2313,7 +4585,8 @@ export class DocumentMode {
       const el = this.ribbon.querySelector<HTMLSelectElement>(id);
       if (el && el !== active) el.value = [...el.options].some((o) => o.value === v) ? v : 'other';
     };
-    const pg = f.t.page;
+    const sec = this.section();
+    const pg = sec.page;
     const near = (a: number, b: number) => Math.abs(a - b) < 0.5;
     const margins = Object.entries({ normal: [1, 1], narrow: [0.5, 0.5], moderate: [1, 0.75], wide: [1, 2] })
       .find(([, [tb, lr]]) => near(pg.top, tb * INCH) && near(pg.bottom, tb * INCH) && near(pg.left, lr * INCH) && near(pg.right, lr * INCH));
@@ -2321,10 +4594,32 @@ export class DocumentMode {
     const short = Math.min(pg.w, pg.h), long = Math.max(pg.w, pg.h);
     pick('#doc-paper', near(short, LETTER.w) && near(long, LETTER.h) ? 'letter' : near(short, A4.w) && near(long, A4.h) ? 'a4' : 'other');
     pick('#doc-orient', pg.w > pg.h ? 'landscape' : 'portrait');
-    pick('#doc-numbers', f.t.hf.numbers);
-    pick('#doc-columns', String(f.t.page.cols ?? 1));
-    press('numbers-s', f.t.hf.prefix === 'S');
+    pick('#doc-numbers', sec.hf.numbers);
+    pick('#doc-columns', String(pg.cols ?? 1));
+    press('numbers-s', sec.hf.prefix === 'S');
+    const breaks = this.ribbon.querySelector<HTMLSelectElement>('#doc-breaks');
+    if (breaks && breaks !== active) breaks.value = '';
+    // the lists of choices show their name again after a choice
+    for (const id of ['#doc-case', '#doc-bulletlib', '#doc-multilevel']) {
+      const el = this.ribbon.querySelector<HTMLSelectElement>(id);
+      if (el && el !== active) el.value = '';
+    }
+    const wm = f.t.watermark;
+    const wmAt = wm ? WATERMARKS.indexOf(wm.text) : -1;
+    pick('#doc-watermark', !wm ? '' : wmAt >= 0 ? String(wmAt) : 'other');
+    const pageCol = this.ribbon.querySelector<HTMLInputElement>('#doc-page-colour');
+    if (pageCol && pageCol !== active) pageCol.value = f.t.pageColor ?? '#ffffff';
+    pick('#doc-linenums', sec.lines?.restart ?? 'none');
+    pick('#doc-hyphen', f.t.hyphen?.auto ? 'auto' : 'none');
     press('track-changes', !!f.t.track);
+    pick('#doc-markup', f.review.mode);
+    const des = f.t.design ?? {};
+    pick('#doc-theme', des.theme ?? (des.fonts || des.colors ? '' : 'Journal'));
+    pick('#doc-styleset', des.styleSet ?? 'Journal');
+    pick('#doc-theme-fonts', des.fonts ?? '');
+    pick('#doc-theme-colors', des.colors ?? '');
+    pick('#doc-para-spacing', des.spacing ?? 'default');
+    press('restrict-editing', !!f.t.protect);
     press('show-comments', this.comments.shown);
     const fig = this.pickedObject() ?? f.box?.id ?? null;
     const wrapSel = this.ribbon.querySelector<HTMLSelectElement>('#doc-wrap');
@@ -2353,7 +4648,24 @@ export class DocumentMode {
       for (const a of ['left', 'center', 'right']) press(`table-align-${a}`, al === a);
       const v = tg.t.rows[tg.r]?.[tg.c]?.valign ?? 'top';
       for (const a of ['top', 'center', 'bottom']) press(`table-valign-${a}`, v === a);
+      // the style's options: off for a table with no style (they change nothing there)
+      const look = lookOfTable(tg.t);
+      for (const box of this.ribbon.querySelectorAll<HTMLInputElement>('[data-tbl-look]')) {
+        const k = box.dataset.tblLook as keyof TableLook;
+        box.checked = k === 'header' ? look.header && (tg.t.head > 0 || !!tg.t.style) : look[k];
+        box.disabled = !tg.t.style && k !== 'header';
+      }
     }
+    press('table-painter', this.tables.painting);
+    press('table-gridlines', this.view.gridlines);
+    press('nav-pane', this.nav.open);
+    const pen = this.tables.pen;
+    pick('#doc-pen-style', pen.style);
+    pick('#doc-pen-width', String(pen.w));
+    const penColour = this.ribbon.querySelector<HTMLInputElement>('#doc-pen-colour');
+    if (penColour && penColour !== active) penColour.value = pen.color;
+    const sw = this.ribbon.querySelector<HTMLElement>('#doc-pen-swatch');
+    if (sw) { const svg = penSwatch(pen); if (sw.innerHTML !== svg) sw.innerHTML = svg; }
     this.showZoom();
     const status = document.querySelector<HTMLElement>('#doc-status');
     if (status) {
@@ -2361,13 +4673,33 @@ export class DocumentMode {
       const c = f.ed.caret();
       const page = lay.pages.findIndex((p) => c.line >= p.first && c.line < p.end);
       const words = f.ed.text.split(/[\s￼]+/).filter((w) => /\p{L}|\p{N}/u.test(w)).length;
-      status.textContent = `Page ${page + 1} of ${lay.pages.length}  ·  ${words.toLocaleString()} word${words === 1 ? '' : 's'}`;
+      const wordCount = `${words.toLocaleString()} word${words === 1 ? '' : 's'}`;
+      // the views without pages have no page numbers to show
+      const where = lay.pages.some((p) => p.section > 0) ? `  ·  Section ${(lay.pages[page]?.section ?? 0) + 1}` : '';
+      status.textContent = continuous(f.view.kind) ? `${VIEW_LABEL[f.view.kind]}  ·  ${wordCount}` : `Page ${page + 1} of ${lay.pages.length}${where}  ·  ${wordCount}`;
     }
   }
 }
 
 /** Our own copy of document text: its runs, paragraphs, figures and fields, and the references its citations cite. */
 interface OwnCopy { runs: TextRun[]; paras: ParaStyle[]; objects: Record<number, DocObject>; references?: Reference[] }
+
+/** Is this pasted HTML a table and nothing more (cells copied), rather than text with a table in it? */
+export function onlyTable(html: string): boolean {
+  if (!/<table[\s>]/i.test(html)) return false;
+  const body = new DOMParser().parseFromString(html, 'text/html').body;
+  if (!body.querySelector('table')) return false;
+  for (const t of [...body.querySelectorAll('table')]) t.remove();
+  return !(body.textContent ?? '').trim();
+}
+
+/** Tab-separated text with the same number of cells on every line (cells copied, with no HTML), as rows; else null. */
+export function tsvTable(text: string): ReturnType<typeof pastedTable> {
+  const lines = text.replace(/\r\n?/g, '\n').replace(/\n+$/, '').split('\n');
+  const tabs = (l: string) => l.split('\t').length - 1;
+  if (!tabs(lines[0]) || lines.some((l) => tabs(l) !== tabs(lines[0]))) return null;
+  return pastedTable(null, text);
+}
 
 /** How each character of some runs looks (its position, formula style worked out, and italics). */
 function runLooks(runs: TextRun[]): CharLook[] {
@@ -2382,10 +4714,6 @@ function runLooks(runs: TextRun[]): CharLook[] {
 }
 
 /** How many rows a cell reaches down (always one: cells join across, not down). */
-function spanRows(_t: TableData, _r: number): number {
-  return 1;
-}
-
 /** A table with each cell changed by a function. */
 function mapCells(t: TableData, f: (cell: TableData['rows'][number][number], r: number, c: number) => TableData['rows'][number][number]): TableData {
   return { ...t, rows: t.rows.map((row, r) => row.map((cell, c) => f(cell, r, c))) };
@@ -2400,7 +4728,7 @@ export function fitDocColumns(t: TableData, f: DocFile, textW: number): TableDat
     let w = 18;
     t.rows.forEach((row, r) => {
       if (!row[c] || isCovered(t, r, c) || spanOf(t, r, c) > 1) return;
-      w = Math.max(w, f.layouter.naturalWidth(f.t, row[c].runs, row[c].paras));
+      w = Math.max(w, f.layouter.naturalCellWidth(f.t, t, r, c));
     });
     return Math.ceil(w);
   });

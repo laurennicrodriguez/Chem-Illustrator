@@ -109,6 +109,8 @@ describe('an animation on a slide', () => {
     const slide = strFromU8(files['ppt/slides/slide1.xml']);
     expect(slide).toContain('<a:videoFile r:link=');
     expect(slide).toContain('<p14:media');
+    // PowerPoint's own extension id: with any other it ignores the embedded copy and looks for a linked file
+    expect(slide).toContain('<p:ext uri="{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}"><p14:media');
     expect(slide).toContain('presetClass="mediacall"');
     expect([...files['ppt/media/media1.mp4']]).toEqual([...mp4]);
     expect(strFromU8(files['[Content_Types].xml'])).toContain('Extension="mp4" ContentType="video/mp4"');

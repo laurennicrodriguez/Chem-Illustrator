@@ -14,13 +14,15 @@ export type ChemRequest =
   | { type: 'analyze'; id: number; mols: { molblock: string; map: number[] }[] }
   | { type: 'stereo'; id: number; mols: { molblock: string; skip: number[]; generic: [number, string][] }[] }
   | { type: 'smilesToMol'; id: number; smiles: string }
-  | { type: 'molToSmiles'; id: number; molblock: string }
+  | { type: 'molToSmiles'; id: number; molblock: string; loose?: boolean }
   /** Sheet properties of molecules, each given as a molfile or a SMILES string. */
   | { type: 'props'; id: number; mols: string[] }
   /** Which molecules (molfiles or SMILES) contain the query (a molfile): its atoms and bonds, with anything else attached. */
   | { type: 'substructure'; id: number; query: string; mols: string[] }
   /** The pieces a molfile falls into when bonds (pairs of molfile atoms, 0-based) are broken. */
-  | { type: 'fragments'; id: number; molblock: string; cuts: [number, number][] };
+  | { type: 'fragments'; id: number; molblock: string; cuts: [number, number][] }
+  /** The largest part `mol` shares with `ref` (both molfiles): pairs of matching atoms, [ref atom, mol atom], 0-based. */
+  | { type: 'common'; id: number; ref: string; mols: string[] };
 
 export interface FragmentResult {
   formula: string;
@@ -42,7 +44,8 @@ export type ChemResponse =
   | { type: 'molToSmiles'; id: number; smiles: string | null }
   | { type: 'props'; id: number; results: (MolProps | { error: string })[] }
   | { type: 'substructure'; id: number; results: (boolean | null)[]; error?: string }
-  | { type: 'fragments'; id: number; results: MassFragment[] | { error: string } };
+  | { type: 'fragments'; id: number; results: MassFragment[] | { error: string } }
+  | { type: 'common'; id: number; results: ([number, number][] | null)[] };
 
 let RDKit: any = null;
 const post = (m: ChemResponse) => (self as unknown as DedicatedWorkerGlobalScope).postMessage(m);
@@ -65,6 +68,34 @@ function analyzeOne(molblock: string): FragmentResult {
     return { formula, exact: d.exactmw, mw: d.amw, charge, smiles: mol.get_smiles(), props };
   } finally {
     mol.delete();
+  }
+}
+
+/**
+ * The atoms two molecules share, by maximum common substructure (whole rings only, ring bonds
+ * matching ring bonds, elements and bond orders alike), as pairs [ref atom, mol atom].
+ */
+function commonPart(ref: string, other: string): [number, number][] | null {
+  const a = RDKit.get_mol(ref), b = RDKit.get_mol(other);
+  const list = new RDKit.MolList();
+  let q: any = null;
+  try {
+    if (!a?.is_valid() || !b?.is_valid()) return null;
+    list.append(a);
+    list.append(b);
+    const smarts: string = RDKit.get_mcs_as_smarts(list, JSON.stringify({ AtomCompare: 'Elements', BondCompare: 'Order', RingMatchesRingOnly: true, CompleteRingsOnly: true, Timeout: 2 }));
+    if (!smarts) return null;
+    q = RDKit.get_qmol(smarts);
+    if (!q?.is_valid()) return null;
+    const ma = JSON.parse(a.get_substruct_match(q)).atoms as number[] | undefined;
+    const mb = JSON.parse(b.get_substruct_match(q)).atoms as number[] | undefined;
+    if (!ma?.length || !mb || ma.length !== mb.length) return null;
+    return ma.map((x, i) => [x, mb[i]]);
+  } finally {
+    q?.delete?.();
+    list.delete?.();
+    a?.delete?.();
+    b?.delete?.();
   }
 }
 
@@ -117,7 +148,7 @@ self.onmessage = async (e: MessageEvent<ChemRequest>) => {
       mol.delete();
       post({ type: 'smilesToMol', id: m.id, molblock: mb });
     } else if (m.type === 'molToSmiles') {
-      const mol = RDKit.get_mol(m.molblock);
+      const mol = m.loose ? RDKit.get_mol(m.molblock, JSON.stringify({ sanitize: false })) : RDKit.get_mol(m.molblock);
       const smiles = mol && mol.is_valid() ? mol.get_smiles() : null;
       mol?.delete();
       post({ type: 'molToSmiles', id: m.id, smiles });
@@ -127,6 +158,8 @@ self.onmessage = async (e: MessageEvent<ChemRequest>) => {
       post({ type: 'substructure', id: m.id, ...substructureMatches(RDKit, m.query, m.mols) });
     } else if (m.type === 'fragments') {
       post({ type: 'fragments', id: m.id, results: massFragments(RDKit, m.molblock, m.cuts) });
+    } else if (m.type === 'common') {
+      post({ type: 'common', id: m.id, results: m.mols.map((x) => commonPart(m.ref, x)) });
     }
   } catch (err) {
     post({ type: 'error', id: 'id' in m ? (m as { id: number }).id : undefined, message: String(err) });

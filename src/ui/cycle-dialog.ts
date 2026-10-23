@@ -36,7 +36,7 @@ export function askCycle(given = 0): Promise<CycleChoice | null> {
       <label class="ask-row"><span>Direction</span><select name="dir"><option value="cw">Clockwise</option><option value="acw">Anticlockwise</option></select></label>
       <label class="ask-row"><span>Step names</span><select name="names"><option value="short">Short (OA, TM, RE)</option><option value="full">In full (oxidative addition)</option><option value="none">None</option></select></label>
       <label class="ask-row ask-check"><input name="arrows" type="checkbox" /><span>What comes in and goes out on small curved arrows (otherwise written outside the loop)</span></label>
-      <p class="muted small">Type _ for a subscript and ^ for a superscript: L_nPd^0, Pd^{II}, X^−. Digits in formulas drop by themselves (ArB(OH)2). Afterwards, every species, name and arrow can be edited, or swapped for a drawn structure (then Scheme ▸ Arrange ▸ Catalytic cycle tidies it again).</p>
+      <p class="muted small">Type _ for a subscript and ^ for a superscript: L_nPd^0, Pd^{II}, X^−. Digits in formulas drop by themselves (ArB(OH)2). Afterwards, every species, name and arrow can be edited, or swapped for a drawn structure (then Chemistry ▸ Arrange ▸ Catalytic cycle tidies it again).</p>
       <datalist id="cycle-steps">${STEP_NAMES.map((n) => `<option value="${n}"></option>`).join('')}</datalist>
       <p class="ask-buttons"><button type="button" data-act="cancel">Cancel</button> <button type="submit" class="primary">Insert</button></p>`;
     const $ = <T extends Element>(q: string) => form.querySelector<T>(q)!;

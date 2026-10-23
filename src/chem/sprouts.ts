@@ -79,11 +79,18 @@ export function sproutGroup(doc: Doc, id: number, kind: SproutKind): number | nu
     }
     case 'carbonyl': {
       if (deg === 2 && !aromatic) { sprout(doc, id, 2, 'solid', 8); return id; }
-      const c = busy ? sprout(doc, sprout(doc, id).id) : sprout(doc, id);
+      // an end atom becomes the C=O and the chain carries on past it (so 2 then o makes an ester
+      // or acid); on a ring or branch point a new C=O is grown first
+      const c = busy ? sprout(doc, id) : a;
+      if (doc.degree(c.id) === 1) {
+        // the chain carries on zig-zag and the O takes the other side
+        const next = bondTo(doc, c, add(c, mul(sproutDir(doc, c.id), L)));
+        bondTo(doc, c, add(c, mul(sproutDir(doc, c.id), L)), 2, 'solid', 8);
+        return next.id;
+      }
       const [d1, d2] = sproutPair(doc, c.id);
       bondTo(doc, c, add(c, mul(d1, L)), 2, 'solid', 8);
-      bondTo(doc, c, add(c, mul(d2, L)));
-      return c.id;
+      return bondTo(doc, c, add(c, mul(d2, L))).id;
     }
     case 'phenyl': {
       const base = deg >= 2 ? sprout(doc, id) : a;
@@ -106,7 +113,8 @@ export function sproutGroup(doc: Doc, id: number, kind: SproutKind): number | nu
     case 'cyclobutyl':
     case 'cyclopropyl': {
       const n = kind === 'cyclohexyl' ? 6 : kind === 'cyclopentyl' ? 5 : kind === 'cyclobutyl' ? 4 : 3;
-      const base = busy || n <= 4 ? sprout(doc, id) : a;
+      // on a CH2 in a chain every size is a spiro ring; on an end atom the small rings hang off a bond
+      const base = busy || n <= 4 && deg !== 2 ? sprout(doc, id) : a;
       return far(placeRing(doc, ringOnAtom(base, ringDir(doc, base.id), n, L), { existing: [base.id], scale: a.s }));
     }
     case 'methylidene': {
@@ -120,6 +128,12 @@ export function sproutGroup(doc: Doc, id: number, kind: SproutKind): number | nu
       return bondTo(doc, base, add(base, mul(d2, L))).id;
     }
     case 'tbu': {
+      if (deg === 2 && !aromatic) {
+        // on a CH2 in a chain: a wedged and a plain methyl (a quaternary stereocentre)
+        const [d1, d2] = sproutPair(doc, id);
+        bondTo(doc, a, add(a, mul(d1, L)), 1, 'wedge');
+        return bondTo(doc, a, add(a, mul(d2, L))).id;
+      }
       const c = sprout(doc, id);
       const dir = norm(sub(c, a));
       for (const ang of [0, 90, -90]) bondTo(doc, c, add(c, mul(fromAngle(angleOf(dir) + ang * DEG), L)));
@@ -162,7 +176,7 @@ export function fuseChair(doc: Doc, bondId: number, second: boolean): number[] |
   const in3d = fusions3d(doc, t, bondId);
   if (in3d?.length) {
     const f = in3d[second && in3d.length > 1 ? 1 : 0];
-    return placeTemplate(doc, t, { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, { existing: f.existing, move: f.move, scale: b.s, noMerge: true });
+    return placeTemplate(doc, t, { origin: { x: 0, y: 0 }, scale: f.len, angle: 0, mirror: false, pts: f.pts }, { existing: f.existing, move: f.move, depth: f.depth, atomDepth: f.atomDepth, scale: b.s, noMerge: true });
   }
   const p = doc.atoms.get(b.a1)!, q = doc.atoms.get(b.a2)!;
   const ends = [[b.a1, b.a2], [b.a2, b.a1]];

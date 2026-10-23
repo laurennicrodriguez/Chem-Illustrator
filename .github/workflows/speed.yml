@@ -1,0 +1,78 @@
+name: Desktop speed
+
+# Times the real Windows app (WebView2) on big drawings: start-up, open, save, drag. Builds this
+# version and an older one (main by default) the same way and prints both, for comparing.
+# Start it by hand from the Actions tab; it also runs when the timing script itself changes on a
+# working branch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Version to compare with (branch, tag or commit)
+        type: string
+        default: main
+      runs:
+        description: Starts of the app per version
+        type: string
+        default: '3'
+  push:
+    branches: ['claude/**']
+    paths: ['bench/desktop/**', 'bench/desktop.mjs', '.github/workflows/speed.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      BASE: ${{ inputs.base || 'main' }}
+      RUNS: ${{ inputs.runs || '3' }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}\target
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          path: base
+          ref: ${{ env.BASE }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> ../../target
+          key: speed
+      - name: Install packages (both versions)
+        shell: bash
+        run: |
+          (cd app && npm ci)
+          (cd base && npm ci)
+          # the older version is timed with this version's script
+          cp -r app/bench/desktop app/bench/desktop.mjs base/bench/
+      - name: Time the older version
+        shell: bash
+        run: |
+          (cd base && node bench/desktop.mjs build)
+          (cd base && node bench/desktop.mjs run "$RUNS") | tee base.txt
+      - name: Time this version
+        shell: bash
+        run: |
+          (cd app && node bench/desktop.mjs build)
+          (cd app && node bench/desktop.mjs run "$RUNS") | tee this.txt
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "### Windows (WebView2), $BASE vs this version"
+            echo '```'
+            echo "$BASE:"; cat base.txt
+            echo "this version:"; cat this.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

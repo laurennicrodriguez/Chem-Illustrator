@@ -72,6 +72,15 @@ export interface RingFrame {
   len: number;
   /** A bond (3-D, drawing units) as drawn on the page (y down, as in the drawing). */
   page: (v: V3) => Vec;
+  /** How far a point (3-D, drawing units) lies towards the reader. */
+  depth: (v: V3) => number;
+}
+
+/** The direction the oblique projection drops: towards the reader (y runs away from them). */
+function towardsReader(mirror: boolean): V3 {
+  const { A } = vocab(mirror);
+  const k = norm3(cross3(A[0], A[1]));
+  return k[1] < 0 ? k : mul3(k, -1);
 }
 
 const SNAP = Math.cos((15 * Math.PI) / 180);
@@ -132,7 +141,8 @@ export function latticeRing(pts: Vec[]): RingFrame | null {
         const P: V3[] = [[0, 0, 0]];
         for (let k = 0; k < n - 1; k++) P.push(add3(P[k], mul3(T[kinds[k][0]], kinds[k][1] * L)));
         if (dist3(add3(P[n - 1], mul3(T[kinds[n - 1][0]], kinds[n - 1][1] * L)), P[0]) > 0.2 * L) continue;
-        return { P, len: L, page: pageOf(mirror, Math.cos(th), Math.sin(th)) };
+        const kr = towardsReader(mirror);
+        return { P, len: L, page: pageOf(mirror, Math.cos(th), Math.sin(th)), depth: (v) => dot3(v, kr) };
       }
     }
   }
@@ -177,7 +187,7 @@ export function readRing(pts: Vec[], flat: boolean[] = []): RingFrame | null {
   if (obl) return obl;
   const lift = shadowLift(pts, flat);
   if (!lift) return null;
-  return { P: pts.map((p, k): V3 => [p.x, p.y, lift.z[k]]), len: lift.len, page: (v) => ({ x: v[0], y: v[1] }) };
+  return { P: pts.map((p, k): V3 => [p.x, p.y, lift.z[k]]), len: lift.len, page: (v) => ({ x: v[0], y: v[1] }), depth: (v) => v[2] };
 }
 
 /** Drawn flat: every bond the same length and every angle that of a regular polygon. */
@@ -234,7 +244,8 @@ function obliqueRing(pts: Vec[], flat: boolean[]): RingFrame | null {
       if (!lift) continue;
       const P = Q.map((q, k): V3 => add3(q, mul3(kd, lift.z[k])));
       const cr = Math.cos(th), sr = Math.sin(th);
-      return { P, len: lift.len, page: pageOf(mirror, cr, sr) };
+      const kr = towardsReader(mirror);
+      return { P, len: lift.len, page: pageOf(mirror, cr, sr), depth: (v) => dot3(v, kr) };
     }
   }
   return null;
@@ -466,6 +477,10 @@ export interface Fusion {
   join?: 'trans' | 'cis';
   /** Template atoms whose drawn atom (a plain bond end) moves to its place in `pts`. */
   move?: Set<number>;
+  /** How far each template atom lies towards the reader (drawing units), in step with the drawing. */
+  depth?: number[];
+  /** Depths for drawn atoms of the ring fused onto that had none (so its bonds cross the new ones properly). */
+  atomDepth?: Map<number, number>;
 }
 
 /**
@@ -514,6 +529,22 @@ export function fusions3d(doc: Doc, t: Template, bondId: number): Fusion[] | nul
   if (!fr) return null;
   const P = new Map<number, V3>(ring.map((id, k) => [id, fr.P[k]]));
   const L = fr.len;
+  // depth in the frame, turned to match the depths the ring's atoms already have (a shadow
+  // can be read either way round, and the frame puts its first atom at 0)
+  const raw = fr.P.map((v) => fr.depth(v));
+  const known = ring.map((id, k) => [raw[k], doc.atoms.get(id)!.depth] as const).filter((x): x is readonly [number, number] => x[1] !== undefined);
+  let sgn = 1, off = 0;
+  if (known.length) {
+    let bestErr = Infinity;
+    for (const s of [1, -1]) {
+      const o = known.reduce((acc, [r, d]) => acc + d - s * r, 0) / known.length;
+      const err = known.reduce((acc, [r, d]) => acc + (d - s * r - o) ** 2, 0);
+      if (err < bestErr) { bestErr = err; sgn = s; off = o; }
+    }
+  }
+  const depthOf = (v: V3) => sgn * fr.depth(v) + off;
+  const atomDepth = new Map<number, number>();
+  ring.forEach((id, k) => { if (doc.atoms.get(id)!.depth === undefined) atomDepth.set(id, sgn * raw[k] + off); });
   const n = ring.length;
   const p = b.a1, q = b.a2;
   // ring neighbours of the shared atoms, away from the shared bond
@@ -609,7 +640,7 @@ export function fusions3d(doc: Doc, t: Template, bondId: number): Fusion[] | nul
             const axial = (sl: { dir: V3 }[], i: number) => (sl.length === 2 && axialness(sl[i].dir) > axialness(sl[1 - i].dir) ? 1 : 0);
             const fa = face(sp, ia), fc = face(sq, ic);
             const join = fa && fc ? (fa === fc ? 'cis' : 'trans') : undefined;
-            out.push({ pts, existing, move, len: L, score: fit.rms / L + overlap * 0.5 + 0.03 * (axial(sp, ia) + axial(sq, ic)), ...(join ? { join } : {}) });
+            out.push({ pts, existing, move, len: L, depth: X.map(depthOf), atomDepth, score: fit.rms / L + overlap * 0.5 + 0.03 * (axial(sp, ia) + axial(sq, ic)), ...(join ? { join } : {}) });
           }
         }
       }

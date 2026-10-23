@@ -20,11 +20,18 @@ export interface Revision {
   date: string;
 }
 
-/** The name put on changes made here (Edit > Preferences, or asked the first time tracking is turned on). */
+/** The name put on changes made here (Edit > Settings, or asked the first time tracking is turned on). */
 let author = '';
 export const reviewAuthor = (): string => author;
 export function setReviewAuthor(name: string): void {
   author = name.trim();
+}
+
+/** Whether formatting changes are tracked too (Review > Track Changes options; on, as in Word). */
+let formatting = true;
+export const trackingFormatting = (): boolean => formatting;
+export function setTrackFormatting(on: boolean): void {
+  formatting = on;
 }
 
 /** Now, as Word writes it on a change (to the second, in UTC). */
@@ -46,13 +53,17 @@ export function parseRev(s: string | undefined): Revision | null {
 export interface Revisable { runs: TextRun[]; paras: ParaStyle[] }
 
 /** Every change, in order: where it is, what kind, who and when, and its text. Neighbouring runs with the same mark are one change. */
-export interface Change extends Revision { start: number; end: number; text: string }
+export interface Change { kind: RevKind | 'fmt'; author: string; date: string; start: number; end: number; text: string }
+
+/** What a change is, as a menu or message names it. */
+export const changeName = (kind: Change['kind']): string => (kind === 'ins' ? 'Insertion' : kind === 'del' ? 'Deletion' : 'Formatting change');
 
 export function changesIn(runs: TextRun[]): Change[] {
   const out: Change[] = [];
   let at = 0;
   for (const r of runs) {
-    const v = parseRev(r.rev);
+    const f = parseFmt(r.fmt);
+    const v: Omit<Change, 'start' | 'end' | 'text'> | null = parseRev(r.rev) ?? (f ? { kind: 'fmt', author: f.author, date: f.date } : null);
     const end = at + r.text.length;
     if (v) {
       const last = out[out.length - 1];
@@ -121,6 +132,8 @@ export function trackedReplace<T extends Revisable>(t: T, start: number, end: nu
  */
 export function decide<T extends Revisable>(t: T, accept: boolean, start = 0, end = Infinity): T {
   t = { ...t, paras: fitParas(t.paras, paraCount(rt.plainText(t.runs))) };
+  // formatting changes first (they don't move the text)
+  t = { ...t, runs: decideFormatting(t.runs, accept, start, end) };
   const n = rt.plainText(t.runs).length;
   const ps = pieces(t.runs, Math.max(0, start), Math.min(n, end)).filter((p) => p.rev);
   // marks taken off first (offsets don't change), then text taken away from the end back
@@ -174,7 +187,7 @@ export function decideEverywhere<T extends WithObjects>(t: T, accept: boolean): 
 export const accepted = <T extends Revisable>(t: T): T => decide(t, true);
 
 /** Does the text have tracked changes? */
-export const hasChanges = (runs: TextRun[]): boolean => runs.some((r) => r.rev);
+export const hasChanges = (runs: TextRun[]): boolean => runs.some((r) => r.rev || r.fmt);
 
 /** Colours for each person's changes (Word's order: the first person red, then blue, green…). */
 export const REVIEW_COLOURS = ['#c00000', '#1f5fbf', '#2e7d32', '#8e24aa', '#ef6c00', '#00838f', '#ad1457', '#5d4037'];
@@ -183,8 +196,9 @@ export const REVIEW_COLOURS = ['#c00000', '#1f5fbf', '#2e7d32', '#8e24aa', '#ef6
 export function authorColours(runs: TextRun[]): Map<string, string> {
   const out = new Map<string, string>();
   for (const r of runs) {
-    const v = parseRev(r.rev);
-    if (v && !out.has(v.author)) out.set(v.author, REVIEW_COLOURS[out.size % REVIEW_COLOURS.length]);
+    for (const who of [parseRev(r.rev)?.author, parseFmt(r.fmt)?.author]) {
+      if (who !== undefined && !out.has(who)) out.set(who, REVIEW_COLOURS[out.size % REVIEW_COLOURS.length]);
+    }
   }
   return out;
 }
@@ -193,10 +207,129 @@ export function authorColours(runs: TextRun[]): Map<string, string> {
 export function markedRuns(runs: TextRun[], colours = authorColours(runs)): TextRun[] {
   return runs.map((r) => {
     const v = parseRev(r.rev);
-    if (!v) return r;
+    if (!v) {
+      // a formatting change: the text in its author's colour
+      const f = parseFmt(r.fmt);
+      return f && r.obj === undefined ? { ...r, color: colours.get(f.author) ?? REVIEW_COLOURS[0] } : r;
+    }
     const color = colours.get(v.author) ?? REVIEW_COLOURS[0];
     // a figure keeps its own look; its line still shows the change
     if (r.obj !== undefined) return r;
     return v.kind === 'ins' ? { ...r, color, underline: true } : { ...r, color, strike: true };
   });
 }
+
+// ------------------------------------------------------------------ formatting changes
+
+/** A formatting change: who made it, when, and how the text looked before (its run style). */
+export interface FormatChange { author: string; date: string; old: rt.RunStyle }
+
+/** The style keys a formatting change records (the look, not the text's marks: changes, comments, links, figures). */
+const lookOf = (s: rt.RunStyle): rt.RunStyle => {
+  const { rev: _r, fmt: _f, cmt: _c, link: _l, obj: _o, hide: _h, ...rest } = s;
+  return rt.cleanStyle(rest);
+};
+
+export function fmtText(f: FormatChange): string {
+  return `${f.author.replace(/\|/g, '/')}|${f.date}|${JSON.stringify(lookOf(f.old))}`;
+}
+
+export function parseFmt(s: string | undefined): FormatChange | null {
+  if (!s) return null;
+  const a = s.indexOf('|'), b = s.indexOf('|', a + 1);
+  if (a < 0 || b < 0) return null;
+  let old: rt.RunStyle = {};
+  try { old = JSON.parse(s.slice(b + 1)) as rt.RunStyle; } catch { /* an unreadable mark: no look before */ }
+  return { author: s.slice(0, a), date: s.slice(a + 1, b), old };
+}
+
+/**
+ * Formatting changed while changes are tracked: the text between `start` and `end` of `after`
+ * whose look differs from `before` is marked with who changed it and how it looked (the look
+ * before the first change, when it was changed again; no mark when it is back as it was). Text
+ * inserted while tracking needs no mark (rejecting takes it away anyway).
+ */
+export function trackFormatting(before: TextRun[], after: TextRun[], start: number, end: number, who: { author: string; date: string }): TextRun[] {
+  const cuts = new Set<number>([start, end]);
+  let at = 0;
+  for (const r of before) { at += r.text.length; cuts.add(at); }
+  at = 0;
+  for (const r of after) { at += r.text.length; cuts.add(at); }
+  const marks = [...cuts].filter((x) => x >= start && x <= end).sort((x, y) => x - y);
+  const mid: TextRun[] = [];
+  for (let i = 0; i + 1 < marks.length; i++) {
+    const a = marks[i], b = marks[i + 1];
+    const was = rt.sliceRuns(before, a, b)[0];
+    for (const r of rt.sliceRuns(after, a, b)) {
+      if (!was || r.obj !== undefined || parseRev(r.rev)?.kind === 'ins') { mid.push(r); continue; }
+      const first = parseFmt(was.fmt)?.old ?? lookOf(rt.styleOf(was));
+      const same = rt.sameStyle(first, lookOf(rt.styleOf(r)));
+      const { fmt: _f, ...rest } = r;
+      mid.push(same ? rest : { ...rest, fmt: fmtText({ ...who, old: first }) });
+    }
+  }
+  const n = rt.plainText(after).length;
+  return rt.normalizeRuns([...rt.sliceRuns(after, 0, start), ...mid, ...rt.sliceRuns(after, end, n)]);
+}
+
+/** Accept (keep the new look) or reject (put back the old look) the formatting changes between two places. */
+export function decideFormatting(runs: TextRun[], accept: boolean, start = 0, end = Infinity): TextRun[] {
+  if (!runs.some((r) => r.fmt)) return runs;
+  const n = rt.plainText(runs).length;
+  const a = Math.max(0, start), b = Math.min(n, end);
+  const mid = rt.sliceRuns(runs, a, b).map((r) => {
+    const f = parseFmt(r.fmt);
+    if (!f) return r;
+    const { fmt: _f, ...rest } = r;
+    if (accept) return rest;
+    // the marks stay (changes, comments, links); the look goes back
+    const keep: rt.RunStyle = { rev: r.rev, cmt: r.cmt, link: r.link, obj: r.obj };
+    return { ...rt.cleanStyle({ ...keep, ...f.old }), text: r.text } as TextRun;
+  });
+  return rt.normalizeRuns([...rt.sliceRuns(runs, 0, a), ...mid, ...rt.sliceRuns(runs, b, n)]);
+}
+
+// ------------------------------------------------------------------ markup views
+
+/**
+ * How tracked changes show (Review > Display for Review, as in Word): All Markup marks every
+ * change in its author's colour; Simple Markup shows the text as it will read with a bar in the
+ * margin by each changed line; No Markup shows it as it will read; Original shows it as it was.
+ * Reviewers can be hidden: their changes show as in Simple Markup.
+ */
+export type MarkupView = 'all' | 'simple' | 'none' | 'original';
+
+export interface ReviewView {
+  mode: MarkupView;
+  /** Reviewers whose changes aren't marked. */
+  hidden?: string[];
+  /** Show insertions and deletions, and formatting changes (Show Markup). */
+  insDel?: boolean;
+  formatting?: boolean;
+}
+
+export const ALL_MARKUP: ReviewView = { mode: 'all' };
+
+/** The runs as a markup view shows them: changes marked, hidden (laid out with no width) or plain. */
+export function showChanges(runs: TextRun[], view: ReviewView = ALL_MARKUP, colours = authorColours(runs)): TextRun[] {
+  if (view.mode === 'all' && !view.hidden?.length && view.insDel !== false && view.formatting !== false) return markedRuns(runs, colours);
+  return runs.map((r) => {
+    const v = parseRev(r.rev);
+    const f = parseFmt(r.fmt);
+    if (!v && !f) return r;
+    let out: TextRun = r;
+    if (view.mode === 'original' && f) out = { ...rt.cleanStyle({ ...f.old, rev: r.rev, cmt: r.cmt, link: r.link, obj: r.obj }), text: r.text } as TextRun;
+    if (v) {
+      const marked = view.mode === 'all' && view.insDel !== false && !view.hidden?.includes(v.author);
+      // the text as it will read (deleted text hidden), or as it was (inserted text hidden)
+      const gone = view.mode === 'original' ? v.kind === 'ins' : v.kind === 'del';
+      if (marked) out = markedRuns([out], colours)[0];
+      else if (gone && out.obj === undefined) out = { ...out, hide: true };
+    }
+    if (f && view.mode === 'all' && view.formatting !== false && !view.hidden?.includes(f.author) && !out.hide) out = { ...out, color: colours.get(f.author) ?? REVIEW_COLOURS[0] };
+    return out;
+  });
+}
+
+/** Every reviewer with changes in the runs, in the order they first appear. */
+export const reviewers = (runs: TextRun[]): string[] => [...authorColours(runs).keys()];

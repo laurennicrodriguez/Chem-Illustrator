@@ -7,7 +7,7 @@ import { ATTACH_TAG, IGNORE_TAG, attachFromTag, fillAttachments } from '../edito
 import { highlightStyleFromTag } from '../render/highlight';
 import { attachRingFills } from '../chem/ring-fill';
 import { lipDirection } from '../chem/polymer';
-import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, MorphStep, CHIRAL_FLAGS, PARTIAL, type Pin } from '../model';
+import { Doc, Atom, Bond, BondDisplay, TextRun, Arrow, Shape, Entity, Kind, StereoLabel, Caption, StepRoles, MorphStep, CHIRAL_FLAGS, PARTIAL, PAPER, type Pin, type PictureFx, type ShapeMath } from '../model';
 import { TEXT_TAG, parseTextTag, runsFromChemDraw } from '../text/chemdraw-text';
 import { DocStyle } from '../style';
 import { elementNumber, hasImplicitH, implicitHydrogens, SYMBOLS } from '../chem/elements';
@@ -20,9 +20,11 @@ import { kids, descendants } from './xml';
 import { styleFromFace, isSymbolFont, fromSymbolFont } from '../richtext';
 import { dataUrl, fromDataUrl, imageSize } from '../render/images';
 import { emfToSvg } from '../render/emf-read';
+import { tidyFx } from '../render/picture-fx';
 import { TABLE_TAG, TABLE_PART_TAG, applyTableTag, gridOf, linesFromBorders, parseTableTag, type ReadCell } from './cdxml-table';
 import { layoutTable, NOTE_SCALE } from '../table';
 import { arialWidth } from '../text-metrics';
+import { freshBox, type ChartBox } from '../sheet/chart-box';
 
 export interface ReadStats {
   atoms: number;
@@ -66,11 +68,12 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     if (v > maxId) maxId = v;
   }
   const ord = new Map<string, number>();
-  /** Which entity each element became (kind + id), for the references in reaction steps. */
-  const refOf = new Map<Element, string>();
+  /** Which entity each element became (kind + id), for the references in reaction steps (worked out when first needed, once the file is read). */
+  let refMap: Map<Element, string> | null = null;
+  const refOf = () => (refMap ??= new Map([...ord].map(([key, o]) => [all[o], key])));
   const morphTags: [number, string][] = [];
   const pinTags: [number, string][] = [];
-  const from = (kind: Kind, id: number, el: Element) => { ord.set(kind + id, ordOf.get(el)!); refOf.set(el, kind + id); };
+  const from = (kind: Kind, id: number, el: Element) => { ord.set(kind + id, ordOf.get(el)!); };
   const stats: ReadStats = { atoms: 0, bonds: 0, captions: 0, arrows: 0, shapes: 0, skipped: {}, parseMs: t1 - t0, buildMs: 0 };
   const skip = (what: string) => { stats.skipped[what] = (stats.skipped[what] ?? 0) + 1; };
 
@@ -108,6 +111,17 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   };
   const bg = root.getAttribute('bgcolor');
   if (bg !== null && colors[Number(bg)]) doc.background = colors[Number(bg)];
+  // the page: one sheet's drawing area (the page's box over how many sheets it spans)
+  const pg = all.find((e) => e.nodeName === 'page');
+  const pb = pg?.getAttribute('BoundingBox')?.trim().split(/\s+/).map(Number);
+  if (pb && pb.length === 4 && pb.every(isFinite)) {
+    const wp = Math.max(1, Number(pg!.getAttribute('WidthPages')) || 1), hp = Math.max(1, Number(pg!.getAttribute('HeightPages')) || 1);
+    const w = (pb[2] - pb[0]) / wp, h = (pb[3] - pb[1]) / hp;
+    if (w > 10 && h > 10) {
+      const paper = PAPER.find((p) => (Math.abs(p.w - w) < 2 && Math.abs(p.h - h) < 2) || (Math.abs(p.w - h) < 2 && Math.abs(p.h - w) < 2));
+      doc.page = { w, h, grow: true, ...(paper ? { name: paper.name } : {}) };
+    }
+  }
 
   const fonts = new Map<string, string>();
   const ft = all.find((e) => e.nodeName === 'fonttable');
@@ -227,6 +241,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       else if (enh === 'And' || enh === 'Or') extra.enhStereo = { type: enh === 'And' ? 'and' : 'or', group: num(n, 'EnhancedStereoGroupNum', 1) };
       const groupTag = kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === GROUP_TAG)?.getAttribute('Value');
       if (groupTag) extra.group = groupTag;
+      const altTag = kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === ALT_TAG)?.getAttribute('Value');
+      if (altTag) extra.alt = altTag;
       const hlA = kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_TAG)?.getAttribute('Value');
       if (hlA && /^#[0-9a-f]{6}$/i.test(hlA)) extra.highlight = hlA.toLowerCase();
       const lookA = highlightStyleFromTag(kids(n).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === HIGHLIGHT_LOOK_TAG)?.getAttribute('Value'));
@@ -247,7 +263,9 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
           const n = Math.abs(atom.charge);
           txt = txt.replace(new RegExp(`${n > 1 ? n : ''}[${atom.charge > 0 ? '+' : '\\-−'}]$`), '');
         }
-        if (runs.some((r) => r.sup && /^\d+$/.test(r.text))) atom.supDigits = true;
+        const look = labelLookOf(runs, txt);
+        if (look.supDigits !== undefined) atom.supDigits = look.supDigits;
+        if (look.marks) atom.labelMarks = look.marks;
         const size = runs[0]?.size;
         if (size && ls === null) atom.s = size / st.labelSize;
         const lj = t.getAttribute('LabelJustification');
@@ -660,9 +678,11 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
           // the dot, then a point further out that only sets its size
           add({ ...base, kind: 'symbol', symbol: sym, x1: bb[0], y1: bb[1], x2: bb[0], y2: bb[1] });
         } else {
-          // circled charges: the box is the symbol's width, sitting on the baseline y
-          const d = Math.abs(bb[0] - bb[2]) || 4;
-          const cx = (bb[0] + bb[2]) / 2, cy = bb[1] - d / 2;
+          // charge signs: ChemDraw stores the sign's centre, then a point its width away; this program's
+          // older files stored its width along the bottom edge instead
+          const ours = bb[1] === bb[3] && bb[0] > bb[2] && root.getAttribute('CreationProgram') === 'Chem Illustrator';
+          const d = Math.hypot(bb[2] - bb[0], bb[3] - bb[1]) || 6;
+          const cx = ours ? (bb[0] + bb[2]) / 2 : bb[0], cy = ours ? bb[1] - d / 2 : bb[1];
           add({ ...base, kind: 'symbol', symbol: sym, x1: cx - d / 2, y1: cy - d / 2, x2: cx + d / 2, y2: cy + d / 2 });
         }
         return;
@@ -693,7 +713,7 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       for (const k of kids(g)) {
         if (k.nodeName !== 'bracketattachment') continue;
         const e = byXmlId.get(k.getAttribute('GraphicID') ?? '');
-        const ref = e ? refOf.get(e) : undefined;
+        const ref = e ? refOf().get(e) : undefined;
         const sh = ref && ref[0] === 's' ? doc.shapes.get(Number(ref.slice(1))) : undefined;
         if (e && sh?.kind === 'bracket') brackets.push({ e, sh });
       }
@@ -702,6 +722,28 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
       const labelled = (brackets.find((b) => kids(b.e).some((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === 'bracketusage'))
         ?? brackets.find((b) => lipDirection(b.sh).x < -0.5) ?? brackets[brackets.length - 1]).sh;
       labelled.repeat = text;
+    }
+  };
+
+  /**
+   * Plain group elements (not a design shape's or a table's) become groups here: everything
+   * inside the outermost one gets its number.
+   */
+  const readGroups = () => {
+    const plain = (g: Element) => g.nodeName === 'group'
+      && !kids(g).some((k) => k.nodeName === 'table' || (k.nodeName === 'objecttag' && (k.getAttribute('Name') === GEO_TAG)));
+    const numbers = new Map<Element, number>();
+    const maps: Partial<Record<Kind, Map<number, { grp?: number }>>> = { a: doc.atoms, c: doc.captions, r: doc.arrows, s: doc.shapes };
+    for (const [key, o] of ord) {
+      const m = maps[key[0] as Kind];
+      if (!m) continue;
+      let outer: Element | null = null;
+      for (let p = all[o].parentElement; p && p !== root; p = p.parentElement) if (p !== all[o] && plain(p)) outer = p;
+      if (!outer) continue;
+      let n = numbers.get(outer);
+      if (n === undefined) numbers.set(outer, (n = numbers.size + 1));
+      const e = m.get(Number(key.slice(1)));
+      if (e) e.grp = n;
     }
   };
 
@@ -747,8 +789,26 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
           const bb = pts(ch.getAttribute('BoundingBox'));
           if (bb.length === 4) {
             const pic = pictureOf(ch);
+            let chart: ChartBox | undefined;
+            try {
+              const tag = kids(ch).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === CHART_TAG)?.getAttribute('Value');
+              const got = tag ? JSON.parse(tag) as ChartBox : undefined;
+              if (got?.chart && Array.isArray(got.cells)) chart = freshBox(got);
+            } catch { chart = undefined; }
+            let math: ShapeMath | undefined;
+            try {
+              const tag = kids(ch).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === MATH_TAG)?.getAttribute('Value');
+              const got = tag ? JSON.parse(tag) as ShapeMath : undefined;
+              if (typeof got?.tex === 'string' && got.size > 0) math = got;
+            } catch { math = undefined; }
+            let fx: PictureFx | undefined;
+            try {
+              const tag = kids(ch).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === PICTURE_FX_TAG)?.getAttribute('Value');
+              fx = tag ? tidyFx(JSON.parse(tag) as PictureFx) : undefined;
+            } catch { fx = undefined; }
+            const alt = kids(ch).find((k) => k.nodeName === 'objecttag' && k.getAttribute('Name') === ALT_TAG)?.getAttribute('Value') || undefined;
             const sh = pic
-              ? doc.addShape({ id: idFor(ch), kind: 'picture', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], src: pic.src, px: pic.px, ...(pic.crop ? { crop: pic.crop } : {}) })
+              ? doc.addShape({ id: idFor(ch), kind: 'picture', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], src: pic.src, px: pic.px, ...(pic.crop ? { crop: pic.crop } : {}), ...(chart ? { chart } : {}), ...(math ? { math } : {}), ...(fx ? { fx } : {}), ...(alt ? { alt } : {}) })
               // only pictures this program can't show: mark where they sit, and keep them as they are
               : doc.addShape({ id: idFor(ch), kind: 'rect', x1: bb[0], y1: bb[1], x2: bb[2], y2: bb[3], dashed: true, color: '#9aa4b2', picture: true });
             from('s', sh.id, ch);
@@ -767,8 +827,8 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
   doc.bulk(() => {
     walk(root);
     readSteps(all, refOf, doc);
-    readMorphTags(morphTags, refOf, doc);
-    readPinTags(pinTags, refOf, doc);
+    if (morphTags.length) readMorphTags(morphTags, refOf(), doc);
+    if (pinTags.length) readPinTags(pinTags, refOf(), doc);
     readRepeats();
     for (const c of pendingCircles) if (!ringOfCircle(doc, c)) c.oval();
     // Element labels like "OH", "H2N" or "N" become automatic labels (so they re-justify
@@ -793,12 +853,15 @@ export function readCdxml(text: string): { doc: Doc; stats: ReadStats } {
     pinSymbols(doc);
     fillFrameMembers(doc);
     fillAttachments(doc);
+    readGroups();
   });
   doc.reserveIds(maxId);
   const orig = new Map<string, Entity>();
-  const keep = (kind: Kind, m: Map<number, Entity>) => { for (const e of m.values()) if (ord.has(kind + e.id)) orig.set(kind + e.id, structuredClone(e)); };
+  // (a shallow copy, as an undo step keeps: edits replace an entity's parts rather than change them)
+  const loaded = new WeakSet<Entity>();
+  const keep = (kind: Kind, m: Map<number, Entity>) => { for (const e of m.values()) { const key = kind + e.id; if (ord.has(key)) { orig.set(key, { ...e }); loaded.add(e); } } };
   keep('a', doc.atoms); keep('b', doc.bonds); keep('c', doc.captions); keep('r', doc.arrows); keep('s', doc.shapes);
-  doc.source = { text, ord, orig, maxId };
+  doc.source = { text, ord, orig, maxId, xml, loaded };
   doc.allDirty = true;
   stats.buildMs = performance.now() - t1;
   return { doc, stats };
@@ -882,7 +945,9 @@ const STEP_ROLES: [string, keyof StepRoles][] = [
  * structures (fragments), captions, groups of them, and the arrow (or the older copy of it that
  * ChemDraw keeps for old versions).
  */
-function readSteps(all: Element[], refOf: Map<Element, string>, doc: Doc): void {
+function readSteps(all: Element[], refs: () => Map<Element, string>, doc: Doc): void {
+  if (!all.some((el) => el.nodeName === 'step')) return;
+  const refOf = refs();
   const byId = new Map<string, Element>();
   for (const el of all) { const id = el.getAttribute('id'); if (id && !byId.has(id)) byId.set(id, el); }
   const refsOf = (el: Element | undefined, out: string[]) => {
@@ -1002,6 +1067,14 @@ export const PIN_TAG = 'Chem Illustrator pin';
 export const CURVE_ARROW_TAG = 'Chem Illustrator arrow';
 /** The group's box when saved here (ChemDraw rewrites BoundingBox when the group is moved). */
 export const GEO_BOX_ATTR = 'ChemIllustratorBox';
+/** A chart (Insert > Chart on slides): the chart and its data, on the picture standing for it. */
+export const CHART_TAG = 'Chem Illustrator chart';
+/** An equation (Insert > Equation on slides): its LaTeX, size, colour and font, on the picture standing for it. */
+export const MATH_TAG = 'Chem Illustrator equation';
+/** A picture's Picture Format settings (brightness, recolouring, background removed, shape…), which ChemDraw doesn't have. */
+export const PICTURE_FX_TAG = 'Chem Illustrator picture format';
+/** Alt text written for a structure (on one of its atoms) or a picture, which ChemDraw doesn't have. */
+export const ALT_TAG = 'Chem Illustrator alt text';
 export const OWN_PICTURE = 'ChemIllustratorPicture';
 export const OWN_CROP = 'ChemIllustratorCrop';
 
@@ -1035,4 +1108,26 @@ function pictureOf(el: Element): { src: string; px: { w: number; h: number }; cr
     if (bytes) return picture(bytes, mime);
   }
   return emf && drawn ? picture(emf, 'image/x-emf') : null;
+}
+
+/**
+ * How a label from a file raises its characters: R numbers written raised (or, for R1, R12…,
+ * written on the line or lowered) and any other characters raised, lowered by hand.
+ */
+export function labelLookOf(runs: TextRun[], text: string): { supDigits?: boolean; marks?: string } {
+  const out: { supDigits?: boolean; marks?: string } = {};
+  const raisedDigits = runs.length > 1 && runs[runs.length - 1].sup && /^\d+$/.test(runs[runs.length - 1].text);
+  if (raisedDigits) out.supDigits = true;
+  else if (/^R\d+$/.test(text)) out.supDigits = false;
+  let marks = '', any = false;
+  runs.forEach((r, k) => {
+    for (const _ of r.text) {
+      const raisedR = raisedDigits && k === runs.length - 1;
+      const m = r.sup && !raisedR ? '^' : r.sub ? '_' : '.';
+      if (m !== '.') any = true;
+      marks += m;
+    }
+  });
+  if (any) out.marks = marks.slice(0, text.length);
+  return out;
 }

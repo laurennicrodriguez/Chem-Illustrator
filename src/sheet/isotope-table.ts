@@ -1,4 +1,4 @@
-// Sheet > Isotope Pattern: a small table of an ion's isotope peaks (worked out by ISOMZ and
+// Insert > Isotope Pattern: a small table of an ion's isotope peaks (worked out by ISOMZ and
 // ISOABUND, so it follows the structure and the ion cell), with columns for the peaks measured
 // and their error in ppm, and a chart of the peaks drawn as sticks, as a mass spectrum.
 //

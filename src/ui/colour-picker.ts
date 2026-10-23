@@ -18,7 +18,7 @@ export interface ColourPickerOptions {
  * undefined for the automatic one.
  */
 export function colourButton(doc: Doc, value: string | undefined, on: (v: string | undefined) => void, opts: ColourPickerOptions = {}): HTMLElement {
-  const auto = opts.autoLabel ?? 'Automatic (black)';
+  const auto = opts.autoLabel ?? 'Auto (black)';
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'colour-button';

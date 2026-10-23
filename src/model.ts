@@ -2,11 +2,14 @@
 // spatial index for fast hit-testing. Every change goes through a transaction so it can
 // be undone as one step.
 
+import type { SectionBreak } from './document/document';
 import { Vec, Rect } from './geom';
 import { DocStyle, ACS_1996 } from './style';
 import { arrowPoints, gluePoint } from './objects';
 import { followPins } from './chem/pins';
 import type { EnergyData } from './design/energy';
+import type { DiagramData } from './design/diagrams';
+import type { ChartBox } from './sheet/chart-box';
 import { isMetal, isMetalLabel, lowestValence } from './chem/elements';
 import { NICKNAMES } from './chem/labels';
 
@@ -27,6 +30,8 @@ export type DoublePos = 'auto' | 'left' | 'right' | 'center';
 
 export interface Atom {
   id: number;
+  /** The group it belongs to (Format > Group); things with the same number move and select together. */
+  grp?: number;
   x: number;
   y: number;
   /** Atomic number; 6 for carbon. Ignored for display when `label` is set. */
@@ -44,14 +49,28 @@ export interface Atom {
   s?: number;
   /** A 3-D position kept from a file (ChemDraw's xyz on a structure built from a crystal file). */
   xyz?: [number, number, number];
-  /** A contracted label: the group it stands for, as SMILES from the atom where it joins (Structure > Contract Label). */
+  /**
+   * How far towards the reader the atom lies, in drawing units, for an atom placed from a
+   * drawing in perspective (a conformer template or a ring fused onto one): where two bonds
+   * cross, it decides which is in front (crossing.ts layerByDepth).
+   */
+  depth?: number;
+  /** A contracted label: the group it stands for, as SMILES from the atom where it joins (Chemistry > Contract Label). */
   group?: string;
+  /**
+   * Alt text for the whole structure this atom is in (Alt Text…), for people who can't see it:
+   * kept on one of its atoms (see accessibility.ts). Saved as the description of the structure's
+   * picture in Word and PowerPoint; a structure without it is described by its SMILES.
+   */
+  alt?: string;
   /** A carbon shown with its letter and hydrogens (CH3 at a chain end; ChemDraw's ShowTerminalCarbonLabels). */
   showCarbon?: boolean;
   /** The charge is drawn by a separate circled-charge symbol, so the label leaves it out. */
   hideCharge?: boolean;
-  /** Numbers after R groups are superscripts (R¹ rather than R₁). */
+  /** Numbers after R groups are superscripts (R¹ rather than R₁); false keeps them down. Not set: R1, R12… go up, as the preferences say. */
   supDigits?: boolean;
+  /** Characters of the label raised or lowered by hand, one mark per character ("^" up, "_" down, "=" on the line). */
+  labelMarks?: string;
   /** Show this atom's R/S label when it has one (ChemDraw's "Show Stereochemistry"). */
   showStereo?: boolean;
   /** Where the stereo label sits (relative to the atom), and its text as saved or typed by hand. */
@@ -204,8 +223,22 @@ export interface TextRun {
   strike?: boolean;
   /** Documents with tracked changes: this text was inserted or deleted, by whom and when ("ins|Nate|2026-10-14T21:00:00Z"; see document/revisions). */
   rev?: string;
+  /** Documents with tracked changes: this text's formatting was changed, by whom and when, and how it looked before ("Nate|2026-10-14T21:00:00Z|{\"bold\":true}"; see document/revisions). */
+  fmt?: string;
+  /** Not shown: laid out with no width (tracked changes hidden by a markup view). Only ever on runs being laid out, never in a file. */
+  hide?: boolean;
   /** Documents: the comments this text is under, by id, joined by commas ("2,5"; see document/comments). */
   cmt?: string;
+  /** Where the text links to: a web page, a DOI, an e-mail address, a file or a place in the file (see links.ts). */
+  link?: string;
+  /** Character spacing: points added after each character (less than 0 is condensed), as PowerPoint's Character Spacing. */
+  spacing?: number;
+  /** Small capitals: lower-case letters shown as smaller capitals (documents). */
+  smallCaps?: boolean;
+  /** All capitals: letters shown as capitals, the text itself unchanged (documents). */
+  allCaps?: boolean;
+  /** Documents: the character style the text is in (Emphasis, Strong…), by id; its look is in the run itself. */
+  cstyle?: string;
 }
 
 /**
@@ -289,10 +322,74 @@ export interface ParaStyle {
   /** Documents: line spacing in points instead of a multiple: exactly this, or at least this. */
   linePt?: number;
   lineRule?: 'exact' | 'atLeast';
+  /**
+   * Documents: a new section starts with this paragraph (a section break before it), with how
+   * it starts and its own page setup, header and footer, page numbering and line numbers.
+   */
+  section?: SectionBreak;
+  /** Documents: this paragraph's lines get no line numbers (Word's Suppress Line Numbers). */
+  noLineNumbers?: boolean;
+  /** Don't hyphenate this paragraph (Word's Don't hyphenate, under Line and Page Breaks). */
+  noHyphen?: boolean;
+  /** Documents: bookmarks at this paragraph (Insert > Bookmark), by name, for links to point at. */
+  marks?: string[];
+  /** Documents: tab stops, in points from the left margin, in order (Word's default every half inch past the last). */
+  tabs?: TabStop[];
+  /** Documents: a numbered list's multilevel scheme (1. a. i. when left out; see paragraphs.ts LIST_SCHEMES). */
+  scheme?: string;
+  /** Documents: a bulleted list item's own bullet (from the bullet library), in place of its level's. */
+  bullet?: string;
+  /**
+   * Documents: lines round the paragraph (Home > Borders), as Word's paragraph borders. Paragraphs
+   * one after another with the same borders share one box, with `between` drawn between them.
+   */
+  border?: ParaBorders;
+  /** Documents: the paragraph's background colour (Home > Shading), behind its text and up to its borders. */
+  shade?: string;
+  /** Documents: index entries marked in this paragraph (References > Mark Entry; Word's XE fields). */
+  xe?: IndexMark[];
+  /** Documents: citations marked here for a table of authorities (References > Mark Citation; Word's TA fields). */
+  ta?: AuthorityMark[];
+}
+
+/**
+ * An index entry (Word's XE field): the word or phrase listed, and the entry under it when it is a
+ * subentry ("Aldol reaction: asymmetric"); its page number, in bold or italic if chosen, or
+ * instead a cross-reference ("See Enolates") in place of the page.
+ */
+export interface IndexMark {
+  main: string;
+  sub?: string;
+  see?: string;
+  bold?: boolean;
+  italic?: boolean;
+}
+
+/**
+ * A citation in a table of authorities (Word's TA field): its short form, which every mention
+ * of it shares, and, on the one marked first, its long form (as listed) and its category (1
+ * Cases, 2 Statutes and so on: see index-toa.ts).
+ */
+export interface AuthorityMark {
+  short: string;
+  long?: string;
+  cat?: number;
+}
+
+/** A paragraph's borders: any of its four sides, and a line between paragraphs that share a box. */
+export type ParaBorders = Partial<Record<'top' | 'bottom' | 'left' | 'right' | 'between', BorderLine>>;
+
+/** A tab stop: where text after a tab lines up, and how (Word's left, centre, right and decimal tabs), with dots or a line leading to it. */
+export interface TabStop {
+  pos: number;
+  kind: 'left' | 'center' | 'right' | 'decimal';
+  leader?: 'dot' | 'hyphen' | 'underscore';
 }
 
 export interface Caption {
   id: number;
+  /** The group it belongs to (Format > Group); things with the same number move and select together. */
+  grp?: number;
   /** Left end of the first line's baseline (for centred/right text, of the line box). */
   x: number;
   y: number;
@@ -318,6 +415,20 @@ export interface Caption {
   ignoreWarnings?: boolean;
   /** Turned this many degrees clockwise about (x, y), the start of its first line. */
   rot?: number;
+  /** Its name in the Selection Pane (Slides), when given one. */
+  name?: string;
+  /** Hidden (Selection Pane): not drawn, printed or picked, but kept and saved. */
+  hidden?: boolean;
+  /** Columns in a text box (it needs a width, `wrap`), and the room between them in points. */
+  cols?: number;
+  colGap?: number;
+  /**
+   * AutoFit (slides): left out, the box grows with its text; 'shrink' makes the text smaller to
+   * fit a box of height boxH; 'fixed' keeps the box at boxH and lets the text run past it.
+   */
+  fit?: 'shrink' | 'fixed';
+  /** Text direction: the text runs down (rotated 90°) or up (270°). Its turn is in `rot`; this says it is the text's direction, for PowerPoint. */
+  dir?: 'vert' | 'vert270';
 }
 
 /**
@@ -430,6 +541,8 @@ export type ArrowHead = 'none' | 'full' | 'halfLeft' | 'halfRight';
 
 export interface Arrow {
   id: number;
+  /** The group it belongs to (Format > Group); things with the same number move and select together. */
+  grp?: number;
   tail: Vec;
   head: Vec;
   headStyle: ArrowHead;
@@ -461,7 +574,7 @@ export interface Arrow {
   to?: Glue;
   /** Drawn with right-angled bends (an elbow connector). */
   elbow?: boolean;
-  /** How this step animates (Scheme > Animate Reaction): the atom pairing and moves chosen for it. */
+  /** How this step animates (Chemistry > Animate > Animate Reaction): the atom pairing and moves chosen for it. */
   morph?: MorphStep;
   /**
    * A curved arrow drawn along Bézier curves instead of an arc (an S-shaped arrow: one curve
@@ -473,6 +586,8 @@ export interface Arrow {
   bez?: Vec[];
   /** What an electron-pushing arrow's ends are stuck to, so they follow the structure when it moves. */
   pin?: { tail?: Pin; head?: Pin };
+  /** Bent by hand: it keeps its curve when the structure changes, rather than finding its own way round. */
+  bent?: boolean;
 }
 
 /**
@@ -532,9 +647,11 @@ export type Pattern = 'hatch' | 'backhatch' | 'crosshatch' | 'horizontal' | 'ver
 
 export interface Shape {
   id: number;
+  /** The group it belongs to (Format > Group); things with the same number move and select together. */
+  grp?: number;
   kind: 'line' | 'rect' | 'oval' | 'symbol' | 'bracket' | 'picture' | 'table' | 'geo' | 'ring';
   /**
-   * A ring's fill (Structure > Fill Rings): the ring's atoms in order. The fill follows them, and
+   * A ring's fill (Chemistry > Highlight and Fill > Fill Rings): the ring's atoms in order. The fill follows them, and
    * goes when one of them goes. `poly` is where their centres were at the last change.
    */
   ring?: number[];
@@ -558,6 +675,11 @@ export interface Shape {
   y1: number;
   x2: number;
   y2: number;
+  /**
+   * Boxes, ovals, design shapes and pictures (see turnsFreely): turned this many degrees
+   * clockwise about the middle of x1..y2, as PowerPoint turns shapes. x1..y2 stay the box before it is turned.
+   */
+  rot?: number;
   dashed?: boolean;
   filled?: boolean;
   /**
@@ -598,6 +720,13 @@ export interface Shape {
   shadowOpacity?: number;
   shadowAngle?: number;
   shadowBlur?: number;
+  /** Design shapes: PowerPoint's Shape Effects (a glow round the outside, soft edges, a bevel, a reflection below) and a picture for the fill. */
+  glow?: ShapeGlow;
+  /** How far in from the edge the fill fades away, in points. */
+  softEdge?: number;
+  bevel?: ShapeBevel;
+  reflection?: ShapeReflection;
+  picFill?: PicFill;
   bold?: boolean;
   symbol?: string;
   bracket?: 'square' | 'round' | 'curly';
@@ -615,17 +744,35 @@ export interface Shape {
   /** Picture size in pixels (for the crop and for saving). */
   px?: { w: number; h: number };
   /**
-   * A video shown in the picture's place (an animation put on a slide): the MP4 as a data URL.
-   * `src` is its first frame, shown where a video can't play. It plays by itself in the slide
-   * show, round and round unless `once`.
+   * A video or sound shown in the picture's place (an animation put on a slide, or Insert >
+   * Video or Audio): the file as a data URL. `src` is the video's first frame (a speaker for a
+   * sound), shown where it can't play. See Media for how it plays.
    */
-  video?: { src: string; once?: boolean };
+  video?: Media;
+  /**
+   * What a click on it does in the slide show (an action button, a zoom, any shape): a link as
+   * text links have them (links.ts): a slide, a show jump (#next, #return…), a web page or file.
+   */
+  link?: string;
+  /**
+   * A picture that is a Slide Zoom (Insert > Zoom): a picture of the slide `link` goes to. In
+   * the show a click zooms into that slide; with `back`, the show comes back here after it (a
+   * Summary Zoom's part runs on to the slide `to` first).
+   */
+  zoom?: { back?: boolean; to?: string };
   /** Parts of a picture cut off, as fractions of its width and height from each side. */
   crop?: { l: number; t: number; r: number; b: number };
   /** A picture's frame, corners and shadow (PowerPoint's Picture Styles). */
   look?: PictureLook;
+  /** A picture's corrections, colour, see-through amount, background taken out and the shape it is cut to (Picture Format). */
+  fx?: PictureFx;
   color?: string;
   z?: number;
+  /**
+   * Alt text (Alt Text…): what a picture, chart or shape shows, for people who can't see it
+   * (screen readers). Saved as its description in Word, PowerPoint and Excel.
+   */
+  alt?: string;
   /** Its name in the Layers panel (Design mode). */
   name?: string;
   /** Hidden (Layers panel): not drawn, printed or picked. */
@@ -635,14 +782,72 @@ export interface Shape {
   /** A table: its cells, column widths and rules (see table.ts). */
   table?: TableData;
   /**
-   * A frame round other things (Structure > Add Frame): what it surrounds (whole structures for
+   * A picture that is a chart (Insert > Chart): the chart and its data, drawn live in the
+   * picture's box; `src` is a copy of it as a bitmap for programs that can't draw charts.
+   */
+  chart?: ChartBox;
+  /**
+   * A picture that is an equation (Insert > Equation on slides and designs): its LaTeX, laid out
+   * live to fit the picture's box; `size` is its text size at its own size, in points. `src` is a
+   * copy of it as an SVG for exports and for programs that can't lay out equations.
+   */
+  math?: ShapeMath;
+  /**
+   * A frame round other things (Chemistry > Labels and Numbers > Add Frame): what it surrounds (whole structures for
    * the atoms), the gap it keeps round them in points, and whether it follows them (grows,
    * shrinks and moves as they change). Moving or resizing the frame by hand stops it following.
    */
   frame?: Frame;
   /** An energy diagram's numbers and look, kept on the invisible frame round its drawing (design/energy.ts). */
   energy?: EnergyData;
+  /** A SmartArt-style diagram's text and look, kept on the invisible frame round its shapes (design/diagrams.ts). */
+  diagram?: DiagramData;
 }
+
+/** Can this shape be turned to any angle (Slides and Design), keeping its box and turning it as a whole? */
+export function turnsFreely(s: Pick<Shape, 'kind' | 'chart' | 'table' | 'ring' | 'frame' | 'pin'>): boolean {
+  return (s.kind === 'rect' || s.kind === 'oval' || s.kind === 'geo' || s.kind === 'picture') && !s.chart && !s.frame && !s.pin;
+}
+
+/**
+ * How a video or sound on a slide plays (PowerPoint's Playback tab). Left out, a setting is as an
+ * animation put on a slide has always played: by itself as the slide comes in, round and round,
+ * at full volume.
+ */
+export interface Media {
+  /** The file, as a data URL (video/mp4, audio/mpeg…). */
+  src: string;
+  /** Play once rather than round and round until the slide changes (Loop until Stopped off). */
+  once?: boolean;
+  /** A sound: nothing to see but its icon. */
+  audio?: boolean;
+  /** Seconds cut off its start and its end (Trim). */
+  trimStart?: number;
+  trimEnd?: number;
+  /** Seconds it fades in over at the start, and out over at the end. */
+  fadeIn?: number;
+  fadeOut?: number;
+  /** When it starts: by itself as the slide comes in (absent) or when it is clicked in the show. */
+  start?: 'auto' | 'click';
+  /** Volume, 0 to 1 (absent: full); `mute` silences it. */
+  vol?: number;
+  mute?: boolean;
+  /** Back to its first frame when it has played (Rewind after Playing). */
+  rewind?: boolean;
+  /** A sound's icon isn't shown in the slide show (Hide During Show). */
+  hide?: boolean;
+  /** A sound keeps playing when the show goes on to the next slides (Play Across Slides). */
+  across?: boolean;
+  /** Narration recorded for the slide (Slide Show > Record): left silent when the show is set up without narration. */
+  narration?: boolean;
+  /** A video fills the screen while it plays (Play Full Screen). */
+  full?: boolean;
+  /** How long it is, in seconds, when known. */
+  length?: number;
+}
+
+/** An equation on a slide or design: LaTeX, its text size in points, colour and font. */
+export interface ShapeMath { tex: string; size: number; color?: string; font?: string }
 
 /**
  * A picture's frame, corners and shadow. The line is drawn centred on the picture's edge, as
@@ -656,6 +861,69 @@ export interface PictureLook {
   round?: number;
   /** A shadow down and to the right: soft (blurred) or hard (sharp). */
   shadow?: 'soft' | 'hard';
+}
+
+/**
+ * How a picture is changed for showing (Picture Format), as PowerPoint and Word keep it: the
+ * picture's own data is never changed, so every setting can be changed back.
+ */
+/** A glow round a shape: its colour, how far it reaches (points) and how see-through it is (0 solid to 1 clear). */
+export interface ShapeGlow { color: string; size: number; transparency: number }
+
+/** PowerPoint's bevel shapes (its names for them). */
+export type BevelKind = 'circle' | 'relaxedInset' | 'cross' | 'coolSlant' | 'angle' | 'softRound' | 'convex' | 'slope' | 'divot' | 'riblet' | 'hardEdge' | 'artDeco';
+
+/** A raised edge round the top of a shape: which kind, how wide and how high, in points. */
+export interface ShapeBevel { kind: BevelKind; w: number; h: number }
+
+/**
+ * A reflection below a shape: how much of the shape shows (0 to 1 of its height), how solid it
+ * starts (0 to 1), how far below the shape it is and how blurred, in points.
+ */
+export interface ShapeReflection { size: number; opacity: number; dist: number; blur?: number }
+
+/** A picture filling a shape, stretched to the shape's box, and how see-through it is (0 solid to 1 clear). */
+export interface PicFill { src: string; px?: { w: number; h: number }; transparency?: number }
+
+export interface PictureFx {
+  /** Brighter (up to 1) or darker (down to -1). */
+  bright?: number;
+  /** More contrast (up to 1) or less (down to -1). */
+  contrast?: number;
+  /** Sharper (up to 1) or softer (down to -1). */
+  sharpen?: number;
+  /** Shown in other colours: greys, sepia, washed out, black and white, or two colours of one's own. */
+  recolor?: Recolor;
+  /** See-through amount of the whole picture, 0 (solid) to 1 (clear). */
+  alpha?: number;
+  /** One colour made see-through (PowerPoint's Set Transparent Color), as #rrggbb. */
+  clear?: string;
+  /** The background taken out (Remove Background). */
+  bg?: BackgroundRemoval;
+  /** The shape the picture is cut to, by PowerPoint's name for it (design/geo.ts); a rectangle when not set. */
+  shape?: string;
+}
+
+/**
+ * A picture shown in other colours. `bw` is black and white, split at `level` (0 to 1, a half
+ * when not set); `tint` runs from `dark` in the shadows to `light` in the highlights.
+ */
+export type Recolor =
+  | { kind: 'grey' }
+  | { kind: 'sepia' }
+  | { kind: 'washout' }
+  | { kind: 'bw'; level?: number }
+  | { kind: 'tint'; dark: string; light: string };
+
+/**
+ * Remove Background: what touches the picture's edges (and the `drop` marks), and is near in
+ * colour, goes; what touches a `keep` mark stays. Marks are points as fractions of the whole
+ * picture's width and height (before cropping). `tol` is how near a colour counts (0 to 1, 0.12 when not set).
+ */
+export interface BackgroundRemoval {
+  tol?: number;
+  keep?: [number, number][];
+  drop?: [number, number][];
 }
 
 /** The two picture shadows: how far down and right, how blurred and how dark, in points (as in Document mode). */
@@ -692,10 +960,44 @@ export interface TableCell {
   align?: Justify;
   /** Number of columns the cell spans (the cells it covers are left empty). */
   span?: number;
-  /** Documents: the cell's background colour (Word's shading). */
+  /** Number of rows the cell is merged down over (the cells it covers below are left empty). */
+  rowSpan?: number;
+  /** The cell's background colour (Word's shading; on slides, over the table style's own). */
   fill?: string;
   /** Documents: where the text sits up and down in a cell taller than it (top when left out). */
   valign?: 'center' | 'bottom';
+  /** Drawings: room kept at the top of the cell for a structure dropped into it (its width and height, in points). */
+  fig?: { w: number; h: number };
+  /** Documents: the cell's own borders (Word's cell borders), over the table style's. */
+  borders?: CellBorders;
+  /** Documents: the cell's own margins, in place of the table's (left out sides keep the table's). */
+  pad?: Partial<CellMargins>;
+}
+
+/** A border line in a document's table: Word's line kinds, its width in points and its colour. 'none' takes a line away. */
+export interface BorderLine {
+  style: 'none' | 'single' | 'double' | 'dotted' | 'dashed';
+  w: number;
+  color: string;
+}
+
+export type BorderSide = 'top' | 'bottom' | 'left' | 'right';
+export type CellBorders = Partial<Record<BorderSide, BorderLine>>;
+
+/** Room inside a cell round its text, in points (Word's cell margins). */
+export interface CellMargins { top: number; bottom: number; left: number; right: number }
+
+/** Which parts of a table its style picks out (Word's Table Style Options). */
+export interface TableLook {
+  /** The heading rows (on unless turned off). */
+  header?: boolean;
+  /** The last row, as a total row. */
+  total?: boolean;
+  /** Every other row shaded (on unless turned off). */
+  bandRows?: boolean;
+  firstCol?: boolean;
+  lastCol?: boolean;
+  bandCols?: boolean;
 }
 
 /**
@@ -718,6 +1020,53 @@ export interface TableData {
   /** The title above the table ("Table 1. Optimization of…") and the footnotes below it. */
   title?: TextRun[];
   notes?: TextRun[];
+  /**
+   * A table style, in place of `lines`: on slides and drawings one of PowerPoint's ("pp-medium2-1",
+   * see deck/table-styles.ts); in documents Word's, by its style id (document/table-styles.ts).
+   */
+  style?: string;
+  /** Which parts the style picks out (PowerPoint's and Word's Table Style Options). */
+  look?: TableLook;
+  /** Documents: the margins of every cell (Word's default cell margins), when not the standard ones. */
+  pad?: CellMargins;
+}
+
+/** A drawing's page: the drawing area of one sheet of paper (inside its margins), in points. */
+export interface PageSetup {
+  w: number;
+  h: number;
+  /** The paper's name (Letter, A4…), for the Page Setup window. */
+  name?: string;
+  /** More pages are added when the drawing goes past the page; otherwise it is kept on the page when saved. */
+  grow: boolean;
+}
+
+/** Paper sizes, as the area ChemDraw draws on (the paper less half-inch margins). */
+export const PAPER: { name: string; label: string; w: number; h: number }[] = [
+  { name: 'letter', label: 'US Letter (8.5 × 11 in)', w: 540, h: 720 },
+  { name: 'a4', label: 'A4 (210 × 297 mm)', w: 523, h: 770 },
+  { name: 'legal', label: 'US Legal (8.5 × 14 in)', w: 540, h: 936 },
+  { name: 'a3', label: 'A3 (297 × 420 mm)', w: 770, h: 1118 },
+  { name: 'tabloid', label: 'Tabloid (11 × 17 in)', w: 720, h: 1152 },
+];
+
+/**
+ * A drawing kept on its page (File > Page Setup without "add pages"): moved back onto the page
+ * where it has gone past it and fits, as one undoable step. False when it is too big to fit.
+ */
+export function keepOnPage(doc: Doc): boolean {
+  const p = doc.page, b = doc.bounds();
+  if (!p || p.grow || !b) return true;
+  if (b.x2 - b.x1 > p.w || b.y2 - b.y1 > p.h) return false;
+  const dx = b.x1 < 0 ? -b.x1 : b.x2 > p.w ? p.w - b.x2 : 0, dy = b.y1 < 0 ? -b.y1 : b.y2 > p.h ? p.h - b.y2 : 0;
+  if (!dx && !dy) return true;
+  doc.edit('Keep on page', () => {
+    doc.moveAtoms(new Set(doc.atoms.keys()), dx, dy);
+    for (const c of [...doc.captions.values()]) doc.updateCaption(c.id, { x: c.x + dx, y: c.y + dy });
+    for (const r of [...doc.arrows.values()]) doc.updateArrow(r.id, { tail: { x: r.tail.x + dx, y: r.tail.y + dy }, head: { x: r.head.x + dx, y: r.head.y + dy } });
+    for (const s of [...doc.shapes.values()]) doc.updateShape(s.id, { x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy, ...(s.poly ? { poly: s.poly.map((q) => ({ x: q.x + dx, y: q.y + dy })) } : {}) });
+  });
+  return true;
 }
 
 export type Entity = Atom | Bond | Caption | Arrow | Shape;
@@ -737,6 +1086,13 @@ export interface CdxmlSource {
   orig: Map<string, Entity>;
   /** Highest object id used anywhere in the file. */
   maxId: number;
+  /** The file's text as read, untouched: each save starts from a copy, which is quicker than reading the text again. */
+  xml?: XMLDocument;
+  /**
+   * The entities exactly as read (the same objects). An edit replaces an entity rather than
+   * changing it, so one still here is unchanged, and saving can pass it by without comparing.
+   */
+  loaded?: WeakSet<Entity>;
 }
 
 /**
@@ -762,6 +1118,8 @@ interface UndoEntry {
   label: string;
   before: Map<string, Entity | null>;
   after: Map<string, Entity | null>;
+  /** A bulk change (see Doc.bulk), which keeps no undo step. */
+  bulk?: boolean;
 }
 
 const CELL = 12; // spatial grid cell size in points
@@ -778,6 +1136,8 @@ export class Doc {
   style: DocStyle = { ...ACS_1996 };
   /** Page colour. */
   background = '#ffffff';
+  /** The page the drawing is on (File > Page Setup): its size in points, and whether it grows to hold the drawing. Null: no page shown. */
+  page: PageSetup | null = null;
   /**
    * Draw only the highlights (a highlight animated on its own in a slide show, or saved to
    * PowerPoint as its own picture behind its structure). Not saved.
@@ -826,8 +1186,15 @@ export class Doc {
   /** Longest bond drawn so far (used to know how far around a point to look). */
   /** Set when the longest bond may have got shorter (an atom moved, a bond went): worked out again when next asked. */
   private bondLenStale = false;
+  /**
+   * Set when the longest bond may have got shorter during the edit going on. Too long a value
+   * only widens searches a little, so a drag doesn't rescan every bond on every move: the
+   * rescan waits until the edit is done.
+   */
+  private bondLenShrunk = false;
   /** The longest bond (for how far around a point to look for bonds that reach it). */
   get maxBondLength(): number {
+    if (this.bondLenShrunk && !this.tx) { this.bondLenShrunk = false; this.bondLenStale = true; }
     if (this.bondLenStale) {
       this.bondLenStale = false;
       this.maxBondLen = 0;
@@ -944,8 +1311,14 @@ export class Doc {
     }
   }
 
+  /** The things the last undo or redo put back (keys such as "a12"), for selecting them. */
+  lastApplied: string[] = [];
+
   canUndo(): boolean { return this.undoStack.length > 0; }
   canRedo(): boolean { return this.redoStack.length > 0; }
+  /** The name of the step Undo (or Redo) would take back, such as "Add Ring" ('' with none). */
+  get undoLabel(): string { return this.undoStack[this.undoStack.length - 1]?.label ?? ''; }
+  get redoLabel(): string { return this.redoStack[this.redoStack.length - 1]?.label ?? ''; }
 
   undo(): boolean {
     // not while a step is still being made (a drag): it would be undone half-way and lost
@@ -953,6 +1326,7 @@ export class Doc {
     const e = this.undoStack.pop();
     if (!e) return false;
     this.apply(e.before);
+    this.lastApplied = [...e.before.keys()];
     this.redoStack.push(e);
     return true;
   }
@@ -962,6 +1336,7 @@ export class Doc {
     const e = this.redoStack.pop();
     if (!e) return false;
     this.apply(e.after);
+    this.lastApplied = [...e.after.keys()];
     this.undoStack.push(e);
     return true;
   }
@@ -992,6 +1367,8 @@ export class Doc {
 
   private touch(kind: Kind, id: number): void {
     if (!this.tx) throw new Error('Document changes must happen inside an edit');
+    // a bulk change is never undone: nothing to remember (a big file opens faster)
+    if (this.tx.bulk) { this.version++; return; }
     const key = kind + id;
     if (!this.tx.before.has(key)) this.tx.before.set(key, this.snapshot(key));
     this.version++;
@@ -1049,7 +1426,11 @@ export class Doc {
       this.dirtyRects.push({ x1: Math.min(r.tail.x, r.head.x) - pad, y1: Math.min(r.tail.y, r.head.y) - pad, x2: Math.max(r.tail.x, r.head.x) + pad, y2: Math.max(r.tail.y, r.head.y) + pad });
     } else {
       const sh = e as Shape;
-      this.dirtyRects.push({ x1: Math.min(sh.x1, sh.x2) - 4, y1: Math.min(sh.y1, sh.y2) - 4, x2: Math.max(sh.x1, sh.x2) + 4, y2: Math.max(sh.y1, sh.y2) + 4 });
+      // its glow, shadow and reflection reach past its box (and a turned shape's corners stick out)
+      const w = Math.abs(sh.x2 - sh.x1), h = Math.abs(sh.y2 - sh.y1);
+      const pad = 4 + Math.max(sh.glow?.size ?? 0, sh.shadow ? (sh.shadowSize ?? 4) + (sh.shadowBlur ?? 0) : 0) + (sh.rot ? Math.max(w, h) / 2 : 0);
+      const below = sh.reflection ? h * sh.reflection.size + sh.reflection.dist + (sh.rot ? Math.max(w, h) : 0) : 0;
+      this.dirtyRects.push({ x1: Math.min(sh.x1, sh.x2) - pad, y1: Math.min(sh.y1, sh.y2) - pad, x2: Math.max(sh.x1, sh.x2) + pad, y2: Math.max(sh.y1, sh.y2) + pad + below });
     }
   }
 
@@ -1066,9 +1447,14 @@ export class Doc {
     if (kind === 'a') {
       this.dirtyAtoms.add(id);
       this.noteAtom(id);
-      // a moved or removed atom may have shortened the longest bond
       const was = this.atoms.get(id);
-      if (was && (!e || (e as Atom).x !== was.x || (e as Atom).y !== was.y) && this.adj.get(id)?.length) this.bondLenStale = true;
+      // a moved or removed atom shortens the longest bond only if one of its bonds was that long
+      if (was && !this.bondLenStale && !this.bondLenShrunk && (!e || (e as Atom).x !== was.x || (e as Atom).y !== was.y)) {
+        for (const bid of this.adj.get(id) ?? []) {
+          const bd = this.bonds.get(bid), other = bd && this.atoms.get(bd.a1 === id ? bd.a2 : bd.a1);
+          if (other && Math.hypot(other.x - was.x, other.y - was.y) >= this.maxBondLen - 1e-6) { this.bondLenShrunk = true; break; }
+        }
+      }
       if (was?.multi) this.unlinkCentre(was);
       if (e) {
         this.atoms.set(id, e as Atom);
@@ -1084,7 +1470,7 @@ export class Doc {
       this.dirtyBonds.add(id);
       const old = this.bonds.get(id);
       if (old) {
-        this.bondLenStale = true;
+        this.bondLenShrunk = true;
         this.detach(old.a1, id);
         this.detach(old.a2, id);
         this.dirtyAtoms.add(old.a1);
@@ -1388,18 +1774,21 @@ export class Doc {
   }
 
   /** Replace the whole document (e.g. after opening a file). Clears undo history. */
-  loadFrom(other: Doc): void {
+  loadFrom(other: Doc, own = false): void {
+    // `own`: `other` is thrown away afterwards, so its things are taken rather than copied
+    const take = <T>(e: T): T => (own ? e : clone(e));
     this.style = { ...other.style };
     this.background = other.background;
+    this.page = other.page && { ...other.page };
     this.source = other.source;
     this.nextId = Math.max(this.nextId, other.nextId);
     this.atoms.clear(); this.bonds.clear(); this.captions.clear(); this.arrows.clear(); this.shapes.clear();
-    this.adj.clear(); this.centresOf.clear(); this.grid.clear(); this.atomCell.clear(); this.maxBondLen = 0; this.bondLenStale = false;
-    for (const a of other.atoms.values()) this.rawSet('a', a.id, clone(a));
-    for (const b of other.bonds.values()) this.rawSet('b', b.id, clone(b));
-    for (const c of other.captions.values()) this.rawSet('c', c.id, clone(c));
-    for (const r of other.arrows.values()) this.rawSet('r', r.id, clone(r));
-    for (const s of other.shapes.values()) this.rawSet('s', s.id, clone(s));
+    this.adj.clear(); this.centresOf.clear(); this.grid.clear(); this.atomCell.clear(); this.maxBondLen = 0; this.bondLenStale = false; this.bondLenShrunk = false;
+    for (const a of other.atoms.values()) this.rawSet('a', a.id, take(a));
+    for (const b of other.bonds.values()) this.rawSet('b', b.id, take(b));
+    for (const c of other.captions.values()) this.rawSet('c', c.id, take(c));
+    for (const r of other.arrows.values()) this.rawSet('r', r.id, take(r));
+    for (const s of other.shapes.values()) this.rawSet('s', s.id, take(s));
     this.undoStack.length = 0;
     this.redoStack.length = 0;
     this.allDirty = true;
@@ -1415,8 +1804,8 @@ export class Doc {
    */
   swap(other: Doc): void {
     if (this.tx || other.tx) throw new Error('Cannot swap documents in the middle of an edit');
-    const fields = ['style', 'background', 'source', 'textStyles', 'atoms', 'bonds', 'captions', 'arrows', 'shapes', 'adj', 'centresOf',
-      'grid', 'atomCell', 'maxBondLen', 'bondLenStale', 'undoStack', 'redoStack'] as const;
+    const fields = ['style', 'background', 'page', 'source', 'textStyles', 'atoms', 'bonds', 'captions', 'arrows', 'shapes', 'adj', 'centresOf',
+      'grid', 'atomCell', 'maxBondLen', 'bondLenStale', 'bondLenShrunk', 'undoStack', 'redoStack'] as const;
     const a = this as unknown as Record<string, unknown>, b = other as unknown as Record<string, unknown>;
     for (const f of fields) { const t = a[f]; a[f] = b[f]; b[f] = t; }
     // ids stay unique across both, so things moved between them never clash
@@ -1458,6 +1847,7 @@ export class Doc {
     const outer = this.tx;
     this.tx = null;
     this.begin('bulk');
+    this.tx!.bulk = true;
     try {
       fn();
     } finally {
@@ -1587,6 +1977,16 @@ export class Doc {
   }
 
   bounds(): Rect | null {
+    // (asked for by every tile of a repaint, for the page; the same until the drawing changes)
+    if (this.boundsMemo?.version === this.version) return this.boundsMemo.box && { ...this.boundsMemo.box };
+    const box = this.measureBounds();
+    this.boundsMemo = { version: this.version, box };
+    return box && { ...box };
+  }
+
+  private boundsMemo: { version: number; box: Rect | null } | null = null;
+
+  private measureBounds(): Rect | null {
     let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
     const grow = (x: number, y: number) => { if (x < x1) x1 = x; if (y < y1) y1 = y; if (x > x2) x2 = x; if (y > y2) y2 = y; };
     for (const a of this.atoms.values()) grow(a.x, a.y);

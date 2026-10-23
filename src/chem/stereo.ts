@@ -9,7 +9,7 @@
 import { Doc, Bond, Atom, StereoInfo } from '../model';
 import { axialTags } from './axial';
 import { Vec, Rect, norm, sub, len, lerp, distToSegment } from '../geom';
-import { labelBonds, labelSpec, layoutLabel } from './labels';
+import { labelBonds, labelSpec, layoutLabel, labelLook } from './labels';
 import { doubleBondGap, wedgeWidth } from '../style';
 import { NumberPlace, numberSlots, numberBox, numberSize } from '../render/atom-marks';
 
@@ -216,7 +216,7 @@ function readTags(RDKit: any, molblock: string, skip: readonly number[]): Stereo
 
 // ------------------------------------------------------------------ what a label says
 
-/** How axial chirality is written: Ra/Sa, or as helicity P/M (Edit > Preferences). */
+/** How axial chirality is written: Ra/Sa, or as helicity P/M (Edit > Settings). */
 export const axialStyle = { helicity: false };
 
 /** A worked-out descriptor as shown: Ra and Sa become M and P when helicity is chosen (Ra = M, Sa = P). */
@@ -315,7 +315,7 @@ function labelBoxesOf(doc: Doc, measure: Measure): (a: Atom) => Rect[] {
     if (a.attach || a.multi) return [];
     const spec = labelSpec(a.z, a.label, a.charge, a.isotope, doc.valenceSum(a.id), doc.degree(a.id), !a.hideCharge, !!a.showCarbon);
     if (!spec) return [];
-    if (a.supDigits) spec.supDigits = true;
+    Object.assign(spec, labelLook(a));
     const k = a.s ?? 1;
     const m = doc.style.marginWidth * k;
     return layoutLabel(spec, labelBonds(doc, a), doc.style.labelSize * k, measure, a.just).boxes

@@ -1,4 +1,4 @@
-// Scheme > Animate Reaction: the reaction animation window. A preview of the clip with play,
+// Chemistry > Animate > Animate Reaction: the reaction animation window. A preview of the clip with play,
 // pause and a scrubber; the timing; each step's pairing, with an editor to pair atoms by hand;
 // and saving the clip as an animated GIF or a folder of PNG frames (in a zip).
 //

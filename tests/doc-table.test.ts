@@ -7,9 +7,9 @@
 import { describe, it, expect } from 'vitest';
 import { unzipSync, strFromU8 } from 'fflate';
 import { writeDocx, readDocx, type DocxDeps } from '../src/io/docx';
-import { cellHolding, fieldTexts, flatRuns, newDocument, objectRun, paraFromStyle, pruneObjects, runStyleOf, type DocObject, type DocText } from '../src/document/document';
+import { cellHolding, fieldTexts, flatRuns, nestedTables, newDocument, objectRun, paraFromStyle, pruneObjects, runStyleOf, type DocObject, type DocText } from '../src/document/document';
 import { CELL_PAD, DocLayouter, SINGLE_ROW } from '../src/document/doc-layout';
-import { emptyTable, mergeRight, spanOf } from '../src/table';
+import { canMerge, coveringCell, deleteRow, emptyTable, insertRow, isCovered, mergeDown, mergeRight, nextCell, rowSpanOf, spanOf, splitCell } from '../src/table';
 import * as rt from '../src/richtext';
 import type { TableData, TextRun } from '../src/model';
 
@@ -191,6 +191,148 @@ describe('tables in Word files', () => {
     expect(inCell).toBeDefined();
     expect(back.objects[inCell!].kind).toBe('drawing');
     // and the text round the table is as it was
+    expect(rt.plainText(back.runs).replace(/￼/g, '#')).toBe('Before\n#\nAfter');
+  });
+});
+
+describe('cells merged down a column', () => {
+  const merged = (): TableData => {
+    const t = grid([['Entry', 'Substrate', 'Yield'], ['1', 'aryl', '92'], ['2', '', '88']], [60, 80, 60]);
+    t.rows[1][1] = { runs: text('aryl'), rowSpan: 2 };
+    return t;
+  };
+
+  it('covers the cells under a merged cell, and merges and splits again', () => {
+    const t = grid([['a', 'b'], ['c', 'd'], ['e', 'f']], [50, 50]);
+    expect(canMerge(t, 0, 0, 'down')).toBe(true);
+    const m = mergeDown(t, 0, 0);
+    expect(rowSpanOf(m, 0, 0)).toBe(2);
+    expect(isCovered(m, 1, 0)).toBe(true);
+    expect(coveringCell(m, 1, 0)).toEqual({ r: 0, c: 0 });
+    // the text of the cell below goes after the first's, as a new paragraph
+    expect(rt.plainText(m.rows[0][0].runs)).toBe('a\nc');
+    const m2 = mergeDown(m, 0, 0);
+    expect(rowSpanOf(m2, 0, 0)).toBe(3);
+    expect(nextCell(m2, 0, 1)).toEqual({ r: 1, c: 1 });
+    const back = splitCell(m2, 0, 0);
+    expect(isCovered(back, 1, 0)).toBe(false);
+    expect(back.rows[0][0].rowSpan).toBeUndefined();
+  });
+
+  it('only merges cells that line up', () => {
+    const t = mergeRight(grid([['a', 'b', 'c'], ['d', 'e', 'f']], [40, 40, 40]), 0, 0);
+    // a two-column cell can't merge down into a one-column one
+    expect(canMerge(t, 0, 0, 'down')).toBe(false);
+    const m = mergeDown(grid([['a', 'b'], ['c', 'd']], [40, 40]), 0, 0);
+    // nor a two-row cell right into a one-row one
+    expect(canMerge(m, 0, 0, 'right')).toBe(false);
+    expect(mergeRight(m, 0, 0)).toBe(m);
+  });
+
+  it('grows and shrinks with rows put in or taken out of it', () => {
+    const t = merged();
+    const more = insertRow(t, 2);
+    expect(rowSpanOf(more, 1, 1)).toBe(3);
+    expect(isCovered(more, 2, 1)).toBe(true);
+    const less = deleteRow(t, 2);
+    expect(rowSpanOf(less, 1, 1)).toBe(1);
+    // deleting the merged cell's first row moves it (and its text) down a row
+    const moved = deleteRow(t, 1);
+    expect(rt.plainText(moved.rows[1][1].runs)).toBe('aryl');
+    expect(rowSpanOf(moved, 1, 1)).toBe(1);
+  });
+
+  it('lays out a merged cell over its rows, and the last row grows when it needs more room', () => {
+    const t = merged();
+    let tb = layouter().layout(doc(t)).tables.get(1)!;
+    expect(tb.cells[2][1]).toBeNull();
+    const one = tb.hs[1];
+    expect(tb.hs[2]).toBeCloseTo(one);
+    // a merged cell with four lines of text: its two rows make room for it
+    t.rows[1][1] = { runs: text('a\nb\nc\nd'), rowSpan: 2, valign: 'bottom' };
+    tb = layouter().layout(doc(t)).tables.get(1)!;
+    const need = tb.cells[1][1]!.box.y2 - tb.cells[1][1]!.box.y1 + 2 * CELL_PAD.y;
+    expect(tb.hs[1] + tb.hs[2]).toBeCloseTo(need);
+    expect(tb.hs[1]).toBeCloseTo(one);
+  });
+
+  it('saves merged cells as Word\'s vMerge, and opens them again', async () => {
+    const t = merged();
+    t.rows[1][1].fill = '#ffd8a8';
+    const x = strFromU8(unzipSync(await writeDocx(doc(t), deps))['word/document.xml']);
+    expect(x).toContain('<w:vMerge w:val="restart"/>');
+    expect(x).toMatch(/<w:vMerge\/>.*?<\/w:tcPr><w:p\/><\/w:tc>/);
+    const back = (await readDocx(await writeDocx(doc(t), deps))).doc;
+    const tab = Object.values(back.objects).find((o) => o.kind === 'table');
+    if (tab?.kind !== 'table') throw new Error('no table');
+    expect(tab.table.rows[1][1]).toMatchObject({ rowSpan: 2, fill: '#ffd8a8' });
+    expect(rt.plainText(tab.table.rows[1][1].runs)).toBe('aryl');
+    expect(isCovered(tab.table, 2, 1)).toBe(true);
+    expect(rt.plainText(tab.table.rows[2][2].runs)).toBe('88');
+  });
+
+  it('reads a merge down a column of cells that span columns, and ends it at a cell that is not merged', async () => {
+    const t = grid([['a', 'b', 'c'], ['', '', 'd'], ['e', 'f', 'g']], [40, 40, 40]);
+    t.rows[0][0] = { runs: text('a'), span: 2, rowSpan: 2 };
+    const back = (await readDocx(await writeDocx(doc(t), deps))).doc;
+    const tab = Object.values(back.objects).find((o) => o.kind === 'table');
+    if (tab?.kind !== 'table') throw new Error('no table');
+    expect(spanOf(tab.table, 0, 0)).toBe(2);
+    expect(rowSpanOf(tab.table, 0, 0)).toBe(2);
+    expect(isCovered(tab.table, 1, 1)).toBe(true);
+    expect(isCovered(tab.table, 2, 0)).toBe(false);
+    expect(rt.plainText(tab.table.rows[2][0].runs)).toBe('e');
+  });
+});
+
+describe('tables in table cells', () => {
+  /** A 2 × 2 table (object 1) whose second cell holds a 2 × 2 table (object 2). */
+  const nestedDoc = (): DocText => {
+    const n = runStyleOf(newDocument().styles.Normal);
+    const outer = grid([['Conditions', ''], ['x', 'y']], [100, 160]);
+    outer.rows[0][1] = { runs: [{ ...n, text: 'Solvents\n' }, objectRun(2, n)] };
+    const inner = grid([['THF', '92'], ['DMF', '71']], [60, 40]);
+    return doc(outer, { 2: { kind: 'table', table: inner } });
+  };
+
+  it('lays out the inner table in its cell, its rows placed inside the cell', () => {
+    const d = nestedDoc();
+    const lay = layouter().layout(d);
+    const outer = lay.tables.get(1)!, inner = lay.tables.get(2)!;
+    expect(outer.depth).toBe(0);
+    expect(inner.depth).toBe(1);
+    expect(nestedTables(d)).toEqual([{ id: 2, depth: 1, parent: 1 }]);
+    // the cell holding it is tall enough for its text and the inner table
+    const innerH = inner.hs.reduce((a, b) => a + b, 0);
+    expect(outer.hs[0]).toBeGreaterThan(innerH);
+    expect(inner.rows).toHaveLength(2);
+    const cellX = outer.rows[0].x + outer.xs[1];
+    expect(inner.rows[0].x).toBeGreaterThanOrEqual(cellX);
+    expect(inner.rows[0].y).toBeGreaterThan(outer.rows[0].y);
+    expect(inner.rows[1].y - inner.rows[0].y).toBeCloseTo(inner.hs[0]);
+    expect(inner.rows[1].y + inner.hs[1]).toBeLessThanOrEqual(outer.rows[0].y + outer.hs[0] + 1e-6);
+    // the inner table's cells count in their place, and are kept when unused objects are cleared
+    expect(flatRuns(d).map((r) => r.text).join('')).toContain('THF92DMF71');
+    expect(Object.keys(pruneObjects(d).objects)).toEqual(['1', '2']);
+    expect(cellHolding(d, 2)).toEqual({ id: 1, r: 0, c: 1 });
+  });
+
+  it('saves a table in a cell as Word\'s table in the cell, and opens it as one again', async () => {
+    const x = strFromU8(unzipSync(await writeDocx(nestedDoc(), deps))['word/document.xml']);
+    // a table inside a cell, the cell ending with a paragraph after it
+    expect(x).toMatch(/<w:tc><w:tcPr>[^]*?<w:tbl>[^]*?<\/w:tbl><w:p\/><\/w:tc>/);
+    const back = (await readDocx(await writeDocx(nestedDoc(), deps))).doc;
+    const tabs = Object.entries(back.objects).filter(([, o]) => o.kind === 'table');
+    expect(tabs).toHaveLength(2);
+    const outer = tabs.map(([, o]) => o).find((o) => o.kind === 'table' && o.table.cols.length === 2 && o.table.cols[1] === 160);
+    if (outer?.kind !== 'table') throw new Error('no outer table');
+    const runs = outer.table.rows[0][1].runs;
+    expect(rt.plainText(runs).replace(/￼/g, '#')).toBe('Solvents\n#');
+    const inner = back.objects[runs.find((r) => r.obj !== undefined)!.obj!];
+    if (inner?.kind !== 'table') throw new Error('no inner table');
+    expect(inner.table.cols).toEqual([60, 40]);
+    expect(rt.plainText(inner.table.rows[1][0].runs)).toBe('DMF');
+    // the text round the outer table is as it was
     expect(rt.plainText(back.runs).replace(/￼/g, '#')).toBe('Before\n#\nAfter');
   });
 });

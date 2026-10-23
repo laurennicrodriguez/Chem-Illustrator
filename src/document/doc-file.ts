@@ -5,12 +5,17 @@
 import type { Measure, TextFrame } from '../text/layout';
 import { TextEditing, type ChangeKind } from '../text/editing';
 import { documentMeasure } from '../text/font-measure';
-import { CELL_PAD, DocLayouter, movedLayout, pageNumber, type DocLayout } from './doc-layout';
-import { reviewAuthor, revisionDate } from './revisions';
+import { cellMargins } from './table-styles';
+import { DocLayouter, movedLayout, type DocLayout } from './doc-layout';
+import { reviewAuthor, revisionDate, type ReviewView } from './revisions';
 import { setPart } from '../table';
 import { FigurePictures } from './figures';
-import { BOX_PAD, newDocument, runStyleOf, styleOf, type DocText } from './document';
-import { storedParas } from '../text/paragraphs';
+import { BOX_PAD, newDocument, noteStyle, runStyleOf, styleOf, type DocObject, type DocText } from './document';
+import { allowedEdit } from './protect';
+import type { ParaStyle, TextRun } from '../model';
+import { fitParas, paraCount, storedParas } from '../text/paragraphs';
+import { PRINT_VIEW, continuous, hiddenParas, outlineLevel, screenText, type ScreenView } from './doc-views';
+import * as rt from '../richtext';
 
 let screenMeasure: Measure = (t, s) => t.length * s * 0.5;
 
@@ -38,7 +43,13 @@ export class DocFile {
   edits = 0;
   /** Called after every change to the text or the selection. */
   listener: (kind: ChangeKind) => void = () => {};
-  private memo: { frame: TextFrame; lay: DocLayout } | null = null;
+  /** Called when a change is turned away because the document is protected (Review > Restrict Editing). */
+  onRefused: () => void = () => {};
+  private memo: { frame: TextFrame; view: ScreenView; lay: DocLayout } | null = null;
+  /** Print Layout's pages while another view shows (for printing, PDFs and the contents' page numbers). */
+  private printer: { layouter: DocLayouter; memo: { t: DocText; lay: DocLayout } | null } | null = null;
+  /** How the document is shown (View > Views): Print Layout unless another view is chosen. */
+  private shown: ScreenView = PRINT_VIEW;
   /**
    * The text box or table cell being typed into, if any: its own editing, whose changes go back
    * into the document.
@@ -54,10 +65,24 @@ export class DocFile {
     // Review > Track Changes: edits to the text are marked with who made them and when
     this.ed.track = () => (this.t.track ? { author: reviewAuthor() || 'Author', date: revisionDate() } : null);
     this.ed.indentStep = INDENT;
+    // Review > Restrict Editing: only the changes the protection allows
+    this.ed.guard = (before, after) => allowedEdit(before as DocText, after as DocText);
+    this.ed.refused = () => this.onRefused();
     this.ed.onChange = (kind) => {
       if (kind === 'text') this.edits++;
       this.listener(kind);
     };
+  }
+
+  /** How tracked changes show (Review > Display for Review), on the screen and when printed. */
+  get review(): ReviewView {
+    return this.layouter.review;
+  }
+  set review(v: ReviewView) {
+    this.layouter.review = v;
+    if (this.printer) { this.printer.layouter.review = v; this.printer.memo = null; }
+    this.memo = null;
+    this.ed.relayout();
   }
 
   /** Where typing and the text buttons go: the text box being typed into, or the document. */
@@ -72,6 +97,7 @@ export class DocFile {
    */
   editBox(id: number): TextEditing | null {
     const o = this.t.objects[id];
+    if (o?.kind === 'note') return this.editNote(id);
     if (o?.kind !== 'textbox') return null;
     if (this.box?.id === id) return this.box.ed;
     const N = styleOf(this.t, {});
@@ -83,14 +109,51 @@ export class DocFile {
       const at = this.layout().objects.find((x) => x.id === id);
       return at ? movedLayout(lay, at.x + BOX_PAD.x, at.y + BOX_PAD.y - lay.box.y1) : lay;
     };
-    // tracked like the document's own text
+    // tracked like the document's own text, and protected with it
     ed.track = this.ed.track;
+    this.guardBox(ed, (x) => { const cur = this.t.objects[id]; return cur?.kind === 'textbox' ? { ...cur, runs: x.runs, paras: storedParas(x.paras) } : null; }, id);
     const box = { id, ed, recorded: false };
     ed.onChange = (kind) => {
       if (kind === 'text') {
         const cur = this.t.objects[id];
         if (cur?.kind === 'textbox') {
           this.ed.update({ ...this.t, objects: { ...this.t.objects, [id]: { ...cur, runs: ed.t.runs, paras: storedParas(ed.t.paras) } } } as DocText, box.recorded ? null : 'Edit text box');
+          box.recorded = true;
+        }
+        ed.relayout();
+      }
+      this.listener(kind);
+    };
+    this.box = box;
+    return ed;
+  }
+
+  /**
+   * Start typing into a footnote or endnote, as editBox does for a text box: its text laid out
+   * where the note is (at the foot of its page, or after the text), every change going back into it.
+   */
+  editNote(id: number): TextEditing | null {
+    const o = this.t.objects[id];
+    if (o?.kind !== 'note') return null;
+    if (this.box?.id === id) return this.box.ed;
+    const st = noteStyle(this.t);
+    const ed = new TextEditing({ runs: o.runs, paras: o.paras ?? [], justify: 'left', wrap: 100 }, runStyleOf(st), docMeasure, st.size);
+    ed.anchor = ed.focus = ed.text.length;
+    ed.layoutWith = (frame) => {
+      const lay = this.layout();
+      const at = lay.notes.get(id);
+      const nl = this.layouter.noteText(this.t, frame.runs, frame.paras, lay.fields.get(id) ?? '', at?.w ?? lay.textW);
+      return at ? movedLayout(nl, at.x, at.y - nl.box.y1) : nl;
+    };
+    // tracked like the document's own text, and protected with it
+    ed.track = this.ed.track;
+    this.guardBox(ed, (x) => { const cur = this.t.objects[id]; return cur?.kind === 'note' ? { ...cur, runs: x.runs, paras: storedParas(x.paras) } : null; }, id);
+    const box = { id, ed, recorded: false };
+    ed.onChange = (kind) => {
+      if (kind === 'text') {
+        const cur = this.t.objects[id];
+        if (cur?.kind === 'note') {
+          this.ed.update({ ...this.t, objects: { ...this.t.objects, [id]: { ...cur, runs: ed.t.runs, paras: storedParas(ed.t.paras) } } } as DocText, box.recorded ? null : cur.end ? 'Edit endnote' : 'Edit footnote');
           box.recorded = true;
         }
         ed.relayout();
@@ -122,10 +185,12 @@ export class DocFile {
       const cl = this.layouter.cellNow(tab, r, c, frame.runs, frame.paras) ?? tb?.cells[r]?.[c];
       const at = tb?.rows[r];
       if (!cl) return this.layouter.boxText(this.t, frame.runs, frame.paras, 100);
-      return at && tb ? movedLayout(cl, at.x + tb.xs[c] + CELL_PAD.x, at.y + CELL_PAD.y + (tb.drop[r]?.[c] ?? 0) - cl.box.y1) : cl;
+      const m = cellMargins(tab, r, c);
+      return at && tb ? movedLayout(cl, at.x + tb.xs[c] + m.left, at.y + m.top + (tb.drop[r]?.[c] ?? 0) - cl.box.y1) : cl;
     };
-    // tracked like the document's own text
+    // tracked like the document's own text, and protected with it
     ed.track = this.ed.track;
+    this.guardBox(ed, (x) => { const cur = this.t.objects[id]; return cur?.kind === 'table' && cur.table.rows[r]?.[c] ? { ...cur, table: setPart(cur.table, { r, c }, { runs: x.runs, paras: storedParas(x.paras) }) } : null; }, id);
     const box = { id, cell: { r, c }, ed, recorded: false };
     ed.onChange = (kind) => {
       if (kind === 'text') {
@@ -141,6 +206,23 @@ export class DocFile {
     };
     this.box = box;
     return ed;
+  }
+
+  /** Make a change the protection would turn away (stopping it, once its password is given). */
+  unprotected(f: () => void): void {
+    const g = this.ed.guard;
+    this.ed.guard = null;
+    try { f(); } finally { this.ed.guard = g; }
+  }
+
+  /** A text box's, note's or cell's changes are let through when the document with them would be. */
+  private guardBox(ed: TextEditing, made: (t: { runs: TextRun[]; paras: ParaStyle[] }) => DocObject | null, id: number): void {
+    ed.guard = (_before, after) => {
+      if (!this.t.protect) return true;
+      const o = made(after);
+      return !!o && allowedEdit(this.t, { ...this.t, objects: { ...this.t.objects, [id]: o } });
+    };
+    ed.refused = () => this.onRefused();
   }
 
   /** Stop typing into the text box. */
@@ -161,15 +243,56 @@ export class DocFile {
   /** Lay out again from scratch (fonts finished loading). */
   relayout(): void {
     this.layouter.clear();
+    this.printer?.layouter.clear();
+    if (this.printer) this.printer.memo = null;
     this.memo = null;
     this.ed.relayout();
   }
 
+  /** The view the document is shown in (View > Views). */
+  get view(): ScreenView {
+    return this.shown;
+  }
+
+  /** Show the document in another view, or the same view changed (Outline's folds, Web Layout's width). */
+  set view(v: ScreenView) {
+    if (v === this.shown) return;
+    this.shown = v;
+    this.ed.relayout();
+  }
+
+  /** The pages as they print, whatever view shows (printing, PDFs, the contents' page numbers in Word files). */
+  printLayout(): DocLayout {
+    if (!continuous(this.shown.kind)) return this.layout();
+    this.printer ??= { layouter: new DocLayouter({ measure: docMeasure, drawingSize: (c, s) => figures.size(c, s) }), memo: null };
+    this.printer.layouter.review = this.layouter.review;
+    const t = this.t;
+    if (this.printer.memo?.t !== t) {
+      const lay = this.printer.layouter.layout(t);
+      this.printer.memo = { t, lay };
+      paragraphPages.set(t, lay.paraTops.map((pt) => lay.pages[pt.page]?.number ?? ''));
+    }
+    return this.printer.memo.lay;
+  }
+
   private layoutOf(frame: TextFrame): DocLayout {
-    if (this.memo?.frame !== frame) {
-      const lay = this.layouter.layout(frame as DocText);
-      this.memo = { frame, lay };
-      paragraphPages.set(frame as DocText, lay.paraTops.map((pt) => pageNumber((frame as DocText).hf, pt.page)));
+    const v = this.shown;
+    if (this.memo?.frame !== frame || this.memo.view !== v) {
+      const t = frame as DocText;
+      let lay: DocLayout;
+      if (!continuous(v.kind)) {
+        lay = this.layouter.layout(t);
+        paragraphPages.set(t, lay.paraTops.map((pt) => lay.pages[pt.page]?.number ?? ''));
+      } else if (v.kind === 'outline' && v.outline) {
+        const hidden = hiddenParas(t, v.outline);
+        let firstLine: Set<number> | undefined;
+        if (v.outline.firstLine) {
+          firstLine = new Set();
+          fitParas(t.paras, paraCount(rt.plainText(t.runs))).forEach((ps, p) => { if (!outlineLevel(t, ps)) firstLine!.add(p); });
+        }
+        lay = this.layouter.layout(screenText(t, v), { hidden, firstLine, notesAtEnd: true });
+      } else lay = this.layouter.layout(screenText(t, v), { notesAtEnd: true });
+      this.memo = { frame, view: v, lay };
     }
     return this.memo.lay;
   }

@@ -1,4 +1,4 @@
-// Frames (Structure > Add Frame): a box round a structure, a scheme or anything else, with a gap
+// Frames (Chemistry > Labels and Numbers > Add Frame): a box round a structure, a scheme or anything else, with a gap
 // you choose. A frame that follows its contents is refitted at the end of every change, inside
 // the same undo step, so it grows when a structure grows and moves when its contents move.
 

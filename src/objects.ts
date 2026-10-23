@@ -3,8 +3,8 @@
 // editor and the renderer.
 
 import type { Arrow, Shape, Glue } from './model';
-import { PICTURE_SHADOWS } from './model';
-import { Vec, Rect, add, sub, mul, perp, dist, dot, len, angleOf, fromAngle, normAngle, snapAngle, distToSegment, arcCenter, DEG } from './geom';
+import { PICTURE_SHADOWS, turnsFreely } from './model';
+import { Vec, Rect, add, sub, mul, perp, dist, dot, len, angleOf, fromAngle, normAngle, snapAngle, distToSegment, arcCenter, DEG, turnAbout, turnedCorners } from './geom';
 import { geoDef, flatten, moveSteps, insideOutline, distToOutline, ports } from './design/geo';
 
 // ------------------------------------------------------------------ arrows
@@ -117,8 +117,11 @@ export const PORT_OUT: Vec[] = [{ x: 0, y: -1 }, { x: 1, y: 0 }, { x: 0, y: 1 },
 /** A shape's connection points (the middles of its sides), or null for lines and brackets. */
 export function shapePorts(s: Shape): Vec[] | null {
   if (s.kind === 'line' || s.kind === 'bracket' || s.kind === 'symbol') return null;
-  const b = shapeBox(s);
-  return ports(b.x1, b.y1, b.x2, b.y2);
+  const rot = shapeTurn(s);
+  const b = rot ? flatBox(s) : shapeBox(s);
+  const ps = ports(b.x1, b.y1, b.x2, b.y2);
+  // a turned shape's connection points turn with it
+  return rot ? ps.map((p) => turnAbout(p, shapeMid(s), rot)) : ps;
 }
 
 export function gluePoint(s: Shape, port: number): Vec {
@@ -306,7 +309,26 @@ export function shapeOrder(shapes: Shape[]): Shape[] {
   return shapes.slice().sort((a, b) => (a.z ?? 0) - (b.z ?? 0) || (b.filled ? 1 : 0) - (a.filled ? 1 : 0) || a.id - b.id);
 }
 
+/** The middle of a shape's box: what a turned shape turns about. */
+export const shapeMid = (s: Pick<Shape, 'x1' | 'y1' | 'x2' | 'y2'>): Vec => ({ x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 });
+
+/** How far a shape is turned (degrees clockwise), 0 for shapes that don't turn. */
+export const shapeTurn = (s: Shape): number => (s.rot && turnsFreely(s) ? s.rot : 0);
+
+/** The corners of a shape's box as it shows on the page (turned with it), top left first, clockwise. */
+export function shapeCorners(s: Shape): Vec[] {
+  const r = { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
+  return turnedCorners(r, shapeMid(s), shapeTurn(s));
+}
+
 export function shapeBox(s: Shape): Rect {
+  const rot = shapeTurn(s);
+  const r = flatBox(s);
+  return rot ? boxOf(turnedCorners(r, shapeMid(s), rot)) : r;
+}
+
+/** A shape's box before it is turned (with its shadow and frame). */
+function flatBox(s: Shape): Rect {
   const r = { x1: Math.min(s.x1, s.x2), y1: Math.min(s.y1, s.y2), x2: Math.max(s.x1, s.x2), y2: Math.max(s.y1, s.y2) };
   if (s.kind === 'bracket') return padRect(r, bracketReach(s));
   if (s.kind === 'rect' && s.shadow) return { ...r, x2: r.x2 + (s.shadowSize ?? 2.4), y2: r.y2 + (s.shadowSize ?? 2.4) };
@@ -321,6 +343,8 @@ export function shapeBox(s: Shape): Rect {
 
 /** Is p on the shape? Open shapes are picked up by their outline, filled ones anywhere inside. */
 export function shapeHit(s: Shape, p: Vec, tol: number): boolean {
+  const rot = shapeTurn(s);
+  if (rot) p = turnAbout(p, shapeMid(s), -rot);
   const a = { x: s.x1, y: s.y1 }, b = { x: s.x2, y: s.y2 };
   const x1 = Math.min(s.x1, s.x2), x2 = Math.max(s.x1, s.x2), y1 = Math.min(s.y1, s.y2), y2 = Math.max(s.y1, s.y2);
   switch (s.kind) {
@@ -369,6 +393,8 @@ export interface Handle {
   id: number;
   which: HandleId;
   at: Vec;
+  /** How far it is drawn off the point it stands for (an arrow's middle moved clear of its conditions). */
+  off?: Vec;
 }
 
 export function arrowHandles(r: Arrow): Handle[] {
@@ -381,7 +407,8 @@ export function arrowHandles(r: Arrow): Handle[] {
 }
 
 export function shapeHandles(s: Shape): Handle[] {
-  const h = (which: HandleId, x: number, y: number): Handle => ({ kind: 'shape', id: s.id, which, at: { x, y } });
+  const rot = shapeTurn(s), mid = shapeMid(s);
+  const h = (which: HandleId, x: number, y: number): Handle => ({ kind: 'shape', id: s.id, which, at: turnAbout({ x, y }, mid, rot) });
   if (s.kind === 'line' || s.kind === 'bracket') return [h('p1', s.x1, s.y1), h('p2', s.x2, s.y2)];
   if (s.kind === 'symbol' || s.kind === 'table' || s.picture) return [];
   const x1 = Math.min(s.x1, s.x2), x2 = Math.max(s.x1, s.x2), y1 = Math.min(s.y1, s.y2), y2 = Math.max(s.y1, s.y2);
@@ -398,6 +425,26 @@ const NO_CROP = { l: 0, t: 0, r: 0, b: 0 };
  * beyond it is cut off (or uncovered again), while the rest stays where it was.
  */
 export function dragCropHandle(s: Shape, which: HandleId, p: Vec): Partial<Shape> {
+  return turnedDrag(s, which, () => flatCrop(s, which, turnAbout(p, shapeMid(s), -shapeTurn(s))));
+}
+
+/**
+ * A handle of a turned shape dragged: `f` works in the shape's own frame (the point turned back),
+ * and the box then moves so the side or corner across from the handle stays where it is on the page.
+ */
+function turnedDrag(s: Shape, which: HandleId, f: () => Partial<Shape>): Partial<Shape> {
+  const patch = f();
+  const rot = shapeTurn(s);
+  if (!rot || patch.x1 === undefined || patch.y1 === undefined || patch.x2 === undefined || patch.y2 === undefined) return patch;
+  const c = shapeMid(s), nc = shapeMid(patch as Rect);
+  if (dist(c, nc) < 1e-9) return patch;
+  const x1 = Math.min(s.x1, s.x2), x2 = Math.max(s.x1, s.x2), y1 = Math.min(s.y1, s.y2), y2 = Math.max(s.y1, s.y2);
+  const a = { x: which.includes('w') ? x2 : which.includes('e') ? x1 : c.x, y: which.includes('n') ? y2 : which.includes('s') ? y1 : c.y };
+  const d = sub(turnAbout(a, c, rot), turnAbout(a, nc, rot));
+  return { ...patch, x1: patch.x1 + d.x, y1: patch.y1 + d.y, x2: patch.x2 + d.x, y2: patch.y2 + d.y };
+}
+
+function flatCrop(s: Shape, which: HandleId, p: Vec): Partial<Shape> {
   const c = { ...(s.crop ?? NO_CROP) };
   let x1 = Math.min(s.x1, s.x2), x2 = Math.max(s.x1, s.x2), y1 = Math.min(s.y1, s.y2), y2 = Math.max(s.y1, s.y2);
   // size of the whole picture, uncropped
@@ -505,6 +552,11 @@ export function dragArrowHandle(r: Arrow, which: HandleId, p: Vec, free: boolean
 
 /** What dragging a shape's handle to `p` changes. `free` (Alt) turns off angle snapping for lines. */
 export function dragShapeHandle(s: Shape, which: HandleId, p: Vec, free: boolean, how: ResizeHow = {}): Partial<Shape> {
+  if (!shapeTurn(s)) return flatDrag(s, which, p, free, how);
+  return turnedDrag(s, which, () => flatDrag(s, which, turnAbout(p, shapeMid(s), -shapeTurn(s)), free, how));
+}
+
+function flatDrag(s: Shape, which: HandleId, p: Vec, free: boolean, how: ResizeHow): Partial<Shape> {
   if (which === 'p1') { const q = snapEnd({ x: s.x2, y: s.y2 }, p, free); return { x1: q.x, y1: q.y }; }
   if (which === 'p2') { const q = snapEnd({ x: s.x1, y: s.y1 }, p, free); return { x2: q.x, y2: q.y }; }
   if (s.kind === 'picture') return dragPictureHandle(s, which, p, free, how);
@@ -522,6 +574,15 @@ export function dragShapeHandle(s: Shape, which: HandleId, p: Vec, free: boolean
 }
 
 /** Two brackets, facing each other, on the left and right edges of a box. */
+/** A bracket tool's shape: a pair (also for a transition state), or only the left or right half. */
+export type BracketForm = 'ts' | 'left' | 'right';
+
+/** The brackets a bracket tool puts round a box. */
+export function bracketHalves(r: Rect, bracket: NonNullable<Shape['bracket']>, form?: BracketForm): Omit<Shape, 'id'>[] {
+  const [left, right] = bracketsAround(r, bracket);
+  return form === 'left' ? [left] : form === 'right' ? [right] : [left, right];
+}
+
 export function bracketsAround(r: Rect, bracket: NonNullable<Shape['bracket']>): Omit<Shape, 'id'>[] {
   // a bracket's lips point to the right of the direction from (x1,y1) to (x2,y2), as ChemDraw stores them
   return [

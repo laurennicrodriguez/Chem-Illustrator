@@ -10,14 +10,22 @@
 // document, while anything formatted by hand (an italic word, a paragraph centred on its
 // own) keeps its own look.
 
+import type { TableStyleDef } from './table-styles';
 import type { CommentThread } from './comments';
-import type { Contents, Justify, ParaStyle, TableData, TextRun } from '../model';
+import type { Protection } from './protect';
+import type { Contents, Justify, ParaStyle, PictureFx, TableData, TextRun } from '../model';
 import type { RichText } from '../text/editing';
+import type { Measure } from '../text/layout';
 import { ACS_1996, type DocStyle } from '../style';
 import * as rt from '../richtext';
 import { cleanPara, fitParas, paraCount, paraRange } from '../text/paragraphs';
 import { citationTexts, type CiteStyle, type Reference } from './references';
 import type { CiteFormat } from './cite-styles';
+import type { CiteLive, CiteManager } from './live-cites';
+import type { ChartBox } from '../sheet/chart-box';
+import type { DocHyphenation } from '../text/hyphenate';
+import { allHf, hfObjectIds } from './hf-bodies';
+import { fieldText, needsPages, type DocProps, type FieldObj } from './fields';
 
 /** The character that stands for a figure, table or field in the text (Unicode's object replacement character). */
 export const OBJECT_CHAR = '￼';
@@ -46,9 +54,88 @@ export interface NamedStyle {
   keepNext: boolean;
   /** The style a new paragraph gets after Enter at the end of one of these (Normal after a heading). */
   next?: string;
-  /** A heading's level (1 to 3). */
+  /** A heading's level (1 to 9). */
   outline?: number;
+  /** Made by the person (Styles pane > New Style), so it can be deleted. */
+  custom?: boolean;
 }
+
+/**
+ * A character style (Emphasis, Strong…): a look for words rather than whole paragraphs. It sets
+ * only what it gives; the rest comes from the paragraph. Text in it carries its id (TextRun.cstyle).
+ */
+export interface CharStyle {
+  id: string;
+  name: string;
+  font?: string;
+  size?: number;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  color?: string;
+  smallCaps?: boolean;
+  allCaps?: boolean;
+  strike?: boolean;
+  custom?: boolean;
+}
+
+/** A watermark (Design > Watermark): words across every page, behind the text, as Word's text watermarks. */
+export interface Watermark {
+  text: string;
+  font: string;
+  color: string;
+  /** Across the page corner to corner, or straight across. */
+  layout: 'diagonal' | 'horizontal';
+  /** Faded half way into the paper (Word's Semitransparent). */
+  faded: boolean;
+}
+
+/** A line round every page (Design > Page Borders), as Word's box border. */
+export interface PageBorder {
+  style: 'single' | 'double' | 'dotted' | 'dashed' | 'thick';
+  /** Its width, in points. */
+  width: number;
+  color: string;
+  /** Measured from the edge of the paper or from the text (the margins), and how far from it, in points. */
+  from: 'page' | 'text';
+  space: number;
+}
+
+/** Word's watermark presets. */
+export const WATERMARKS = ['CONFIDENTIAL', 'DRAFT', 'DO NOT COPY', 'SAMPLE', 'PRELIMINARY', 'NOT FOR DISTRIBUTION', 'ASAP', 'URGENT'];
+
+export function defaultWatermark(text = 'DRAFT'): Watermark {
+  return { text, font: 'Calibri', color: '#c0c0c0', layout: 'diagonal', faded: true };
+}
+
+export function defaultPageBorder(): PageBorder {
+  return { style: 'single', width: 0.5, color: '#000000', from: 'page', space: 24 };
+}
+
+/** A page as placed: its top left corner, size and setup (a laid-out page, or a page of a Word file). */
+export interface PagePlace { x: number; top: number; w: number; h: number; setup: PageSetup }
+
+/** The size and place of a watermark's words on a page: their font size, the middle of the margins, and how far they are turned. */
+export function watermarkPlace(w: Watermark, p: PagePlace, measure: Measure): { size: number; cx: number; cy: number; angle: number; width: number } {
+  const pg = p.setup;
+  const tw = Math.max(36, p.w - pg.left - pg.right), th = Math.max(36, p.h - pg.top - pg.bottom);
+  const k = Math.max(0.1, measure(w.text, 100, w.font, 'bold ') / 100);
+  const diag = w.layout === 'diagonal';
+  const size = diag ? (Math.min(tw, th) * Math.SQRT2) / (k + 1) : Math.min((tw * 0.95) / k, th / 2);
+  return { size, cx: p.x + pg.left + tw / 2, cy: p.top + pg.top + th / 2, angle: diag ? -Math.PI / 4 : 0, width: size * k };
+}
+
+/** The rectangle a page border is drawn on (the middle of its line). */
+export function borderRect(b: PageBorder, p: PagePlace): { x: number; y: number; w: number; h: number } {
+  const pg = p.setup;
+  const half = b.width / 2;
+  if (b.from === 'text') {
+    const x = p.x + pg.left - b.space - half, y = p.top + pg.top - b.space - half;
+    return { x, y, w: p.w - pg.left - pg.right + 2 * (b.space + half), h: p.h - pg.top - pg.bottom + 2 * (b.space + half) };
+  }
+  return { x: p.x + b.space + half, y: p.top + b.space + half, w: p.w - 2 * (b.space + half), h: p.h - 2 * (b.space + half) };
+}
+
 
 /** Page size and margins, in points. */
 export interface PageSetup {
@@ -89,6 +176,62 @@ export interface HeaderFooter {
   start: number;
   /** Shown on the first page (often left off a cover or title page). */
   onFirst: boolean;
+  /** Different First Page (Word's titlePg): the section's first page has its own header and footer (`first`). */
+  firstPage?: boolean;
+  first?: HfZones;
+  /** Different Odd & Even Pages: even pages have their own header and footer (`even`), the page number on the other side. */
+  oddEven?: boolean;
+  even?: HfZones;
+  /** Headers and footers with more than plain text (pictures, tables, formatted text, fields): each in place of the plain text of its place. */
+  bodies?: Partial<Record<HfKey, HfBody>>;
+}
+
+/** The plain text of a first or even page's header and footer: left, centre and right. */
+export interface HfZones { header: [string, string, string]; footer: [string, string, string] }
+
+/** Which header or footer: the usual one, the first page's, or even pages'. */
+export type HfKey = 'header' | 'footer' | 'firstHeader' | 'firstFooter' | 'evenHeader' | 'evenFooter';
+
+/** A header or footer as Word has it: paragraphs of formatted text, with fields, pictures and tables (objects in the document's objects). */
+export interface HfBody { runs: TextRun[]; paras?: ParaStyle[] }
+
+/** How a section starts: on a new page (Next Page), on the same page (Continuous), or on the next even or odd page. */
+export type BreakKind = 'nextPage' | 'continuous' | 'evenPage' | 'oddPage';
+
+/** How page numbers are written, by Word's names: 1, 2, 3; i, ii, iii; I, II, III; a, b, c; A, B, C. */
+export type PageNumFormat = 'decimal' | 'lowerRoman' | 'upperRoman' | 'lowerLetter' | 'upperLetter';
+
+/** Line numbers in the margin beside the text (Layout > Line Numbers), as in Word. */
+export interface LineNumbers {
+  /** The first number. */
+  start: number;
+  /** Show every nth number (1: every line; 5: 5, 10, 15…). Every line is still counted. */
+  countBy: number;
+  /** From the text to the numbers, in points (Word's Auto, a quarter inch, when left out). */
+  distance?: number;
+  /** Count from the start again on each page, in each section, or never. */
+  restart: 'page' | 'section' | 'continuous';
+}
+
+/** Word's Auto distance from the text to the line numbers (a quarter inch). */
+export const LINE_NUMBER_GAP = 18;
+
+/**
+ * A section break: the paragraph holding it starts a new section, with its own page setup,
+ * header and footer, page numbering and line numbers (the first section's are the document's).
+ */
+export interface SectionBreak {
+  kind: BreakKind;
+  /** Its paper, margins and columns (the section before's when left out). */
+  page?: PageSetup;
+  /** Its own header and footer; left out, the section before's (Word's Link to Previous). */
+  hf?: HeaderFooter;
+  /** Page numbers start again here, from this; left out, they carry on from the section before. */
+  restart?: number;
+  /** How its page numbers are written (1, 2, 3 when left out). */
+  format?: PageNumFormat;
+  /** Its line numbers (none when left out). */
+  lines?: LineNumbers;
 }
 
 /** A figure's or picture's frame and shadow (Word's Picture Format). */
@@ -134,6 +277,14 @@ export interface Float {
   yFrom?: 'para' | 'margin' | 'page';
   /** Room kept between the figure and the text round it, in points (Word's is 0.13 in). */
   gap?: number;
+  /** Which is drawn over which (Bring Forward, Send Backward): higher on top; unset, in the order of the text. */
+  z?: number;
+  /** Figures grouped together (Arrange > Group) share a number, and move together. */
+  group?: number;
+  /** Its name in the Selection Pane (unset: "Picture 3", "Text Box 2"). */
+  name?: string;
+  /** Hidden from the page in the Selection Pane (still in the document). */
+  hidden?: boolean;
 }
 
 /** The room text keeps from a floating figure unless set (Word's 0.13 inch). */
@@ -153,11 +304,37 @@ export function floatOf(o: DocObject | undefined): Float | undefined {
 }
 
 /** Something that sits in the text in place of one character. */
+/**
+ * Another program's file kept whole in the document, shown as its picture (Insert > Object, or
+ * an object in a Word file): double-clicking it opens the file in its program.
+ */
+export interface Embedded {
+  /** The program's name for the kind of object, as Word records it (Excel.Sheet.12, Package). */
+  prog: string;
+  /** Kept as Word keeps it: an OLE compound file, or an Office file as a part of its own. */
+  part: 'ole' | 'package';
+  /** The part's extension in a Word file (bin, xlsx, docx, pptx). */
+  ext: string;
+  /** The part's bytes, as a data URL. */
+  data: string;
+  /** The name of the file it was made from, when known. */
+  name?: string;
+  /** Shown as an icon with its name, rather than its contents. */
+  icon?: boolean;
+}
+
 export type DocObject =
   /** A structure, scheme or table: a drawing, edited with the drawing tools. `scale` 1 is the drawing's own size. */
-  | { kind: 'drawing'; contents: Contents; scale?: number; look?: FigureLook; float?: Float }
-  /** A picture: its own size is w × h points (`px` its pixels); `scale` 1 is that size. */
-  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float }
+  | { kind: 'drawing'; contents: Contents; scale?: number; look?: FigureLook; float?: Float; alt?: string }
+  /**
+   * A picture: its own size is w × h points (`px` its pixels); `scale` 1 is that size. A chart
+   * (Insert > Chart) is a picture with its chart and data: drawn from them, saved as Word's chart.
+   * `crop` cuts parts off (fractions of the whole image from each side; w × h is the part left),
+   * and `fx` is its Picture Format settings (corrections, colour, background, shape). An
+   * embedded object (Insert > Object) is a picture with another program's file in `embed`. `alt` is
+   * its alt text (a structure without it is described by its SMILES).
+   */
+  | { kind: 'picture'; src: string; w: number; h: number; px?: { w: number; h: number }; scale?: number; look?: FigureLook; float?: Float; chart?: ChartBox; crop?: { l: number; t: number; r: number; b: number }; fx?: PictureFx; embed?: Embedded; alt?: string; /** Turned clockwise about its middle, in degrees, and flipped (Arrange > Rotate). */ rot?: number; flipH?: boolean; flipV?: boolean }
   /**
    * A text box: text of its own (typed into in place), `w` wide; it grows to fit its text, and is
    * at least `h` tall when that is set. Always placed on the page. `fill` is its background.
@@ -174,13 +351,47 @@ export type DocObject =
   /** A reference to a caption ("see Figure 2"), which follows its number. */
   | { kind: 'ref'; target: number }
   /** A citation of references in the document's list (by their ids): numbers in order of first citation. */
-  | { kind: 'cite'; refs: string[] }
+  | { kind: 'cite'; refs: string[]; live?: CiteLive }
   /** The bibliography: the references cited, in citation order, in the citation style (a block of its own). */
   | { kind: 'bib' }
   /** A table of contents: the headings down to `levels` (1 to 3) deep with their page numbers (a block of its own). */
   | { kind: 'toc'; levels: number }
+  /**
+   * A table of figures: the captions of one label (Figure, Scheme, Table, Chart), or of all of
+   * them when `name` is '', with their page numbers (a block of its own, like the contents).
+   */
+  | { kind: 'tof'; name: string }
+  /**
+   * A footnote (or, with `end`, an endnote): its number in the text, and its own text, typed into
+   * in place at the bottom of the page (or at the end of the document), as in Word.
+   */
+  | { kind: 'note'; end?: boolean; runs: TextRun[]; paras?: ParaStyle[] }
   /** An equation, typed as LaTeX and shown laid out as maths (see math.ts); a Word equation in .docx files. */
-  | { kind: 'math'; tex: string };
+  | { kind: 'math'; tex: string }
+  /** A field: the date, a document property, the file's name, a page number, a bookmark's text or page (see fields.ts). */
+  | FieldObj
+  /**
+   * An index (References > Insert Index): the entries marked with Mark Entry, A to Z, each with
+   * its page numbers (a block of its own, like the contents). `cols` is how many columns it is
+   * set in (its own section's), `right` puts the page numbers at the right after dots, and
+   * `letters` puts a letter over each part (A, B, C).
+   */
+  | { kind: 'index'; cols?: number; right?: boolean; letters?: boolean }
+  /**
+   * A table of authorities (References > Insert Table of Authorities): the citations marked with
+   * Mark Citation in one category (Cases, Statutes…; 0 for every category, each under its
+   * heading), with their pages after dots, or "passim" for those on five pages or more.
+   */
+  | { kind: 'toa'; cat: number; passim?: boolean }
+  /**
+   * A form field (Word's legacy form fields): a box to type into, a check box or a drop-down
+   * list, filled in by whoever has the document, also when it is protected for filling in forms
+   * (Review > Restrict Editing). `name` is its name in Word (Text1, Check1, Dropdown1).
+   */
+  | { kind: 'form'; type: FormType; name?: string; value?: string; checked?: boolean; items?: string[]; help?: string };
+
+/** A form field's kind: a text box, a check box or a drop-down list. */
+export type FormType = 'text' | 'check' | 'drop';
 
 export interface DocText extends RichText {
   styles: Record<string, NamedStyle>;
@@ -195,10 +406,81 @@ export interface DocText extends RichText {
   citeStyle?: CiteStyle;
   /** Details of that style changed for this document (References > Manage References > Style Options). */
   citeOptions?: Partial<CiteFormat>;
+  /**
+   * The reference manager whose fields citations are saved as in Word files (Zotero, Mendeley,
+   * EndNote: see live-cites.ts), so it can go on managing them; our own fields when not set.
+   */
+  citeManager?: CiteManager;
+  /** Zotero's document preferences as the file had them (its style and settings), saved back with it. */
+  zoteroPrefs?: string;
   /** Changes are being tracked (Review > Track Changes): edits are marked, not made outright. */
   track?: boolean;
   /** Comments (Review > New Comment), by id; the text they are on carries the id (see comments.ts). */
   comments?: Record<number, CommentThread>;
+  /** How footnotes and endnotes are numbered (1, 2, 3 and i, ii, iii unless chosen). */
+  notes?: NoteFormats;
+  /** How the first section's page numbers are written (1, 2, 3 unless chosen; later sections have their own). */
+  numFormat?: PageNumFormat;
+  /** The first section's line numbers (none unless chosen). */
+  lineNumbers?: LineNumbers;
+  /** Character styles changed or made here (the standard ones are used where none is given; see charStylesOf). */
+  charStyles?: Record<string, CharStyle>;
+  /** Design > Watermark, Page Color and Page Borders. */
+  watermark?: Watermark;
+  pageColor?: string;
+  pageBorder?: PageBorder;
+  /** Table styles read from a Word file that aren't built in, by style id (see table-styles). */
+  tableStyles?: Record<string, TableStyleDef>;
+  /** The document's properties: title, author and the rest (File > Properties), shown by fields and cover pages. */
+  props?: DocProps;
+  /** Layout > Hyphenation: words broken at the ends of lines (settings.xml's autoHyphenation and its options). */
+  hyphen?: DocHyphenation;
+  /** Review > Restrict Editing: what can still be changed, and the password that stops it (see protect.ts). */
+  protect?: Protection;
+  /** Design > Document Formatting: the theme, style set and paragraph spacing chosen (by name; see themes.ts). */
+  design?: DocDesign;
+}
+
+/** What Design has set: names of the choices made (kept with the document, so the galleries show them). */
+export interface DocDesign { theme?: string; fonts?: string; colors?: string; styleSet?: string; spacing?: string }
+
+/** How footnotes or endnotes are numbered, by Word's names: 1, 2, 3; i, ii, iii; a, b, c; *, †, ‡ (chicago). */
+export type NoteFormat = 'decimal' | 'lowerRoman' | 'upperRoman' | 'lowerLetter' | 'upperLetter' | 'chicago';
+
+export interface NoteFormats { foot?: NoteFormat; end?: NoteFormat }
+
+/** Word's own numbering: footnotes 1, 2, 3 and endnotes i, ii, iii. */
+export const FOOT_FORMAT: NoteFormat = 'decimal';
+export const END_FORMAT: NoteFormat = 'lowerRoman';
+
+const ROMAN: [number, string][] = [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']];
+const CHICAGO = ['*', '†', '‡', '§'];
+
+/** The `n`th note's mark (from 1) in a numbering format: 3, iii, c, ‡ (then **, ††… as Word goes on). */
+export function noteLabel(n: number, fmt: NoteFormat): string {
+  n = Math.max(1, Math.floor(n));
+  switch (fmt) {
+    case 'lowerRoman': case 'upperRoman': {
+      let out = '', v = n;
+      for (const [k, s] of ROMAN) while (v >= k) { out += s; v -= k; }
+      return fmt === 'upperRoman' ? out.toUpperCase() : out;
+    }
+    case 'lowerLetter': case 'upperLetter': {
+      // a, b … z, then aa, bb … (Word's way)
+      const ch = String.fromCharCode(97 + ((n - 1) % 26)).repeat(Math.floor((n - 1) / 26) + 1);
+      return fmt === 'upperLetter' ? ch.toUpperCase() : ch;
+    }
+    case 'chicago': return CHICAGO[(n - 1) % 4].repeat(Math.floor((n - 1) / 4) + 1);
+    default: return String(n);
+  }
+}
+
+/** The style of footnote and endnote text: the document's Footnote Text style, or Normal a point smaller, single spaced, with no space round paragraphs. */
+export function noteStyle(t: Pick<DocText, 'styles'>): NamedStyle {
+  const own = t.styles.FootnoteText;
+  if (own) return own;
+  const N = styleOf(t, undefined);
+  return { ...N, id: 'FootnoteText', name: 'Footnote Text', size: Math.max(6, N.size - 1), align: 'left', spaceBefore: 0, spaceAfter: 0, line: 1, indent: 0, firstLine: 0, keepNext: false, next: undefined, outline: undefined };
 }
 
 // ---------------------------------------------------------------- defaults
@@ -210,6 +492,9 @@ export const INCH = 72;
 export const CM = 72 / 2.54;
 
 const FONT = 'Times New Roman';
+
+/** Headings 4 to 9: size, bold and italic, each a little quieter than the one above. */
+const LOWER_HEADINGS: [number, boolean, boolean][] = [[11, false, true], [11, false, false], [10.5, false, true], [10.5, false, false], [10, false, true], [10, false, false]];
 
 /**
  * The standard styles, as in a journal's Supporting Information (taken from SI Assistant's ACS
@@ -223,6 +508,7 @@ export function defaultStyles(): Record<string, NamedStyle> {
     { ...base, id: 'Heading1', name: 'Heading 1', size: 13, bold: true, align: 'left', spaceBefore: 18, spaceAfter: 8, keepNext: true, next: 'Normal', outline: 1 },
     { ...base, id: 'Heading2', name: 'Heading 2', size: 11.5, bold: true, align: 'left', spaceBefore: 12, spaceAfter: 6, keepNext: true, next: 'Normal', outline: 2 },
     { ...base, id: 'Heading3', name: 'Heading 3', size: 11, bold: true, italic: true, align: 'left', spaceBefore: 10, spaceAfter: 4, keepNext: true, next: 'Normal', outline: 3 },
+    ...LOWER_HEADINGS.map(([size, bold, italic], i) => ({ ...base, id: `Heading${i + 4}`, name: `Heading ${i + 4}`, size, bold, italic, align: 'left' as const, spaceBefore: 8, spaceAfter: 4, keepNext: true, next: 'Normal', outline: i + 4 })),
     { ...base, id: 'Caption', name: 'Caption', size: 10, align: 'justify', spaceBefore: 4, spaceAfter: 12, next: 'Normal' },
   ];
   return Object.fromEntries(list.map((s) => [s.id, s]));
@@ -266,7 +552,8 @@ export function runStyleOf(s: NamedStyle): rt.RunStyle {
 /** A paragraph in a style: the style's spacing, indents and alignment, keeping its list, level and page break. */
 export function paraFromStyle(s: NamedStyle, keep: ParaStyle): ParaStyle {
   return cleanPara({
-    list: keep.list, level: keep.level, cont: keep.cont, pageBreak: keep.pageBreak, colBreak: keep.colBreak,
+    list: keep.list, level: keep.level, cont: keep.cont, pageBreak: keep.pageBreak, colBreak: keep.colBreak, section: keep.section, noLineNumbers: keep.noLineNumbers,
+    marks: keep.marks, tabs: keep.tabs, scheme: keep.scheme, bullet: keep.bullet, border: keep.border, shade: keep.shade,
     style: s.id === 'Normal' ? undefined : s.id,
     align: s.align === 'left' ? undefined : s.align,
     spaceBefore: s.spaceBefore, spaceAfter: s.spaceAfter,
@@ -345,6 +632,192 @@ export function modifyStyle(t: DocText, s: NamedStyle): DocText {
   return { ...t, styles, runs, paras: paras.map((p, i) => (mine[i] ? restylePara(p, old, s) : p)) };
 }
 
+/** The standard paragraph styles' ids (they can be changed but not deleted). */
+export const STANDARD_STYLES = new Set(Object.keys(defaultStyles()));
+
+/** A document with a standard style it may lack (one read from a file, or made before Heading 4 to 9 were added). */
+export function withStyle(t: DocText, id: string): DocText {
+  if (t.styles[id]) return t;
+  const d = defaultStyles()[id];
+  return d ? { ...t, styles: { ...t.styles, [id]: d } } : t;
+}
+
+/** A style id from a name: its letters and digits (Word's way), unlike any id the document has. */
+export function styleIdFor(name: string, taken: (id: string) => boolean): string {
+  const base = name.replace(/[^\p{L}\p{N}]/gu, '') || 'Style';
+  let id = base;
+  for (let k = 2; taken(id); k++) id = `${base}${k}`;
+  return id;
+}
+
+/**
+ * Styles pane > New Style: a paragraph style that looks like the paragraph the caret is in (its
+ * text's look and its spacing), given to that paragraph.
+ */
+export function newParaStyle(t: DocText, name: string, para: number, look: rt.RunStyle): { t: DocText; id: string } {
+  const paras = fitParas(t.paras, paraCount(rt.plainText(t.runs)));
+  const p = paras[para] ?? {};
+  const from = styleOf(t, p);
+  const id = styleIdFor(name, (x) => !!t.styles[x] || !!charStylesOf(t)[x]);
+  const s: NamedStyle = {
+    ...from, id, name: name.trim() || id, custom: true, outline: undefined,
+    font: look.font ?? from.font, size: look.size ?? from.size, bold: !!look.bold, italic: !!look.italic, color: look.color,
+    align: p.align ?? 'left', spaceBefore: p.spaceBefore ?? 0, spaceAfter: p.spaceAfter ?? 0, line: p.line ?? 1,
+    indent: p.indent ?? 0, firstLine: p.firstLine ?? 0, keepNext: !!p.keepNext, next: undefined,
+  };
+  const withIt = { ...t, styles: { ...t.styles, [id]: s } };
+  return { t: setParaStyle(withIt, para, para, id), id };
+}
+
+/** Delete a style made here: its paragraphs go back to Normal (and its text to the paragraph's look). */
+export function deleteStyle(t: DocText, id: string): DocText {
+  if (t.styles[id] && !STANDARD_STYLES.has(id)) {
+    const paras = fitParas(t.paras, paraCount(rt.plainText(t.runs)));
+    let out = t;
+    paras.forEach((p, i) => { if (p.style === id) out = setParaStyle(out, i, i, 'Normal'); });
+    const { [id]: _, ...styles } = out.styles;
+    return { ...out, styles };
+  }
+  const cs = t.charStyles?.[id];
+  if (cs?.custom) {
+    const { [id]: _, ...charStyles } = t.charStyles!;
+    return { ...clearCharStyle(t, 0, rt.plainText(t.runs).length, id), charStyles };
+  }
+  return t;
+}
+
+// ---------------------------------------------------------------- character styles
+
+/** Word's own character styles (and one for compound numbers, which journals set in bold). */
+export function defaultCharStyles(): Record<string, CharStyle> {
+  const list: CharStyle[] = [
+    { id: 'Emphasis', name: 'Emphasis', italic: true },
+    { id: 'Strong', name: 'Strong', bold: true },
+    { id: 'SubtleEmphasis', name: 'Subtle Emphasis', italic: true, color: '#404040' },
+    { id: 'IntenseEmphasis', name: 'Intense Emphasis', italic: true, color: '#2f5496' },
+    { id: 'CompoundNumber', name: 'Compound Number', bold: true, custom: false },
+  ];
+  return Object.fromEntries(list.map((s) => [s.id, s]));
+}
+
+/** The document's character styles: the standard ones, with any changed or made here. */
+export function charStylesOf(t: Pick<DocText, 'charStyles'>): Record<string, CharStyle> {
+  return { ...defaultCharStyles(), ...(t.charStyles ?? {}) };
+}
+
+const CHAR_KEYS = ['font', 'size', 'bold', 'italic', 'underline', 'color', 'smallCaps', 'allCaps', 'strike'] as const;
+
+/** The text formatting a character style gives (only what it sets; off-switches included, so Strong on bold text stays bold). */
+export function charStyleLook(s: CharStyle): Partial<rt.RunStyle> {
+  const o: Partial<rt.RunStyle> = {};
+  for (const k of CHAR_KEYS) if (s[k] !== undefined) (o as Record<string, unknown>)[k] = s[k];
+  return o;
+}
+
+/** Put the text between two offsets in a character style. */
+export function applyCharStyle(t: DocText, start: number, end: number, id: string): DocText {
+  const s = charStylesOf(t)[id];
+  if (!s || end <= start) return t;
+  return { ...t, runs: rt.applyStyle(t.runs, start, end, { ...charStyleLook(s), cstyle: id }) };
+}
+
+/**
+ * Take text out of a character style (all of them when `id` isn't given): what the style gave
+ * goes back to the look of the paragraph's style.
+ */
+export function clearCharStyle(t: DocText, start: number, end: number, id?: string): DocText {
+  const all = charStylesOf(t);
+  const paras = fitParas(t.paras, paraCount(rt.plainText(t.runs)));
+  let at = 0, p = 0;
+  const out: TextRun[] = [];
+  for (const r of t.runs) {
+    for (const piece of r.text.split(/(\n)/)) {
+      if (!piece) continue;
+      const a = Math.max(start, at), b = Math.min(end, at + piece.length);
+      const cs = r.cstyle ? all[r.cstyle] : undefined;
+      if (b > a && r.cstyle && (!id || r.cstyle === id)) {
+        const back = runStyleOf(styleOf(t, paras[p]));
+        const patch: Partial<rt.RunStyle> = { cstyle: undefined };
+        for (const k of CHAR_KEYS) if (cs && cs[k] !== undefined) (patch as Record<string, unknown>)[k] = back[k];
+        const fixed = rt.applyStyle([{ ...r, text: piece }], a - at, b - at, patch);
+        out.push(...fixed);
+      } else out.push({ ...r, text: piece });
+      if (piece === '\n') p++;
+      at += piece.length;
+    }
+  }
+  return { ...t, runs: rt.normalizeRuns(out) };
+}
+
+/** Change a character style: text in it changes too, where it still looked the way the style did. */
+export function modifyCharStyle(t: DocText, s: CharStyle): DocText {
+  const old = charStylesOf(t)[s.id];
+  const charStyles = { ...(t.charStyles ?? {}), [s.id]: s };
+  if (!old) return { ...t, charStyles };
+  const runs = t.runs.map((r) => {
+    if (r.cstyle !== s.id) return r;
+    const out: Record<string, unknown> = { ...r };
+    for (const k of CHAR_KEYS) {
+      if (s[k] === old[k]) continue;
+      // what the style gave changes; what was changed by hand stays
+      if (old[k] === undefined || (r[k] ?? undefined) === (old[k] || undefined)) out[k] = s[k] === false ? undefined : s[k];
+    }
+    return out as unknown as TextRun;
+  });
+  return { ...t, charStyles, runs: rt.normalizeRuns(runs) };
+}
+
+/** Styles pane > New Style (character): a character style with the look of the selected text, given to it. */
+export function newCharStyle(t: DocText, name: string, start: number, end: number, look: rt.RunStyle, para: ParaStyle): { t: DocText; id: string } {
+  const N = styleOf(t, para);
+  const id = styleIdFor(name, (x) => !!t.styles[x] || !!charStylesOf(t)[x]);
+  const s: CharStyle = { id, name: name.trim() || id, custom: true };
+  if (look.font && look.font !== N.font) s.font = look.font;
+  if (look.size && look.size !== N.size) s.size = look.size;
+  if (!!look.bold !== N.bold) s.bold = !!look.bold;
+  if (!!look.italic !== N.italic) s.italic = !!look.italic;
+  if (look.color && look.color !== N.color) s.color = look.color;
+  for (const k of ['underline', 'smallCaps', 'allCaps', 'strike'] as const) if (look[k]) s[k] = true;
+  const withIt = { ...t, charStyles: { ...(t.charStyles ?? {}), [id]: s } };
+  return { t: end > start ? applyCharStyle(withIt, start, end, id) : withIt, id };
+}
+
+// ---------------------------------------------------------------- clear formatting
+
+/**
+ * Home > Clear All Formatting: the selected text goes back to the plain look of Normal (or of
+ * its paragraph's style, `keepStyle`), and its paragraphs to Normal. What the text is (links,
+ * comments, tracked changes, figures) stays; a formula stays a formula.
+ */
+export function clearFormatting(t: DocText, start: number, end: number, first: number, last: number, keepStyle = false): DocText {
+  const paras = fitParas(t.paras, paraCount(rt.plainText(t.runs)));
+  const out: TextRun[] = [];
+  let at = 0, p = 0;
+  for (const r of t.runs) {
+    for (const piece of r.text.split(/(\n)/)) {
+      if (!piece) continue;
+      const a = Math.max(start, at), b = Math.min(end, at + piece.length);
+      if (b > a || (start === end && p >= first && p <= last)) {
+        const st = keepStyle ? styleOf(t, paras[p]) : styleOf(t, undefined);
+        const plain: TextRun = { ...runStyleOf(st), text: '' } as TextRun;
+        for (const k of ['obj', 'rev', 'cmt', 'link', 'formula'] as const) if (r[k] !== undefined) (plain as unknown as Record<string, unknown>)[k] = r[k];
+        // a link keeps its link look
+        if (r.link) { plain.color = r.color; plain.underline = r.underline; }
+        const lo = start === end ? 0 : a - at, hi = start === end ? piece.length : b - at;
+        out.push({ ...r, text: piece.slice(0, lo) }, { ...plain, text: piece.slice(lo, hi) }, { ...r, text: piece.slice(hi) });
+      } else out.push({ ...r, text: piece });
+      if (piece === '\n') p++;
+      at += piece.length;
+    }
+  }
+  let next: DocText = { ...t, runs: rt.normalizeRuns(out) };
+  if (!keepStyle) {
+    const ps = fitParas(next.paras, paras.length).map((q, i) => (i < first || i > last ? q : paraFromStyle(styleOf(t, undefined), { ...q, list: undefined, level: undefined, cont: undefined, tabs: undefined, border: undefined, shade: undefined } as ParaStyle)));
+    next = { ...next, paras: ps.map((q, i) => (i < first || i > last ? q : cleanPara({ ...q, pageBreak: paras[i].pageBreak, colBreak: paras[i].colBreak, section: paras[i].section, marks: paras[i].marks }))) };
+  }
+  return next;
+}
+
 // ---------------------------------------------------------------- objects and fields
 
 /** Ids of the objects in the text, in order. */
@@ -378,10 +851,43 @@ export function innerObjects(o: DocObject | undefined): number[] {
 export function flatRuns(t: Pick<DocText, 'runs' | 'objects'>): TextRun[] {
   if (!Object.values(t.objects).some((o) => o.kind === 'table')) return t.runs;
   const out: TextRun[] = [];
-  for (const r of t.runs) {
-    out.push(r);
-    const o = r.obj !== undefined ? t.objects[r.obj] : undefined;
-    if (o?.kind === 'table') for (const row of o.table.rows) for (const c of row) out.push(...c.runs);
+  const seen = new Set<number>();
+  const add = (runs: TextRun[]) => {
+    for (const r of runs) {
+      out.push(r);
+      const o = r.obj !== undefined ? t.objects[r.obj] : undefined;
+      // a table's cells (and those of any table inside them)
+      if (o?.kind === 'table' && !seen.has(r.obj!)) { seen.add(r.obj!); for (const row of o.table.rows) for (const c of row) add(c.runs); }
+    }
+  };
+  add(t.runs);
+  return out;
+}
+
+/**
+ * The tables inside table cells, the innermost first (each laid out before the cell holding
+ * it), with how deep each one is (1 for a table in a cell of a table in the text).
+ */
+export function nestedTables(t: Pick<DocText, 'objects'>): { id: number; depth: number; parent: number }[] {
+  const out: { id: number; depth: number; parent: number }[] = [];
+  const seen = new Set<number>();
+  const held = new Set<number>();
+  for (const o of Object.values(t.objects)) {
+    if (o.kind === 'table') for (const row of o.table.rows) for (const c of row) for (const r of c.runs) if (r.obj !== undefined && t.objects[r.obj]?.kind === 'table') held.add(r.obj);
+  }
+  const visit = (id: number, depth: number) => {
+    const o = t.objects[id];
+    if (o?.kind !== 'table') return;
+    for (const row of o.table.rows) for (const c of row) for (const r of c.runs) {
+      if (r.obj === undefined || t.objects[r.obj]?.kind !== 'table' || seen.has(r.obj)) continue;
+      seen.add(r.obj);
+      visit(r.obj, depth + 1);
+      out.push({ id: r.obj, depth: depth + 1, parent: id });
+    }
+  };
+  for (const [k, o] of Object.entries(t.objects)) {
+    const id = Number(k);
+    if (o.kind === 'table' && !held.has(id)) { seen.add(id); visit(id, 0); }
   }
   return out;
 }
@@ -399,8 +905,11 @@ export function cellHolding(t: Pick<DocText, 'objects'>, id: number): { id: numb
 }
 
 /** Every object the text uses, with those inside tables. */
-export function usedObjects(t: Pick<DocText, 'runs' | 'objects'>): Set<number> {
-  return new Set(objectsInText(flatRuns(t)));
+export function usedObjects(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'hf' | 'paras'>>): Set<number> {
+  const used = new Set(objectsInText(flatRuns(t)));
+  // with those in the headers and footers
+  if (t.hf) for (const id of hfObjectIds(allHf({ hf: t.hf, paras: t.paras }), t.objects)) used.add(id);
+  return used;
 }
 
 /** Keep only the objects the text still uses (before saving). */
@@ -441,14 +950,22 @@ export const COMPOUND = 'Compound';
  * A reference to a compound shows just its number. A citation shows the numbers of the
  * references it cites (in the order references are first cited).
  */
-export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions'>>): Map<number, string> {
+export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions' | 'notes' | 'paras' | 'props'>>, pages?: (para: number) => string, pageCount?: number): Map<number, string> {
   const shown = new Map<number, string>();
   const counts = new Map<string, number>();
+  const top = t.runs;
   // numbers inside tables count in their place too
   t = { ...t, runs: flatRuns(t) };
   const order = objectsInText(t.runs);
+  let foot = 0, end = 0;
   for (const id of order) {
     const o = t.objects[id];
+    // footnotes and endnotes are numbered apart, each in its own format
+    if (o?.kind === 'note') {
+      shown.set(id, o.end ? noteLabel(++end, t.notes?.end ?? END_FORMAT) : noteLabel(++foot, t.notes?.foot ?? FOOT_FORMAT));
+      continue;
+    }
+    if (o?.kind === 'form') { shown.set(id, formShown(o)); continue; }
     if (o?.kind !== 'seq') continue;
     const n = (counts.get(o.name) ?? 0) + 1;
     counts.set(o.name, n);
@@ -468,8 +985,43 @@ export function fieldTexts(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<D
     }
   }
   if (order.some((id) => t.objects[id]?.kind === 'cite')) for (const [id, s] of citationTexts(t)) shown.set(id, s);
+  if (order.some((id) => t.objects[id]?.kind === 'field')) {
+    const at = objectParas({ runs: top, objects: t.objects });
+    const doc = { runs: top, paras: t.paras ?? [], props: t.props };
+    const cache = {};
+    for (const id of order) {
+      const o = t.objects[id];
+      if (o?.kind === 'field') shown.set(id, fieldText(o, doc, at.get(id) ?? 0, pages, pageCount, cache) || (needsPages(o) ? '1' : ''));
+    }
+  }
   return shown;
 }
+
+/** The paragraph each object is in (an object in a table's cell: the table's paragraph). */
+export function objectParas(t: Pick<DocText, 'runs' | 'objects'>): Map<number, number> {
+  const out = new Map<number, number>();
+  let p = 0;
+  for (const r of t.runs) {
+    if (r.obj !== undefined) {
+      out.set(r.obj, p);
+      for (const inner of innerObjects(t.objects[r.obj])) if (!out.has(inner)) out.set(inner, p);
+    } else for (const ch of r.text) if (ch === '\n') p++;
+  }
+  return out;
+}
+
+/** What a form field shows: its entry (five wide spaces when empty, as in Word), its box ticked or not, its item chosen. */
+export function formShown(o: Extract<DocObject, { kind: 'form' }>): string {
+  if (o.type === 'check') return o.checked ? '\u2612' : '\u2610';
+  if (o.type === 'drop') return o.value || o.items?.[0] || EMPTY_FORM;
+  return o.value || EMPTY_FORM;
+}
+
+/** How form fields are shaded (Word's grey). */
+export const FORM_SHADE = '#d9d9d9';
+
+/** An empty text field's look in Word: five en spaces, shaded. */
+export const EMPTY_FORM = '\u2002'.repeat(5);
 
 /** The object whose character is at an offset. */
 function objectAtChar(runs: TextRun[], offset: number): number | undefined {
@@ -522,7 +1074,7 @@ export function paragraphAt(t: Pick<RichText, 'runs'>, offset: number): { index:
 }
 
 /** Text of a document without objects (for word counts, searching and plain copies). */
-export function documentPlainText(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions'>>): string {
+export function documentPlainText(t: Pick<DocText, 'runs' | 'objects'> & Partial<Pick<DocText, 'references' | 'citeStyle' | 'citeOptions' | 'notes'>>): string {
   const shown = fieldTexts(t);
   let out = '';
   for (const r of t.runs) {

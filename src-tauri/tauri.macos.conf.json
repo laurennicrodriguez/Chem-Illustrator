@@ -1,0 +1,69 @@
+{
+  "bundle": {
+    "fileAssociations": [
+      {
+        "ext": [
+          "cdxml"
+        ],
+        "name": "ChemDraw XML drawing",
+        "mimeType": "chemical/x-cdxml",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "cdx"
+        ],
+        "name": "ChemDraw drawing",
+        "mimeType": "chemical/x-cdx",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "mol"
+        ],
+        "name": "MDL Molfile",
+        "mimeType": "chemical/x-mdl-molfile",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "sdf"
+        ],
+        "name": "Structure-data file",
+        "mimeType": "chemical/x-mdl-sdfile",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "docx"
+        ],
+        "name": "Word document",
+        "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "pptx"
+        ],
+        "name": "PowerPoint presentation",
+        "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "xlsx"
+        ],
+        "name": "Excel workbook",
+        "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "role": "Editor",
+        "rank": "Alternate"
+      }
+    ]
+  }
+}

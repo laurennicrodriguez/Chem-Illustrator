@@ -4,7 +4,8 @@
 // tool works the same everywhere; the other tabs wait in documents of their own (Doc.swap).
 // New, Open, Save, Save As, Close and the unsaved-changes questions go through here.
 
-import { Doc } from './model';
+import { applyDesign, newDocDesign } from './document/themes';
+import { Doc, keepOnPage, type PageSetup } from './model';
 import { Deck, type SlideSize, type Master } from './deck/deck';
 import { Workbook } from './sheet/workbook';
 import { DocFile } from './document/doc-file';
@@ -17,11 +18,15 @@ import { cdxToCdxml, cdxmlToCdx, isCdx } from './io/cdx';
 import { readPptx } from './io/pptx-read';
 import { writePptx, PptxOptions } from './io/pptx-write';
 import { zipHas } from './io/ooxml';
+import { isXls } from './io/xls';
+import { isOds } from './io/ods';
+import { DOC_OPEN_ONLY, documentSaveNote, isOtherDocument } from './io/doc-files';
 import { adoptSaved } from './io/document-file';
 import {
-  FileRef, FileType, CDXML, CDX, PPTX, XLSX, CSV, SDF, DOCX, TABLE_TEXT_EXTENSIONS, openBytesDialog, saveFileDialog, writeFile, canSaveInPlace, askSaveChanges,
-  showError, withExtension, extensionOf, baseName, readPath, pathExists,
+  FileRef, FileType, CDXML, CDX, PPTX, XLSX, XLSM, SHEET_OPEN_ONLY, CSV, SDF, DOCX, RTF, ODT, TABLE_TEXT_EXTENSIONS, openBytesDialog, saveFileDialog, writeFile, canSaveInPlace, askSaveChanges,
+  showError, withExtension, extensionOf, baseName, readPath, pathExists, stampOf,
 } from './io/files';
+import type { FileStamp } from './keep/recovery';
 import { WORKSPACE, workspaceText, parseWorkspace, folderOf, joinPath, relativeTo, resolveIn, freeName, safeFileName, type WorkspaceEntry } from './io/workspace-file';
 
 /** Design is a deck of one page (a TOC graphic, poster or diagram) with design tools. */
@@ -40,6 +45,8 @@ export interface Tab {
   document: DocFile | null;
   /** Zoom and scroll, kept while another tab shows. */
   view: View | null;
+  /** The view was a slide or page fitted to the window: fit it again on coming back (the window may have changed size). */
+  fitted?: boolean;
   /** Sheets and documents: the selection and scroll, kept while another tab shows. */
   sheetState: unknown;
   dirty: boolean;
@@ -49,7 +56,21 @@ export interface Tab {
   savedEdits: number;
   /** Split view: the drawing shown beside this document, sheet or slide deck. */
   partner: Tab | null;
+  /** View > New Window: the tab whose document this tab shows too (null for the tab that owns its file). */
+  windowOf: Tab | null;
+  /** When its file on disk last changed and its size, as last opened or saved here (to notice changes made elsewhere). */
+  stamp: FileStamp | null;
+  /** AutoSave switched on or off for this tab (File > AutoSave), or null to follow AutoSave and Recovery Options. */
+  autoSave: boolean | null;
+  /** Drawings: counts changes, so AutoSave and recovery copies know when there is something new. */
+  changes: number;
+  /** When it was last saved here, and whether AutoSave did it (shown on the tab). */
+  savedAt: number;
+  savedHow: SaveHow | null;
 }
+
+/** A save the person asked for, or one AutoSave made. */
+export type SaveHow = 'saved' | 'autosaved';
 
 export interface WorkspaceHooks {
   /** Before another tab shows: finish any typing, remember the view. */
@@ -75,14 +96,50 @@ export interface WorkspaceHooks {
   };
   /** The drawing style a new tab of this kind starts with, when you have chosen one (File > Drawing Style). */
   newStyle?(mode: Mode): DocStyle | null;
+  /** The page a new drawing starts with (File > Page Setup's default). */
+  newPage?(): PageSetup | null;
   /** A file or workspace was opened from or saved to this path (File > Recent). */
   remember?(path: string): void;
   /** The master new slide decks start with (your template), or null for the plain one. */
   newMaster?(m: Master): Master | null;
+  /**
+   * Just before a file is written: the chance to keep what is there now (Version History) and to
+   * stop when the file has been changed elsewhere since it was opened ('save-as' asks for another place).
+   */
+  beforeWrite?(tab: Tab, ref: FileRef, name: string, how: SaveHow): Promise<'go' | 'stop' | 'save-as'>;
+  /** A file was written (`was`: where the tab's file was before, which Save As changes). */
+  saved?(tab: Tab, data: Uint8Array, how: SaveHow, was: FileRef): void;
+  /** AutoSave couldn't write a file (no window is shown for it). */
+  autoSaveFailed?(tab: Tab, message: string): void;
+  /** A file was opened from disk into this tab. */
+  opened?(tab: Tab): void;
+  /** A tab is about to close (before asking to save it): finish any typing or structure being drawn. */
+  closing?(tab: Tab): void;
+  /** A tab was closed. */
+  dropped?(tab: Tab): void;
 }
 
+/** File types AutoSave leaves alone: they keep only the values of one sheet, so saving loses the rest. */
+const NO_AUTOSAVE = new Set(['csv', 'tsv', 'txt', 'sdf', 'sd']);
+
 /** What each kind of tab saves as (the first is the default). */
-const SAVE_TYPES: Record<Mode, FileType[]> = { drawing: [CDXML, CDX], slides: [PPTX], design: [PPTX], sheet: [XLSX, CSV, SDF], document: [DOCX] };
+const SAVE_TYPES: Record<Mode, FileType[]> = { drawing: [CDXML, CDX], slides: [PPTX], design: [PPTX], sheet: [XLSX, XLSM, CSV, SDF], document: [DOCX, RTF, ODT] };
+
+/** Tabs already told, this session, how their structures look in Office (said once, not on every save). */
+const officeNoted = new WeakSet<Tab>();
+
+/** What the structures in a Word or PowerPoint file are outside the app, said the first time a tab is saved. */
+function officeNote(tab: Tab, program: 'Word' | 'PowerPoint'): string {
+  if (officeNoted.has(tab)) return '';
+  officeNoted.add(tab);
+  return `. In ${program} the structures are pictures (their SMILES are in the alt text); open the file here to edit them, or copy them from here into ChemDraw`;
+}
+
+/** What a new, unsaved file of each kind is called ("Drawing 1"). */
+export const MODE_NAMES: Record<Mode, string> = { drawing: 'Drawing', slides: 'Slides', sheet: 'Sheet', document: 'Document', design: 'Design' };
+
+/** Is this the name a new tab was given (not a file's own)? */
+export const isNewName = (name: string): boolean => /^(Drawing|Slides|Sheet|Document|Design) \d+\.[a-z]+$/.test(name) || /^Untitled/.test(name);
 
 export class Workspace {
   tabs: Tab[] = [];
@@ -92,6 +149,11 @@ export class Workspace {
    * while the document or sheet shows (they don't use it), so both can be worked on side by side.
    */
   pane: Tab | null = null;
+  /**
+   * While a structure for a cell or figure is drawn in the app's document: the split-view drawing
+   * it took the place of (saved, AutoSaved and kept for recovery from here, untouched by the edit).
+   */
+  aside: Doc | null = null;
   /** The workspace file last saved or opened, so File > Save Workspace saves there again. */
   workspacePath: string | null = null;
   /** While a workspace saves or opens: its files don't each go on the recent list (the workspace does). */
@@ -106,15 +168,16 @@ export class Workspace {
   }
 
   private makeTab(mode: Mode, name: string, ref: FileRef = { kind: 'none' }): Tab {
-    return { id: this.nextId++, mode, name, ref, stash: new Doc(), deck: null, book: null, document: null, view: null, sheetState: null, dirty: false, seen: 0, savedEdits: 0, partner: null };
+    return { id: this.nextId++, mode, name, ref, stash: new Doc(), deck: null, book: null, document: null, view: null, sheetState: null, dirty: false, seen: 0, savedEdits: 0, partner: null, windowOf: null,
+      stamp: null, autoSave: null, changes: 0, savedAt: 0, savedHow: null };
   }
 
-  /** "Untitled", "Untitled 2"… with the right extension, not already used by an open tab. */
-  private untitled(mode: Mode): string {
+  /** "Drawing 1", "Slides 2", "Design 1"… with the right extension, not already used by an open tab. */
+  private untitled(mode: Mode, going?: Tab): string {
     const ext = SAVE_TYPES[mode][0].extension;
     for (let n = 1; ; n++) {
-      const name = `${n === 1 ? 'Untitled' : `Untitled ${n}`}.${ext}`;
-      if (!this.tabs.some((t) => t.name === name)) return name;
+      const name = `${MODE_NAMES[mode]} ${n}.${ext}`;
+      if (!this.tabs.some((t) => t !== going && t.name === name)) return name;
     }
   }
 
@@ -177,25 +240,102 @@ export class Workspace {
   }
 
   /** Call after anything changes, to keep the unsaved marks right. */
-  noteChange(): void {
-    const t = this.active;
+  noteChange(tab?: Tab): void {
+    const t = tab ?? this.active;
     let dirty = t.dirty;
     if (t.deck) dirty = t.deck.edits !== t.savedEdits;
-    else if (t.mode === 'sheet') dirty = t.book!.edits !== t.savedEdits;
-    else if (t.mode === 'document') dirty = t.document!.edits !== t.savedEdits;
+    else if (t.mode === 'sheet') dirty = t.book!.edits !== this.mainOf(t).savedEdits;
+    else if (t.mode === 'document') dirty = t.document!.edits !== this.mainOf(t).savedEdits;
     else if (this.host.version !== t.seen) {
       t.seen = this.host.version;
+      t.changes++;
       dirty = true;
     }
     if (dirty !== t.dirty) {
       t.dirty = dirty;
+      if (t.document || t.book) {
+        // the other windows of the document (or workbook), and the tab owning its file
+        const main = this.mainOf(t);
+        main.dirty = dirty;
+        this.syncWindows(main);
+      }
       this.hooks.changed();
     }
     const p = this.pane;
-    if (p && this.host.version !== p.seen) {
+    // a cell's or figure's structure is being drawn in its place: that isn't a change to the drawing
+    if (p && !this.aside && this.host.version !== p.seen) {
       p.seen = this.host.version;
+      p.changes++;
       if (!p.dirty) { p.dirty = true; this.hooks.changed(); }
     }
+  }
+
+  // ---------------------------------------------------------------- windows of a document
+
+  /** The tabs that own their files (not the extra windows of a document): saved, AutoSaved, kept for recovery. */
+  get fileTabs(): Tab[] {
+    return this.tabs.filter((t) => !t.windowOf);
+  }
+
+  /** The tab that owns the file a tab shows. */
+  mainOf(t: Tab): Tab {
+    return t.windowOf ?? t;
+  }
+
+  /** What a tab's windows share: its document or workbook. */
+  private shared(t: Tab): object | null {
+    return t.document ?? t.book;
+  }
+
+  /** As Word and Excel name the windows of a file: "Report.docx:1", "Report.docx:2"; just the name with one window. */
+  label(t: Tab): string {
+    const doc = this.shared(t);
+    if (!doc) return t.name;
+    const all = this.tabs.filter((x) => this.shared(x) === doc);
+    return all.length > 1 ? `${this.mainOf(t).name}:${all.indexOf(t) + 1}` : t.name;
+  }
+
+  /**
+   * View > New Window: the document (or workbook) showing in another tab too, each with its own view and
+   * place in the text. Typing in either shows in both; Save in either saves the one file.
+   */
+  newWindow(): Tab | null {
+    const from = this.active;
+    const doc = this.shared(from);
+    if (!doc) return null;
+    const main = this.mainOf(from);
+    const t = this.makeTab(from.document ? 'document' : 'sheet', main.name, main.ref);
+    t.document = from.document;
+    t.book = from.book;
+    t.windowOf = main;
+    t.dirty = main.dirty;
+    t.savedEdits = main.savedEdits;
+    // after the last window of this document
+    const last = Math.max(...this.tabs.map((x, i) => (this.shared(x) === doc ? i : -1)));
+    this.tabs.splice(last + 1, 0, t);
+    this.activate(t, true);
+    return t;
+  }
+
+  /** After a save (or a change): every window of the document shows what its file's tab shows. */
+  private syncWindows(main: Tab): void {
+    for (const w of this.tabs) {
+      if (w.windowOf !== main) continue;
+      w.dirty = main.dirty;
+      w.savedEdits = main.savedEdits;
+      w.ref = main.ref;
+      w.name = main.name;
+    }
+  }
+
+  /** The tab owning a file is closing while other windows of its document are open: the next window takes over the file. */
+  private handOver(main: Tab): Tab | null {
+    const next = this.tabs.find((w) => w.windowOf === main);
+    if (!next) return null;
+    next.windowOf = null;
+    Object.assign(next, { ref: main.ref, name: main.name, stamp: main.stamp, autoSave: main.autoSave, savedAt: main.savedAt, savedHow: main.savedHow, savedEdits: main.savedEdits, dirty: main.dirty, partner: next.partner ?? main.partner });
+    for (const w of this.tabs) if (w.windowOf === main) w.windowOf = next;
+    return next;
   }
 
   // ---------------------------------------------------------------- new and open
@@ -204,6 +344,7 @@ export class Workspace {
     const t = this.makeTab('drawing', this.untitled('drawing'));
     const st = this.hooks.newStyle?.('drawing');
     if (st) t.stash.style = { ...st };
+    t.stash.page = this.hooks.newPage?.() ?? null;
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
     t.seen = this.host.version;
@@ -226,6 +367,7 @@ export class Workspace {
     const t = this.makeTab('drawing', this.untitled('drawing'));
     const st = this.hooks.newStyle?.('drawing');
     if (st) t.stash.style = { ...st };
+    t.stash.page = this.hooks.newPage?.() ?? null;
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.hooks.changed();
     return t;
@@ -259,11 +401,11 @@ export class Workspace {
     return t;
   }
 
-  /** New sheet, in place of an untouched new drawing. */
-  newSheet(): Tab {
+  /** New sheet (empty, or `book`: File > New from Template), in place of an untouched new drawing. */
+  newSheet(book?: Workbook): Tab {
     const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('sheet', this.untitled('sheet'));
-    t.book = new Workbook();
+    t.book = book ?? new Workbook();
     const st = this.hooks.newStyle?.('sheet');
     if (st) t.book.drawingStyle = { ...st };
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
@@ -272,15 +414,34 @@ export class Workspace {
     return t;
   }
 
-  /** New document, in place of an untouched new drawing. */
-  newDocument(): Tab {
+  /** New document (empty, or `doc`: File > New from Template), in place of an untouched new drawing. */
+  newDocument(doc?: DocText): Tab {
     const spare = this.active.mode === 'drawing' ? this.spare() : null;
     const t = this.makeTab('document', this.untitled('document'));
     const st = this.hooks.newStyle?.('document');
-    t.document = new DocFile(st ? { ...newDocument(), drawingStyle: { ...st } } : undefined);
+    // (Design > Set as Default: the look new documents start with)
+    const design = doc ? null : newDocDesign();
+    const start = doc ?? (st || design ? applyDesign(newDocument(), design) : undefined);
+    t.document = new DocFile(start && st ? { ...start, drawingStyle: { ...st } } : start);
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
     if (spare) this.drop(spare);
+    return t;
+  }
+
+  /** A document made here (Review > Compare's result) in a new tab, unsaved, named `name` (a .docx name not already open). */
+  showDocument(doc: DocText, name: string): Tab {
+    const base = name.replace(/\.docx$/i, '');
+    let file = `${base}.docx`;
+    for (let n = 2; this.tabs.some((t) => t.name === file); n++) file = `${base} ${n}.docx`;
+    const spare = this.spare();
+    const t = this.makeTab('document', file);
+    t.document = new DocFile(doc);
+    t.savedEdits = -1;
+    this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
+    this.activate(t, true);
+    if (spare) this.drop(spare);
+    this.noteChange();
     return t;
   }
 
@@ -288,7 +449,7 @@ export class Workspace {
   async open(): Promise<void> {
     let f;
     try {
-      f = await openBytesDialog('Drawings, slides, sheets and documents', [CDXML, CDX, PPTX, XLSX, DOCX, CSV, SDF], ['sd', ...TABLE_TEXT_EXTENSIONS]);
+      f = await openBytesDialog('Drawings, slides, sheets and documents', [CDXML, CDX, PPTX, XLSX, XLSM, DOCX, RTF, ODT, CSV, SDF], ['sd', ...SHEET_OPEN_ONLY, ...DOC_OPEN_ONLY, ...TABLE_TEXT_EXTENSIONS]);
     } catch (e) {
       await showError('Could not open the file: ' + String(e));
       return;
@@ -297,7 +458,7 @@ export class Workspace {
   }
 
   /** Open a file's contents (picked, dropped, or given) in a tab of its own. */
-  async openBytes(bytes: Uint8Array, name: string, ref: FileRef = { kind: 'none' }): Promise<boolean> {
+  async openBytes(bytes: Uint8Array, name: string, ref: FileRef = { kind: 'none' }, file = name): Promise<boolean> {
     // the same file again: go to its tab
     const same = ref.kind === 'path' ? this.tabs.find((t) => t.ref.kind === 'path' && t.ref.path === ref.path) : null;
     if (same) {
@@ -305,7 +466,7 @@ export class Workspace {
       if (same.dirty) this.hooks.flash(`${name} is already open (with changes not saved yet).`);
       return true;
     }
-    const ext = extensionOf(name);
+    const ext = extensionOf(file);
     if (ext === WORKSPACE.extension) {
       // a workspace lists files by where they are, so it needs its own place on disk
       if (ref.kind === 'path') await this.openWorkspace(new TextDecoder().decode(bytes), ref.path);
@@ -315,11 +476,17 @@ export class Workspace {
     const zip = bytes[0] === 0x50 && bytes[1] === 0x4b;
     try {
       let ok: boolean;
-      if (ext === 'xlsx' || (zip && zipHas(bytes, 'xl/workbook.xml')) || ext === 'sdf' || ext === 'sd' || TABLE_TEXT_EXTENSIONS.includes(ext)) ok = await this.openSheet(bytes, name, ref);
-      else if (ext === 'docx' || (zip && zipHas(bytes, 'word/document.xml'))) ok = await this.openDocument(bytes, name, ref);
+      if (isOtherDocument(bytes, file) && !TABLE_TEXT_EXTENSIONS.includes(ext)) ok = await this.openDocument(bytes, name, ref, file);
+      else if (ext === 'xlsx' || ext === 'xlsm' || SHEET_OPEN_ONLY.includes(ext) || (zip && (zipHas(bytes, 'xl/workbook.xml') || isOds(bytes))) || isXls(bytes) || ext === 'sdf' || ext === 'sd' || TABLE_TEXT_EXTENSIONS.includes(ext)) ok = await this.openSheet(bytes, name, ref, file);
+      else if (ext === 'docx' || (zip && zipHas(bytes, 'word/document.xml'))) ok = await this.openDocument(bytes, name, ref, file);
       else if (ext === 'pptx' || zip) ok = this.openSlides(bytes, name, ref);
       else ok = this.openDrawing(isCdx(bytes) ? cdxToCdxml(bytes) : new TextDecoder().decode(bytes), name, ref);
       if (ok && ref.kind === 'path' && !this.quiet) this.hooks.remember?.(ref.path);
+      if (ok && ref.kind !== 'none') {
+        const t = this.active;
+        t.stamp = await stampOf(ref);
+        this.hooks.opened?.(t);
+      }
       return ok;
     } catch (e) {
       await showError(`Could not open ${name}: ${e instanceof Error ? e.message : String(e)}`);
@@ -330,7 +497,7 @@ export class Workspace {
   /** The tab showing, when it is new and untouched (an opened file takes its place). */
   private spare(): Tab | null {
     const t = this.active;
-    if (t.dirty || t.ref.kind !== 'none' || !/^Untitled/.test(t.name)) return null;
+    if (t.dirty || t.ref.kind !== 'none' || !isNewName(t.name)) return null;
     if (t.mode === 'drawing') return this.host.atoms.size || this.host.captions.size || this.host.arrows.size || this.host.shapes.size ? null : t;
     if (t.mode === 'sheet') return t.book!.edits === 0 ? t : null;
     if (t.mode === 'document') return t.document!.edits === 0 ? t : null;
@@ -358,7 +525,7 @@ export class Workspace {
     const deck = new Deck(this.host);
     deck.master = got.master;
     deck.size = got.size;
-    deck.load(got.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes, s)), got.size, got.master);
+    deck.load(got.slides.map((s) => deck.makeSlide(s.layout, s.contents, s.notes, s, got.master)), got.size, got.master, got.sections, got.settings);
     t.deck = deck;
     this.tabs.splice(this.tabs.indexOf(this.active) + 1, 0, t);
     this.activate(t, true);
@@ -369,8 +536,8 @@ export class Workspace {
     return true;
   }
 
-  private async openSheet(bytes: Uint8Array, name: string, ref: FileRef): Promise<boolean> {
-    const { book, warnings } = await this.hooks.sheets.read(bytes, name);
+  private async openSheet(bytes: Uint8Array, name: string, ref: FileRef, file: string): Promise<boolean> {
+    const { book, warnings } = await this.hooks.sheets.read(bytes, file);
     const spare = this.spare();
     const t = this.makeTab('sheet', name, ref);
     t.book = book;
@@ -382,8 +549,8 @@ export class Workspace {
     return true;
   }
 
-  private async openDocument(bytes: Uint8Array, name: string, ref: FileRef): Promise<boolean> {
-    const { doc, warnings } = await this.hooks.documents.read(bytes, name);
+  private async openDocument(bytes: Uint8Array, name: string, ref: FileRef, file: string): Promise<boolean> {
+    const { doc, warnings } = await this.hooks.documents.read(bytes, file);
     const spare = this.spare();
     const t = this.makeTab('document', name, ref);
     t.document = new DocFile(doc);
@@ -394,10 +561,50 @@ export class Workspace {
     return true;
   }
 
+  /**
+   * Open a copy (a recovery copy, an earlier version, the file as changed on disk) in a tab that
+   * takes the given name and file, unsaved if `dirty`. `file` is the copy's own name, which says
+   * how to read it. With `replace`, the new tab takes that tab's place, which closes without asking.
+   */
+  async openAs(bytes: Uint8Array, file: string, as: { name: string; ref: FileRef; dirty: boolean; stamp: FileStamp | null; replace?: Tab }): Promise<Tab | null> {
+    const before = this.active;
+    if (!(await this.openBytes(bytes, as.name, { kind: 'none' }, file))) return null;
+    const t = this.active;
+    if (t === before) return null;
+    t.ref = as.ref;
+    t.stamp = as.stamp;
+    if (as.dirty) {
+      t.dirty = true;
+      // decks, sheets and documents work out their unsaved mark from their change counts
+      t.savedEdits = -1;
+    }
+    const old = as.replace;
+    if (old && this.tabs.includes(old)) {
+      t.autoSave = old.autoSave;
+      for (const o of this.tabs) if (o.partner === old) o.partner = t;
+      // the other windows of the document show the new copy (and save to its file)
+      for (const w of this.tabs) {
+        if (w.windowOf !== old) continue;
+        Object.assign(w, { windowOf: t, document: t.document, book: t.book, stamp: t.stamp, sheetState: null });
+      }
+      this.syncWindows(t);
+      this.tabs.splice(this.tabs.indexOf(t), 1);
+      this.tabs.splice(this.tabs.indexOf(old), 0, t);
+      this.drop(old);
+    }
+    if (t.ref.kind !== 'none') this.hooks.opened?.(t);
+    this.hooks.changed();
+    return t;
+  }
+
   // ---------------------------------------------------------------- closing
 
   /** Close a tab, offering to save changes first. False when the user chose to keep it open. */
   async close(tab: Tab = this.active): Promise<boolean> {
+    this.hooks.closing?.(tab);
+    // another window of a document: closing it closes nothing else (the document stays open in its other tabs)
+    if (tab.windowOf) { this.drop(tab); return true; }
+    if (this.handOver(tab)) { this.drop(tab); return true; }
     if (tab.dirty) {
       if (tab !== this.active && tab !== this.pane) this.activate(tab);
       const answer = await askSaveChanges(tab.name);
@@ -420,20 +627,25 @@ export class Workspace {
       if (next) this.activate(next);
       else {
         // the last tab: a fresh drawing takes its place
-        const t = this.makeTab('drawing', 'Untitled.cdxml');
+        const t = this.makeTab('drawing', this.untitled('drawing', tab));
+        // with the style and page a new drawing starts with
+        const st = this.hooks.newStyle?.('drawing');
+        if (st) t.stash.style = { ...st };
+        t.stash.page = this.hooks.newPage?.() ?? null;
         this.tabs.push(t);
         this.activate(t, true);
       }
     }
     this.tabs.splice(this.tabs.indexOf(tab), 1);
     tab.deck?.detach();
+    this.hooks.dropped?.(tab);
     this.hooks.changed();
   }
 
   /** Before the window closes: offer to save each tab with changes. False to keep the window open. */
   async closeAll(): Promise<boolean> {
     for (const t of [...this.tabs]) {
-      if (!t.dirty) continue;
+      if (!t.dirty || t.windowOf) continue;
       this.activate(t);
       const answer = await askSaveChanges(t.name);
       if (answer === 'cancel') return false;
@@ -443,24 +655,89 @@ export class Workspace {
   }
 
   get anyDirty(): boolean {
-    return this.tabs.some((t) => t.dirty);
+    return this.fileTabs.some((t) => t.dirty);
   }
 
   // ---------------------------------------------------------------- saving
 
   /** The tab's drawing (its document wherever it is). */
   docOf(tab: Tab): Doc {
+    if (tab === this.pane && this.aside) return this.aside;
     return tab === this.active || tab === this.pane ? this.host : tab.stash;
   }
 
-  async save(tab: Tab = this.active): Promise<boolean> {
-    const ext = extensionOf(tab.name);
+  async save(tab: Tab = this.active, how: SaveHow = 'saved'): Promise<boolean> {
+    // another window of a document saves the document's file
+    tab = this.mainOf(tab);
     // a file of a kind this tab can't write (a drawing opened from an old file) goes through Save As
-    if (!canSaveInPlace(tab.ref) || !SAVE_TYPES[tab.mode].some((t) => t.extension === ext)) return this.saveAs(tab);
-    return this.writeTo(tab, tab.ref, tab.name);
+    if (!this.savesInPlace(tab)) return how === 'autosaved' ? false : this.saveAs(tab);
+    return this.writeTo(tab, tab.ref, tab.name, how);
+  }
+
+  /** Whether Save writes straight back to the tab's file. */
+  savesInPlace(tab: Tab): boolean {
+    // a drawing from Word goes back into Word
+    if (tab.ref.kind === 'embedded') return tab.mode === 'drawing';
+    const ext = extensionOf(tab.name);
+    return canSaveInPlace(tab.ref) && SAVE_TYPES[tab.mode].some((t) => t.extension === ext);
+  }
+
+  /** Whether AutoSave can keep this tab saved: it has a file it saves to without losing anything. */
+  canAutoSave(tab: Tab): boolean {
+    // a drawing from Word is put back when the person says (each save rewrites the Word document's copy)
+    return this.savesInPlace(tab) && tab.ref.kind !== 'embedded' && !NO_AUTOSAVE.has(extensionOf(tab.name));
+  }
+
+  /** Changes whenever the tab's contents change (for AutoSave and recovery copies). */
+  token(tab: Tab): number {
+    return tab.deck?.edits ?? tab.book?.edits ?? tab.document?.edits ?? tab.changes;
+  }
+
+  /** A copy of the tab in its own file type (drawings as .cdxml, sheets as .xlsx), changing nothing. */
+  async copyOf(tab: Tab): Promise<{ name: string; data: Uint8Array }> {
+    const name = withExtension(tab.name, SAVE_TYPES[tab.mode][0].extension);
+    const { data } = await this.encode(tab, name);
+    return { name, data: typeof data === 'string' ? new TextEncoder().encode(data) : data };
+  }
+
+  /** The tab's contents as the file `name` says (by its extension), without changing anything. */
+  async encode(tab: Tab, name: string): Promise<{ data: string | Uint8Array; type: FileType; note: string }> {
+    const ext = extensionOf(name);
+    if (tab.deck) {
+      const deck = tab.deck;
+      const bytes = await writePptx({
+        size: deck.size, master: deck.master, design: tab.mode === 'design', sections: deck.sectionCounts(), settings: deck.settings,
+        slides: deck.slides.map((s, i) => ({ id: s.id, layout: s.layout, doc: deck.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments, background: s.background, hideGraphics: s.hideGraphics, hidden: s.hidden, hf: s.hf })),
+      }, { ...this.hooks.pptx, title: name.replace(/\.[^.]+$/, '') });
+      return { data: bytes, type: PPTX, note: '' };
+    }
+    if (tab.mode === 'sheet') {
+      const book = tab.book!;
+      const data = await this.hooks.sheets.write(book, name);
+      // CSV and SD files keep only the values of the sheet showing: said, not stopped (as Excel does)
+      const note = ext === 'csv' || ext === 'sdf' || ext === 'sd' ? ` (${book.sheets.length > 1 ? `only the sheet "${book.sheet.name}", ` : ''}values only: save as .xlsx to keep formulas and formatting)`
+        : ext === 'xlsx' && book.macros ? ' (its macros are left out: save as .xlsm to keep them)' : '';
+      return { data, type: ext === 'csv' ? CSV : ext === 'sdf' || ext === 'sd' ? SDF : ext === 'xlsm' ? XLSM : XLSX, note };
+    }
+    if (tab.mode === 'document') {
+      // the contents' page numbers come from the printed pages, whatever view shows
+      tab.document!.printLayout();
+      return { data: await this.hooks.documents.write(tab.document!.t, name), type: ext === 'rtf' ? RTF : ext === 'odt' ? ODT : DOCX, note: documentSaveNote(name) };
+    }
+    keepOnPage(this.docOf(tab));
+    const text = writeCdxml(this.docOf(tab), { name, textMeasure: this.hooks.measure });
+    return ext === 'cdx' ? { data: cdxmlToCdx(text), type: CDX, note: '' } : { data: text, type: CDXML, note: '' };
+  }
+
+  /** Said once per tab after a Word or PowerPoint save that holds structures. */
+  private officeNoteFor(tab: Tab): string {
+    if (tab.deck && tab.mode !== 'design' && tab.deck.slides.some((_, i) => tab.deck!.docOf(i).atoms.size)) return officeNote(tab, 'PowerPoint');
+    if (tab.mode === 'document' && Object.values(tab.document!.t.objects).some((o) => o.kind === 'drawing')) return officeNote(tab, 'Word');
+    return '';
   }
 
   async saveAs(tab: Tab = this.active): Promise<boolean> {
+    tab = this.mainOf(tab);
     const types = SAVE_TYPES[tab.mode];
     const ext = extensionOf(tab.name);
     const first = types.find((t) => t.extension === ext) ?? types[0];
@@ -469,47 +746,50 @@ export class Workspace {
     return this.writeTo(tab, target.ref, target.name);
   }
 
-  private async writeTo(tab: Tab, ref: FileRef, name: string): Promise<boolean> {
-    let note = '';
+  private async writeTo(tab: Tab, ref: FileRef, name: string, how: SaveHow = 'saved'): Promise<boolean> {
+    const auto = how === 'autosaved';
+    // what the tab holds now: changes made while the file is being written stay unsaved
+    const edits = tab.deck?.edits ?? tab.book?.edits ?? tab.document?.edits ?? 0;
+    const live = tab === this.active || (tab === this.pane && !this.aside);
+    const version = this.host.version;
+    const was = tab.ref;
+    let enc;
     try {
-      if (tab.deck) {
-        const deck = tab.deck;
-        const bytes = await writePptx({
-          size: deck.size, master: deck.master, design: tab.mode === 'design',
-          slides: deck.slides.map((s, i) => ({ layout: s.layout, doc: deck.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments })),
-        }, { ...this.hooks.pptx, title: name.replace(/\.[^.]+$/, '') });
-        await writeFile(ref, name, bytes, PPTX);
-        tab.savedEdits = deck.edits;
-      } else if (tab.mode === 'sheet') {
-        const book = tab.book!;
-        const ext = extensionOf(name);
-        const data = await this.hooks.sheets.write(book, name);
-        await writeFile(ref, name, data, ext === 'csv' ? CSV : ext === 'sdf' || ext === 'sd' ? SDF : XLSX);
-        // CSV and SD files keep only the values of the sheet showing: said, not stopped (as Excel does)
-        if (ext !== 'xlsx') note = ` (${book.sheets.length > 1 ? `only the sheet "${book.sheet.name}", ` : ''}values only: save as .xlsx to keep formulas and formatting)`;
-        tab.savedEdits = book.edits;
-      } else if (tab.mode === 'document') {
-        const f = tab.document!;
-        await writeFile(ref, name, await this.hooks.documents.write(f.t, name), DOCX);
-        tab.savedEdits = f.edits;
-      } else {
-        const doc = this.docOf(tab);
-        const text = writeCdxml(doc, { name, textMeasure: this.hooks.measure });
-        if (extensionOf(name) === 'cdx') await writeFile(ref, name, cdxmlToCdx(text), CDX);
-        else await writeFile(ref, name, text, CDXML);
-        adoptSaved(doc, text);
-      }
+      const go = (await this.hooks.beforeWrite?.(tab, ref, name, how)) ?? 'go';
+      if (go === 'stop') return false;
+      if (go === 'save-as') return this.saveAs(tab);
+      enc = await this.encode(tab, name);
+      await writeFile(ref, name, enc.data, enc.type);
+      if (!auto) enc.note += this.officeNoteFor(tab);
+      // later saves of a ChemDraw file rewrite only what changed since this one (unless it changed while being written)
+      if (enc.type === CDXML && (!live || this.host.version === version)) adoptSaved(this.docOf(tab), enc.data as string);
     } catch (e) {
-      await showError(`Could not save ${name}: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = `Could not save ${name}: ${e instanceof Error ? e.message : String(e)}`;
+      if (auto) this.hooks.autoSaveFailed?.(tab, msg);
+      else await showError(msg);
       return false;
+    }
+    if (tab.deck || tab.book || tab.document) {
+      tab.savedEdits = edits;
+      tab.dirty = (tab.deck?.edits ?? tab.book?.edits ?? tab.document?.edits) !== edits;
+    } else if (live && this.host.version !== version) {
+      tab.seen = this.host.version;
+      tab.changes++;
+      tab.dirty = true;
+    } else {
+      if (live) tab.seen = this.host.version;
+      tab.dirty = false;
     }
     tab.ref = ref;
     tab.name = name;
-    tab.dirty = false;
+    tab.savedAt = Date.now();
+    tab.savedHow = how;
+    tab.stamp = await stampOf(ref);
+    this.syncWindows(tab);
+    this.hooks.saved?.(tab, typeof enc.data === 'string' ? new TextEncoder().encode(enc.data) : enc.data, how, was);
     if (ref.kind === 'path' && !this.quiet) this.hooks.remember?.(ref.path);
-    if (tab === this.active || tab === this.pane) tab.seen = this.host.version;
     this.hooks.changed();
-    this.hooks.flash((ref.kind === 'none' ? `Downloaded ${name}` : `Saved ${name}`) + note, note ? 8000 : 3500);
+    if (!auto) this.hooks.flash((ref.kind === 'none' ? `Downloaded ${name}` : ref.kind === 'embedded' ? `Put the drawing back in ${ref.doc || ref.app}` : `Saved ${name}`) + enc.note, enc.note ? 8000 : 3500);
     return true;
   }
 
@@ -517,7 +797,7 @@ export class Workspace {
 
   /** Tabs with no file on disk yet (new, or downloaded in a browser): Save Workspace puts them in its folder. */
   get unsavedTabs(): Tab[] {
-    return this.tabs.filter((t) => t.ref.kind !== 'path');
+    return this.fileTabs.filter((t) => t.ref.kind !== 'path');
   }
 
   /**
@@ -535,11 +815,12 @@ export class Workspace {
     const folder = folderOf(path);
     this.noteChange();
     const taken = new Set<string>();
-    for (const t of this.tabs) {
+    const own = this.fileTabs;
+    for (const t of own) {
       const inFolder = t.ref.kind === 'path' && !/[\\/]/.test(relativeTo(folder, t.ref.path));
       if (t.ref.kind === 'path' && inFolder) taken.add(baseName(t.ref.path));
     }
-    for (const t of this.tabs) {
+    for (const t of own) {
       const onDisk = t.ref.kind === 'path';
       const outside = onDisk && relativeTo(folder, (t.ref as { path: string }).path) === (t.ref as { path: string }).path;
       if (!onDisk || (opts.copyIn && outside)) {
@@ -553,13 +834,13 @@ export class Workspace {
         if (!(await this.save(t))) return false;
       }
     }
-    const index = new Map(this.tabs.map((t, i) => [t, i]));
-    const tabs: WorkspaceEntry[] = this.tabs.map((t) => {
+    const index = new Map(own.map((t, i) => [t, i]));
+    const tabs: WorkspaceEntry[] = own.map((t) => {
       const p = t.partner && index.has(t.partner) ? index.get(t.partner)! : undefined;
       return { file: relativeTo(folder, (t.ref as { path: string }).path), ...(p !== undefined ? { beside: p } : {}) };
     });
     try {
-      await writeFile({ kind: 'path', path }, baseName(path), workspaceText({ tabs, active: this.tabs.indexOf(this.active) }), WORKSPACE);
+      await writeFile({ kind: 'path', path }, baseName(path), workspaceText({ tabs, active: own.indexOf(this.mainOf(this.active)) }), WORKSPACE);
     } catch (e) {
       await showError(`Could not save the workspace: ${e instanceof Error ? e.message : String(e)}`);
       return false;

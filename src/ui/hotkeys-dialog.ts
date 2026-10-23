@@ -2,6 +2,7 @@
 // them by pressing the new key. Changes take effect and are saved straight away. Taking a key
 // that another action had is allowed (the window says what changed), never blocked.
 
+import { showDialog } from './dialog-host';
 import { keymap, CONTEXTS, KeyContext, DEFAULT_KEYS, actionsFor, actionName, displayChord, chordOf, parseAction } from '../editor/keymap';
 
 export interface HotkeysOptions {
@@ -45,7 +46,7 @@ export class HotkeysDialog {
         <span class="hk-buttons">
           <button type="button" data-act="export" title="Save your keys to a file, to back them up or use them on another computer">Export…</button>
           <button type="button" data-act="import" title="Use keys saved with Export">Import…</button>
-          <button type="button" data-act="reset-all">Reset all to ChemDraw's keys</button>
+          <button type="button" data-act="reset-all">Change hotkeys to ChemDraw™ defaults</button>
           <button type="button" data-act="close" class="primary">Close</button>
         </span>
       </div>`;
@@ -76,7 +77,7 @@ export class HotkeysDialog {
     this.keepBox.checked = this.opts.keepHotspot.get();
     this.render();
     void this.opts.location().then((w) => { this.where.textContent = w; });
-    this.d.showModal();
+    showDialog(this.d);
     this.search.focus();
   }
 
@@ -305,13 +306,13 @@ export class HotkeysDialog {
       clearTimeout(this.resetTimer);
       this.resetTimer = window.setTimeout(() => {
         this.resetAllBtn.classList.remove('confirm');
-        this.resetAllBtn.textContent = "Reset all to ChemDraw's keys";
+        this.resetAllBtn.textContent = "Change hotkeys to ChemDraw™ defaults";
       }, 4000);
       return;
     }
     clearTimeout(this.resetTimer);
     this.resetAllBtn.classList.remove('confirm');
-    this.resetAllBtn.textContent = "Reset all to ChemDraw's keys";
+    this.resetAllBtn.textContent = "Change hotkeys to ChemDraw™ defaults";
     keymap.resetAll();
     this.say('Every key is back to ChemDraw’s. (Export first next time if you want to keep a copy of yours.)');
   }

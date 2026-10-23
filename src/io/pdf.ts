@@ -1,11 +1,13 @@
 // PDF files from recorded drawings (the same shapes and text as the EMF and SVG pictures), one
-// page per slide or one page for a drawing. Lines and text stay sharp at any zoom. Text uses
-// the fonts every PDF reader has (Helvetica looks like Arial, Times like Times New Roman, and
-// Symbol for Greek letters and arrows), so files stay small and open anywhere.
+// page per slide or one page for a drawing. Lines and text stay sharp at any zoom. Text is
+// written in fonts kept inside the file when a font source is given (see pdf-fonts.ts), so it
+// looks the same everywhere; characters none of those have, or every character when there is no
+// source, use the fonts every PDF reader has (Helvetica, Times, Courier and Symbol).
 // Written from the published PDF 1.7 specification (ISO 32000-1).
 
 import { zlibSync } from 'fflate';
 import { Item, Seg, parseColor } from '../render/vector';
+import { EmbeddedFont, TrueType, subsetTag, type PdfFontSource } from './pdf-fonts';
 
 export interface PdfPage {
   /** Page size in points. */
@@ -26,6 +28,8 @@ export interface PdfOptions {
   title?: string;
   /** The pixels of a picture (data URL), or null when it can't be shown (it is drawn as a grey box). */
   image(src: string): Promise<PdfImage | null>;
+  /** The font files to keep inside the file for a face (left out: the reader's standard fonts). */
+  fonts?: PdfFontSource;
 }
 
 // ---------------------------------------------------------------- text encodings
@@ -74,6 +78,21 @@ export function textPieces(text: string, widths: number[]): { symbol: boolean; c
     const last = out[out.length - 1];
     if (last && last.symbol === symbol) last.codes.push(code);
     else out.push({ symbol, codes: [code], dx: x });
+    x += widths[i] ?? 0;
+  });
+  return out;
+}
+
+/** Text cut into runs that one kept font can draw (the first that has each character), and runs that none can. */
+export function keptPieces(text: string, widths: number[], fonts: EmbeddedFont[]): { font: EmbeddedFont | null; text: string; widths: number[]; dx: number }[] {
+  const out: { font: EmbeddedFont | null; text: string; widths: number[]; dx: number }[] = [];
+  let x = 0;
+  [...text].forEach((ch, i) => {
+    const c = ch.codePointAt(0)!;
+    const font = fonts.find((f) => f.font.glyph(c) !== 0) ?? null;
+    const last = out[out.length - 1];
+    if (last && last.font === font) { last.text += ch; last.widths.push(widths[i] ?? 0); }
+    else out.push({ font, text: ch, widths: [widths[i] ?? 0], dx: x });
     x += widths[i] ?? 0;
   });
   return out;
@@ -227,6 +246,27 @@ export async function writePdf(pages: PdfPage[], opts: PdfOptions): Promise<Uint
     }
     return `F${n}`;
   };
+  // fonts kept in the file: each face's files, read once
+  const faces = new Map<string, Promise<EmbeddedFont[]>>();
+  const kept: EmbeddedFont[] = [];
+  const faceFonts = (family: string, bold: boolean, italic: boolean): Promise<EmbeddedFont[]> => {
+    if (!opts.fonts) return Promise.resolve([]);
+    const key = `${family.toLowerCase()}|${bold}|${italic}`;
+    let f = faces.get(key);
+    if (!f) {
+      f = opts.fonts(family, bold, italic).catch(() => [] as Uint8Array[]).then((files) => files.flatMap((data) => {
+        try {
+          const tt = new TrueType(data);
+          if (!tt.embeddable) return [];
+          const e = new EmbeddedFont(tt, o.reserve(), subsetTag(kept.length));
+          kept.push(e);
+          return [e];
+        } catch { return []; }
+      }));
+      faces.set(key, f);
+    }
+    return f;
+  };
   // each picture is stored once, however many times it shows
   const images = new Map<string, number | null>();
   const imageRef = async (src: string): Promise<number | null> => {
@@ -288,19 +328,33 @@ export async function writePdf(pages: PdfPage[], opts: PdfOptions): Promise<Uint
         ops.push('q', `${paint.v} rg`);
         // turned text (degrees anticlockwise): along the line, and up from it, on the page
         const a = ((it.angle ?? 0) * Math.PI) / 180, cos = Math.cos(a), sin = Math.sin(a);
-        for (const piece of textPieces(it.text, it.widths)) {
-          const f = fontRef(piece.symbol ? 'Symbol' : standardFont(it.family, it.bold, it.italic));
+        const kept = await faceFonts(it.family, it.bold, it.italic);
+        const show = (f: string, dx: number, s: string) => {
           usedFonts.add(f);
           // the text matrix turns the letters the right way up again
-          const m = `${num(cos)} ${num(-sin)} ${num(-sin)} ${num(-cos)} ${num(it.x + piece.dx * cos)} ${num(it.y - piece.dx * sin)}`;
-          ops.push(`BT /${f} ${num(it.size)} Tf ${m} Tm ${pdfString(piece.codes)} Tj ET`);
+          const m = `${num(cos)} ${num(-sin)} ${num(-sin)} ${num(-cos)} ${num(it.x + dx * cos)} ${num(it.y - dx * sin)}`;
+          ops.push(`BT /${f} ${num(it.size)} Tf ${m} Tm ${s} Tj ET`);
+        };
+        for (const piece of keptPieces(it.text, it.widths, kept)) {
+          if (piece.font) show(`F${piece.font.id}`, piece.dx, piece.font.show(piece.text));
+          else for (const p of textPieces(piece.text, piece.widths)) show(fontRef(p.symbol ? 'Symbol' : standardFont(it.family, it.bold, it.italic)), piece.dx + p.dx, pdfString(p.codes));
         }
         ops.push('Q');
       } else {
         const n = await imageRef(it.src);
         const c = it.crop ?? { l: 0, t: 0, r: 0, b: 0 };
         const W = it.w / Math.max(0.01, 1 - c.l - c.r), H = it.h / Math.max(0.01, 1 - c.t - c.b);
-        ops.push('q', `${num(it.x)} ${num(it.y)} ${num(it.w)} ${num(it.h)} re W n`);
+        ops.push('q');
+        if (it.rot) {
+          // turned about its middle (in the page's points from the top left, as recorded)
+          const a = (it.rot * Math.PI) / 180, cx = it.x + it.w / 2, cy = it.y + it.h / 2;
+          ops.push(`1 0 0 1 ${num(cx)} ${num(cy)} cm ${num(Math.cos(a))} ${num(Math.sin(a))} ${num(-Math.sin(a))} ${num(Math.cos(a))} 0 0 cm 1 0 0 1 ${num(-cx)} ${num(-cy)} cm`);
+        }
+        if (it.flipH || it.flipV) {
+          const cx = it.x + it.w / 2, cy = it.y + it.h / 2;
+          ops.push(`1 0 0 1 ${num(cx)} ${num(cy)} cm ${it.flipH ? -1 : 1} 0 0 ${it.flipV ? -1 : 1} 0 0 cm 1 0 0 1 ${num(-cx)} ${num(-cy)} cm`);
+        }
+        ops.push(`${num(it.x)} ${num(it.y)} ${num(it.w)} ${num(it.h)} re W n`);
         if (n) {
           usedImages.add(n);
           // the picture's top row goes at the top
@@ -316,6 +370,16 @@ export async function writePdf(pages: PdfPage[], opts: PdfOptions): Promise<Uint
       usedStates.size ? `/ExtGState << ${[...usedStates].map((g) => `/${g} ${g.slice(1)} 0 R`).join(' ')} >>` : '',
     ].filter(Boolean).join(' ');
     kids.push(o.put(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${num(page.w)} ${num(page.h)}] /Resources << ${res} >> /Contents ${content} 0 R >>`));
+  }
+  for (const e of kept) {
+    if (!e.used.size) { o.put('null', e.id); continue; }
+    const fontFile = o.stream(`/Length1 ${e.font.data.length}`, e.font.data);
+    const descriptor = o.reserve(), cidFont = o.reserve(), toUnicode = o.reserve();
+    const parts = e.objects({ fontFile, cidFont, descriptor, toUnicode });
+    o.put(parts.descriptor, descriptor);
+    o.put(parts.cidFont, cidFont);
+    o.stream('', o.text(parts.toUnicode), true, toUnicode);
+    o.put(parts.type0, e.id);
   }
   o.put(`<< /Type /Pages /Kids [${kids.map((k) => `${k} 0 R`).join(' ')}] /Count ${kids.length} >>`, pagesId);
   o.put(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`, catalog);

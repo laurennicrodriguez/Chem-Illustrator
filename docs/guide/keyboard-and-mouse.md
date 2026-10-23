@@ -38,7 +38,7 @@ If several atoms are selected and you point at one of them, a label key labels t
 | `e` | Et | Shift+E | CO2Me |
 | Shift+A | Ac | Shift+Z | N3 |
 | Shift+M | MgBr | Shift+L | Li |
-| Shift+Y | Boc | Shift+H | Cbz |
+| `y` or Shift+Y | Boc | Shift+H | Cbz |
 | Shift+Q | Fmoc | | |
 
 ### Growing and changing
@@ -47,17 +47,18 @@ If several atoms are selected and you point at one of them, a label key labels t
 |---|---|
 | `1` | Grow a bond (zig-zag) |
 | `0` | Grow a bond, ring style (the other side; longer on busy atoms) |
-| `2` | C=O, or acetyl on an end atom |
+| `2` | C=O (an end atom becomes the C=O and the chain carries on past it) |
 | `3` or `a` | Phenyl |
 | `4` | Wedge (plus Me on an end atom) |
 | `5` | Hashed wedge (plus Me on an end atom) |
 | `6` | Cyclohexyl, or a spiro ring on a ring atom |
 | `7` | Cyclopentyl, or a spiro ring on a ring atom |
-| `u` | Cyclobutyl |
-| `v` | Cyclopropyl |
+| `u` | Cyclobutyl, or a spiro ring on a CH2 |
+| `v` | Cyclopropyl, or a spiro ring on a CH2 |
 | `8` | =CH2 (then `1` for E, `0` for Z) |
 | `9` | Two methyls (iPr, gem-dimethyl) |
-| Shift+K | t-Bu |
+| Shift+K | t-Bu (on a CH2 in a chain: a wedged and a plain methyl) |
+| `j` / Shift+J | On a metal: η⁵-Cp / η⁶-benzene |
 | `k` | Sulfonyl (SO2) |
 | `z` | Alkyne |
 | `+` / `-` | Charge +1 / −1 |
@@ -70,6 +71,10 @@ If several atoms are selected and you point at one of them, a label key labels t
 | `g` | Select the atom |
 | Arrow keys | Move the highlight to the next atom that way |
 | Shift+arrow keys | Move the highlight about three bonds that way |
+| Space or Tab | Select the whole molecule the highlight is on |
+| Enter (molecule selected) | Back to the highlight on it, ready for more keys |
+
+Keys typed one after another build whole molecules. From a phenyl's highlighted atom, `1B79←←←←o↓↓↓↓o→→9` makes the pinacol boronate; from a bond end, `2o1n1←5←2↓↓→→2` makes the NHS ester of acetic acid. After `3` to `8` on a bond the highlight moves to the new ring's far bond; after `a` or `z` it stays, so `a` then `z` makes indene.
 
 ## Pointing at a bond
 
@@ -80,10 +85,10 @@ If several atoms are selected and you point at one of them, a label key labels t
 | `p` | Partial bond (transition state) | | |
 | `3` | Triple | `b` | Bold |
 | `w` | Wedge (again to reverse) | Shift+B | Bold double |
-| `h` | Hashed wedge (again to reverse) | `y` | Wavy |
+| `h` or Shift+W | Hashed wedge (again to reverse) | `y` | Wavy |
 | Shift+H | Hashed | `l` / `c` / `r` | Double bond: second line left, centred, right |
 | `a` | Fuse benzene | `z` | Fuse cyclopentadiene |
-| `4` to `8` | Fuse a 4- to 8-membered ring | `9` / `0` | Fuse a chair cyclohexane (trans / cis on a chair) |
+| `v`, `4` to `8` | Fuse a 3-membered, or a 4- to 8-membered ring | `9` / `0` | Fuse a chair cyclohexane (trans / cis on a chair) |
 | `/` or `?` | The bond's settings in the Style panel | `g` | Select the bond |
 | Delete or Backspace | Delete the bond | Arrow keys | Move the highlight |
 
@@ -123,7 +128,7 @@ If several atoms are selected and you point at one of them, a label key labels t
 | Alt+← / Alt+→ | Turn 1° anticlockwise / clockwise |
 | Alt+↑ / Alt+↓ | Turn 15° anticlockwise / clockwise |
 | Ctrl+R | Rotate by an angle… |
-| Ctrl+K | Scale… |
+| Ctrl+K | Scale… (in documents, slides, sheets and text being typed: Insert Link…) |
 | Ctrl+Shift+H, Ctrl+Shift+V | Flip left to right, flip top to bottom |
 | Ctrl+Alt+Shift+L, C, R | Align left edges, centres across, right edges |
 | Ctrl+Alt+Shift+T, M, B | Align top edges, middles down, bottom edges |
@@ -140,6 +145,7 @@ If several atoms are selected and you point at one of them, a label key labels t
 | Ctrl+0 | Fit the drawing in the window |
 | F5, F6, F7, F8 | Actual size, fit, zoom in, zoom out |
 | Alt+Q | Search for a command |
+| F1 | The User Guide, at the part about the tool or kind of tab in use |
 
 ### While typing text
 
@@ -154,6 +160,15 @@ If several atoms are selected and you point at one of them, a label key labels t
 
 Slides, sheets and documents have their own keys (PowerPoint's, Excel's and Word's), which take priority while that kind of tab is showing. For example, F5 starts a slide show in Slides, and Ctrl+D fills down in a sheet. See their pages.
 
+## Getting round without the mouse
+
+- **F10**, or **Alt** pressed and let go on its own, goes to the menu bar; press it again (or Esc) to go back. The left and right arrow keys move along the menus and the down arrow opens one. In a menu, the right arrow opens a submenu and the left arrow closes it.
+- **Alt** and a menu's underlined letter opens that menu: **F**ile, **E**dit, **V**iew, **I**nsert, F**o**rmat, **C**hemistry, **H**elp. The letters show while Alt is held.
+- **Ctrl+F6** moves on round the window: the menus, the file tabs, the ribbon, the drawing tools, the drawing (or sheet or document), and the side panel. **Ctrl+Shift+F6** goes back. They can be changed in the Hotkeys window.
+- **Tab** moves through the buttons as usual. It selects the next structure only when the drawing has the keys (after clicking it, or with Ctrl+F6) or the mouse is over the drawing.
+- On the file tabs, the left and right arrow keys switch tabs and Delete closes one.
+- Screen readers hear which drawing tool is on, and what is selected ("Selected C6H5Br, 7 atoms").
+
 ## Changing hotkeys
 
 Every key can be changed. Open **Edit ▸ Hotkeys…**, or **Help** and then **Show and change all hotkeys…**.
@@ -164,7 +179,7 @@ The window lists every action, grouped as above (pointing at an atom, at a bond,
 - Click **+** next to an action and press the key you want. Press Esc to cancel.
 - Click **×** on a key to take it away from that action.
 - If the key already did something else, the window tells you which action lost it. Nothing is blocked.
-- **Reset** next to an action puts ChemDraw's keys back for it; **Reset all to ChemDraw's keys** does it for everything.
+- **Reset** next to an action puts ChemDraw's keys back for it; **Change hotkeys to ChemDraw™ defaults** does it for everything.
 - **Export…** saves your keys to a file, and **Import…** loads them, for example on another computer.
 
 Changes work straight away and are saved in the settings file; the window shows where it is. New default keys added in later versions still reach you, because only your changes are stored.

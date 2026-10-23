@@ -176,15 +176,43 @@ export function rolesOf(r: Arrow, items: Item[], bond: number): StepRoles {
   return r.step ?? interpretArrow(r, items, bond);
 }
 
-/** Every reaction arrow in the drawing, with its roles. */
+/** Every reaction arrow in the drawing, with its roles (a row's first arrow continuing from the row above). */
 export function reactionSteps(doc: Doc, items: Item[]): { arrow: Arrow; roles: StepRoles }[] {
-  const out: { arrow: Arrow; roles: StepRoles }[] = [];
-  for (const r of doc.arrows.values()) {
-    if (!isReactionArrow(r)) continue;
-    const roles = rolesOf(r, items, doc.style.bondLength);
-    if (isStep(roles) || r.step) out.push({ arrow: r, roles });
+  const all: { arrow: Arrow; roles: StepRoles }[] = [];
+  for (const r of doc.arrows.values()) if (isReactionArrow(r)) all.push({ arrow: r, roles: rolesOf(r, items, doc.style.bondLength) });
+  linkRows(all, items);
+  return all.filter(({ arrow, roles }) => isStep(roles) || arrow.step);
+}
+
+/**
+ * A scheme wrapped onto more rows: an arrow that starts a row (products, but nothing before it)
+ * goes on from the last product of the row above, as a chemist reads it. Changes the roles given
+ * (copies, never an arrow's stored ones).
+ */
+export function linkRows(steps: { arrow: Arrow; roles: StepRoles }[], items: Item[]): void {
+  const boxOf = new Map(items.map((it) => [it.ref, it.box]));
+  const startsOf = new Set(steps.flatMap(({ roles }) => roles.reactants));
+  const y = (r: Arrow) => (r.tail.y + r.head.y) / 2;
+  const across = (r: Arrow) => Math.abs(r.head.x - r.tail.x) > 2 * Math.abs(r.head.y - r.tail.y);
+  for (const st of steps) {
+    const { arrow, roles } = st;
+    if (roles.reactants.length || !roles.products.length || !across(arrow)) continue;
+    // the row above: the nearest arrows higher up, and the rightmost product there that leads nowhere
+    let best: { ref: string; dy: number; x: number } | null = null;
+    for (const o of steps) {
+      if (o === st || !across(o.arrow) || !o.roles.products.length) continue;
+      const dy = y(arrow) - y(o.arrow);
+      if (dy <= 0) continue;
+      for (const ref of o.roles.products) {
+        const b = boxOf.get(ref);
+        if (!b || startsOf.has(ref) || roles.products.includes(ref)) continue;
+        if (!best || dy < best.dy - 1 || (Math.abs(dy - best.dy) <= 1 && b.x2 > best.x)) best = { ref, dy, x: b.x2 };
+      }
+    }
+    if (!best) continue;
+    st.roles = { ...roles, reactants: [best.ref] };
+    startsOf.add(best.ref);
   }
-  return out;
 }
 
 /** Text sizes from Arial's published widths: a measure that needs no screen (tests, files). */

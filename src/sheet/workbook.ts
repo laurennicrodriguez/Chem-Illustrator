@@ -12,14 +12,28 @@ import type { DocStyle } from '../style';
 import { ACS_1996 } from '../style';
 import { Chart, mapChartRefs } from './chart';
 import { Dashboard, mapDashboardRefs } from './dashboard';
-import { type RefToken, Node, parseFormula, shiftFormula, shiftTree, adjustFormula, renameSheetInFormula, formulaRefs, SheetChange, normalizeFormula, FormulaSyntaxError, moveRefs } from './formula';
-import { evaluate, EvalHost } from './evaluate';
+import { type RefToken, Node, parseFormula, shiftFormula, shiftTree, adjustFormula, renameSheetInFormula, formulaRefs, SheetChange, normalizeFormula, FormulaSyntaxError, moveRefs, tokenize, type Token } from './formula';
+import { evaluate, evaluateArg, tidyValue, EvalHost, VOLATILE_FUNCTIONS } from './evaluate';
+import { Arg, isBlock, isMulti, rowsOf } from './args';
+import { DefinedName, resolveName } from './names';
 import { CellError, ERR, Value, readTyped, compareValues, isError } from './values';
 import { MolProps } from './properties';
 import { formatValue } from './numfmt';
-import { MAX_COLS, MAX_ROWS, Range, colOf, keyOf, normRange, rowOf, inRange, rangesOverlap } from './refs';
+import { MAX_COLS, MAX_ROWS, Range, cellName, colOf, keyOf, normRange, rowOf, inRange, rangesOverlap, rangeName, parseRange } from './refs';
 import { CondFormat, CellLook, workOutLooks } from './conditional';
 import { TableDef, tableCellLook } from './table-styles';
+import { CellNote, copyNote } from './notes';
+import { Validation, ValidationHost, validationAt } from './validation';
+import type { SheetObject } from './sheet-objects';
+import { PageSetup, shiftSetup } from './page-setup';
+import { DataTable, dataTableCell } from './what-if';
+import { PivotTable } from './pivot';
+import { SparklineGroup, moveSparklines } from './sparklines';
+import type { OutlineSettings } from './outline';
+import { type SheetViewOpts, type CustomView, renameInViews } from './views';
+import type { WorkbookTheme } from './themes';
+import { type CompoundCard, fieldValue } from './compound';
+import type { Query } from './query';
 
 export type BorderStyle = 'thin' | 'medium' | 'thick' | 'double' | 'dashed' | 'dotted';
 export interface Border { style: BorderStyle; color?: string }
@@ -39,11 +53,30 @@ export interface CellStyle {
   align?: 'left' | 'center' | 'right';
   valign?: 'top' | 'middle' | 'bottom';
   wrap?: boolean;
+  /** Indent levels from the side the text is aligned to (PivotTable labels; Excel's Increase Indent). */
+  indent?: number;
   /** An Excel number format ("0.00", "0%", "0.00E+00"). */
   numFmt?: string;
   borders?: Partial<Record<Side, Border>>;
   /** Shown as chemistry: the numbers of CH2Cl2 or C9H8O4 lowered, charges raised. */
   chem?: boolean;
+  /**
+   * Text turned (Format Cells > Alignment > Orientation): degrees anticlockwise from −90 to 90,
+   * or 255 for letters stacked one above the other, as Excel numbers them.
+   */
+  rotate?: number;
+  /** The cell style from the Cell Styles gallery (Good, Heading 1, Total…) the formatting came from. */
+  cellStyle?: string;
+}
+
+/** The macros of an .xlsm workbook, as its file held them. */
+export interface Macros {
+  /** xl/vbaProject.bin. */
+  project: Uint8Array;
+  /** Its digital signatures (vbaProjectSignature.bin and the agile and V3 ones), by file name, when signed. */
+  signatures: Record<string, Uint8Array>;
+  /** The workbook's own codeName (ThisWorkbook). */
+  codeName?: string;
 }
 
 /** A drawing in a cell. Never changed once made: a new drawing gets a new id, so pictures and properties can be kept by id. */
@@ -58,6 +91,10 @@ export interface Cell {
   /** A structure drawn in the cell. */
   structure?: Structure;
   style?: CellStyle;
+  /** Where the cell links to (Insert > Link): a web page, a DOI, a file or a place (#Sheet1!A1); see links.ts. */
+  link?: string;
+  /** Data > Data Types > Compound: what PubChem knows about the compound named in the cell. */
+  compound?: CompoundCard;
 }
 
 /** A property column: every row from `firstRow` down to the end of the table works out this formula. */
@@ -89,7 +126,20 @@ export interface Filter {
   conditions: Record<number, Condition>;
 }
 
-export interface SortKey { col: number; descending?: boolean }
+export interface SortKey {
+  /** The column sorted by (the row, when sorting left to right). */
+  col: number;
+  descending?: boolean;
+  /** A custom order (Excel's custom lists: Mon, Tue, Wed…); values not in it go after, in the usual order. */
+  custom?: string[];
+}
+
+export interface SortOptions {
+  /** Capitals count: equal text sorts lowercase first, as in Excel. */
+  caseSensitive?: boolean;
+  /** Sort the columns of the block left to right (by rows) instead of its rows. */
+  byColumns?: boolean;
+}
 
 /** What the sheet needs from the chemistry engine. Answers that aren't ready are #BUSY!; `ready` is called when they are. */
 export interface ChemHost {
@@ -108,6 +158,8 @@ export interface CellBlock {
   origin: { row: number; col: number } | null;
   /** What the formulas showed when copied, as typed text (for Paste Values). */
   shown?: (string | undefined)[][];
+  /** Notes and comments on the cells (pasted with everything else, as in Excel). */
+  notes?: (CellNote | undefined)[][];
 }
 
 /** A worked-out value as text that types back in as the same value. */
@@ -128,7 +180,7 @@ export function makeStructure(contents: Contents): Structure {
 }
 
 /** A cell with nothing in it and no formatting. */
-const isBlankCell = (c: Cell | undefined): boolean => !c || (!c.input && !c.structure && !hasStyle(c.style));
+const isBlankCell = (c: Cell | undefined): boolean => !c || (!c.input && !c.structure && !c.link && !c.compound && !hasStyle(c.style));
 const hasStyle = (s: CellStyle | undefined): boolean => !!s && Object.values(s).some((v) => v !== undefined);
 
 const sameStyle = (a: CellStyle | undefined, b: CellStyle | undefined): boolean =>
@@ -138,7 +190,7 @@ const sameStyle = (a: CellStyle | undefined, b: CellStyle | undefined): boolean 
 function sameCell(a: Cell | undefined, b: Cell | undefined): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return (a.input || undefined) === (b.input || undefined) && a.structure === b.structure && sameStyle(a.style, b.style);
+  return (a.input || undefined) === (b.input || undefined) && a.structure === b.structure && a.link === b.link && a.compound === b.compound && sameStyle(a.style, b.style);
 }
 
 /** Two styles merged, the second's settings winning. */
@@ -168,12 +220,14 @@ function patchStyleWith(s: CellStyle | undefined, patch: Partial<CellStyle>): Ce
 
 // ---------------------------------------------------------------- history
 
-type MapField = 'cells' | 'colWidths' | 'rowHeights' | 'colDefs' | 'colStyles' | 'hiddenRows' | 'hiddenCols';
-type ValueField = 'merges' | 'filter' | 'frozen' | 'name' | 'condFormats' | 'tables' | 'charts' | 'dashboard';
+type MapField = 'cells' | 'colWidths' | 'rowHeights' | 'colDefs' | 'colStyles' | 'hiddenRows' | 'hiddenCols' | 'notes' | 'rowLevels' | 'colLevels';
+type ValueField = 'merges' | 'filter' | 'frozen' | 'split' | 'name' | 'condFormats' | 'tables' | 'charts' | 'dashboard' | 'validations' | 'objects' | 'pageSetup' | 'dataTables' | 'pivots'
+  | 'sparklines' | 'viewOpts' | 'outline';
+const VALUE_FIELDS = new Set<string>(['merges', 'filter', 'frozen', 'split', 'name', 'condFormats', 'tables', 'charts', 'dashboard', 'validations', 'objects', 'pageSetup', 'dataTables', 'pivots', 'sparklines', 'viewOpts', 'outline']);
 
 interface Change {
-  sheet: Sheet | null; // null: the workbook's list of sheets
-  field: MapField | ValueField | 'sheets';
+  sheet: Sheet | null; // null: the workbook's list of sheets, its names, theme or custom views
+  field: MapField | ValueField | 'sheets' | 'names' | 'theme' | 'customViews' | 'queries' | 'drawingStyle';
   key: number;
   before: unknown;
   after: unknown;
@@ -196,6 +250,8 @@ const SMALL_BLOCK = 10000;
 
 export class Sheet {
   readonly uid = nextSheetUid++;
+  /** The name a macro-enabled workbook's code knows the sheet by (Excel's codeName), kept for its macros. */
+  codeName?: string;
   cells = new Map<number, Cell>();
   /** Column widths and row heights set by hand, in pixels at 100% zoom. */
   colWidths = new Map<number, number>();
@@ -210,6 +266,8 @@ export class Sheet {
   filter: Filter | null = null;
   /** Rows and columns that stay put while scrolling. */
   frozen = { rows: 0, cols: 0 };
+  /** View > Split: the window in two or four panes that scroll on their own, split above this row and left of this column (null: none). */
+  split: { rows: number; cols: number } | null = null;
   /** Conditional formatting rules, the first in the list winning. */
   condFormats: CondFormat[] = [];
   /** Blocks formatted as tables (Excel's Format as Table). */
@@ -218,6 +276,27 @@ export class Sheet {
   charts: Chart[] = [];
   /** A dashboard sheet's tiles (null: an ordinary sheet of cells). */
   dashboard: Dashboard | null = null;
+  /** Notes and comments, by cell. */
+  notes = new Map<number, CellNote>();
+  /** Data validation rules (what may be typed in some cells, and drop-down lists). */
+  validations: Validation[] = [];
+  /** Pictures, shapes and text boxes floating over the cells (drawn above the charts, the last on top). */
+  objects: SheetObject[] = [];
+  /** How the sheet prints (null: Excel's defaults). */
+  pageSetup: PageSetup | null = null;
+  /** What-If data tables: blocks of results worked out by trying values in an input cell. */
+  dataTables: DataTable[] = [];
+  /** PivotTables whose reports are in this sheet's cells. */
+  pivots: PivotTable[] = [];
+  /** Data > Group: the outline level of grouped rows and columns (1 to 7). */
+  rowLevels = new Map<number, number>();
+  colLevels = new Map<number, number>();
+  /** Where the summary rows and columns of the outline are (null: below and to the right, Excel's default). */
+  outline: OutlineSettings | null = null;
+  /** Insert > Sparklines: little charts in cells. */
+  sparklines: SparklineGroup[] = [];
+  /** View: Page Layout or Page Break Preview, gridlines and headings shown or hidden (null: Normal, both shown). */
+  viewOpts: SheetViewOpts | null = null;
   private looks: { gen: number; rules: CondFormat[]; map: Map<number, CellLook> } | null = null;
   /** Goes up each time the values are worked out again (all of them, or only those an edit changed). */
   valuesGen = 0;
@@ -231,6 +310,12 @@ export class Sheet {
   lastCol = -1;
   /** The last row with data outside property columns: property columns reach down to here. */
   lastDataRow = -1;
+  /** Arrays spilled from formulas: the block each fills, by its formula's cell. */
+  spills = new Map<number, Range>();
+  /** The formula's cell that each spilled cell's value comes from. */
+  spillOwner = new Map<number, number>();
+  /** Arrays that couldn't spill (#SPILL!), and the cells they need. */
+  spillWanted = new Map<number, Range>();
 
   constructor(public wb: Workbook, public name: string) {}
 
@@ -289,6 +374,16 @@ export class Sheet {
     return this.looks.map.get(keyOf(row, col));
   }
 
+  /** The note or comment on a cell. */
+  noteAt(row: number, col: number): CellNote | undefined {
+    return this.notes.get(keyOf(row, col));
+  }
+
+  /** The data validation rule on a cell. */
+  validationAt(row: number, col: number): Validation | undefined {
+    return this.validations.length ? validationAt(this.validations, row, col) : undefined;
+  }
+
   /** The table a cell is in, if any. */
   tableAt(row: number, col: number): TableDef | undefined {
     return this.tables.find((t) => inRange(t.range, row, col));
@@ -310,6 +405,15 @@ export class Sheet {
       st = mergeStyle(st, { fill: cf.fill, color: cf.color, bold: cf.bold, italic: cf.italic, underline: cf.underline });
     }
     return st;
+  }
+
+  /** The array a cell is part of (its formula's cell, or one it spilled into), with the block it fills. */
+  spillAt(row: number, col: number): { row: number; col: number; range: Range; blocked?: true } | null {
+    const k = keyOf(row, col);
+    const anchor = this.spills.has(k) ? k : this.spillOwner.get(k);
+    if (anchor !== undefined) return { row: rowOf(anchor), col: colOf(anchor), range: this.spills.get(anchor)! };
+    const want = this.spillWanted.get(k);
+    return want ? { row, col, range: want, blocked: true } : null;
   }
 
   /** The text a cell shows (numbers in its format). */
@@ -404,14 +508,27 @@ export class Sheet {
     const text = input.startsWith('=') ? normalizeFormula(input) : input;
     const typed = readTyped(text);
     if (typed.format && !this.styleAt(row, col)?.numFmt) style = patchStyleWith(style, { numFmt: typed.format });
-    this.setCell(row, col, { input: text || undefined, style });
+    this.setCell(row, col, { input: text || undefined, style, link: old?.link });
+  }
+
+  /** Link a cell somewhere (undefined takes its link off); its text and formatting stay. */
+  setLink(row: number, col: number, link: string | undefined): void {
+    const old = this.cell(row, col);
+    this.setCell(row, col, { ...old, style: old ? old.style : this.colStyles.get(col), link });
+  }
+
+  /** Make a cell a compound (Data > Data Types > Compound), showing its name; undefined makes it plain text again. */
+  setCompound(row: number, col: number, card: CompoundCard | undefined): void {
+    const old = this.cell(row, col);
+    if (card) this.setCell(row, col, { input: valueInput(card.name), style: old ? old.style : this.colStyles.get(col), link: old?.link, structure: old?.structure, compound: card });
+    else if (old?.compound) this.setCell(row, col, { ...old, compound: undefined });
   }
 
   /** Put a drawing in a cell (null takes it out). */
   setStructure(row: number, col: number, contents: Contents | null): void {
     const old = this.cell(row, col);
     const empty = !contents || !contents.atoms.length && !contents.captions.length && !contents.arrows.length && !contents.shapes.length;
-    this.setCell(row, col, { style: old ? old.style : this.colStyles.get(col), structure: empty ? undefined : makeStructure(contents!) });
+    this.setCell(row, col, { style: old ? old.style : this.colStyles.get(col), structure: empty ? undefined : makeStructure(contents!), link: old?.link });
   }
 
   /** Change some formatting of every cell in a range (whole columns change the column's formatting too). */
@@ -516,8 +633,65 @@ export class Sheet {
     this.assign('dashboard', d);
   }
 
+  setObjects(list: SheetObject[]): void {
+    this.assign('objects', list);
+  }
+
+  setPageSetup(ps: PageSetup | null): void {
+    this.assign('pageSetup', ps);
+  }
+
+  setDataTables(list: DataTable[]): void {
+    this.assign('dataTables', list);
+  }
+
+  setSparklines(list: SparklineGroup[]): void {
+    this.assign('sparklines', list);
+  }
+
+  setViewOpts(o: SheetViewOpts | null): void {
+    this.assign('viewOpts', o && Object.values(o).some((v) => v !== undefined) ? o : null);
+  }
+
+  setOutline(o: OutlineSettings | null): void {
+    this.assign('outline', o && Object.values(o).some((v) => v !== undefined) ? o : null);
+  }
+
+  /** A row's outline level (0 takes it out of every group). */
+  setRowLevel(row: number, level: number): void {
+    this.put('rowLevels', this.rowLevels, row, level > 0 ? Math.min(7, level) : undefined);
+  }
+
+  setColLevel(col: number, level: number): void {
+    this.put('colLevels', this.colLevels, col, level > 0 ? Math.min(7, level) : undefined);
+  }
+
+  setPivots(list: PivotTable[]): void {
+    this.assign('pivots', list);
+  }
+
+  /** The data table whose results include this cell. */
+  dataTableAt(row: number, col: number): DataTable | undefined {
+    return this.dataTables.find((t) => inRange(t.ref, row, col));
+  }
+
+  /** Put a note or comment on a cell (undefined takes it off). */
+  setNote(row: number, col: number, note: CellNote | undefined): void {
+    this.put('notes', this.notes, keyOf(row, col), note);
+  }
+
+  setValidations(list: Validation[]): void {
+    this.assign('validations', list);
+  }
+
   setFrozen(rows: number, cols: number): void {
     this.assign('frozen', { rows: Math.max(0, rows), cols: Math.max(0, cols) });
+  }
+
+  /** Split the window above a row and left of a column (null, or 0 and 0, takes the split away). */
+  setSplit(split: { rows: number; cols: number } | null): void {
+    const v = split && (split.rows > 0 || split.cols > 0) ? { rows: Math.max(0, split.rows), cols: Math.max(0, split.cols) } : null;
+    if (JSON.stringify(v) !== JSON.stringify(this.split)) this.assign('split', v);
   }
 
   rename(name: string): void {
@@ -526,16 +700,22 @@ export class Sheet {
     this.assign('name', name);
     // formulas that name the sheet follow it
     this.wb.rewriteAllFormulas((f) => renameSheetInFormula(f, old, name));
+    if (this.wb.customViews.length) this.wb.setCustomViews(renameInViews(this.wb.customViews, old, name));
   }
 
-  /** Empty cells: their contents, their formatting, or both. Nothing outside the cells in use is visited. */
-  clear(r: Range, what: 'contents' | 'formats' | 'all' = 'contents'): void {
+  /**
+   * Empty cells: their contents, their formatting, both (with their notes, as Excel's Clear All),
+   * or only their notes and comments. Nothing outside the cells in use is visited.
+   */
+  clear(r: Range, what: 'contents' | 'formats' | 'all' | 'notes' = 'contents'): void {
+    if (what === 'all' || what === 'notes') for (const k of [...this.notes.keys()]) if (inRange(r, rowOf(k), colOf(k))) this.put('notes', this.notes, k, undefined);
+    if (what === 'notes') return;
     if (what !== 'contents' && r.r1 === 0 && r.r2 >= MAX_ROWS - 1) for (let c = r.c1; c <= Math.min(r.c2, this.lastCol); c++) this.setColStyle(c, undefined);
     for (const k of this.keysIn(r)) {
       const c = this.cells.get(k)!;
       if (what === 'all') this.setCell(rowOf(k), colOf(k), undefined);
       else if (what === 'contents') this.setCell(rowOf(k), colOf(k), { style: c.style });
-      else this.setCell(rowOf(k), colOf(k), { input: c.input, structure: c.structure });
+      else this.setCell(rowOf(k), colOf(k), { input: c.input, structure: c.structure, link: c.link });
     }
     // clearing a property column's header and cells together takes the property column away
     if (what !== 'formats') {
@@ -558,7 +738,9 @@ export class Sheet {
         if (what === 'values' && input?.startsWith('=') && block.shown?.[i]?.[j] !== undefined) input = block.shown[i][j];
         else if (input?.startsWith('=') && block.origin) input = shiftFormula(input, row - (block.origin.row + i), col - (block.origin.col + j));
         const style = what === 'values' ? old?.style : src?.style;
-        this.setCell(row, col, { input, structure: src?.structure, style });
+        this.setCell(row, col, { input, structure: src?.structure, style, link: what === 'values' ? old?.link : src?.link });
+        const note = block.notes?.[i]?.[j];
+        if (what === 'all' && note) this.setNote(row, col, copyNote(note));
       }
     }
     return target;
@@ -583,21 +765,25 @@ export class Sheet {
   copy(r: Range): CellBlock {
     const cells: (Cell | undefined)[][] = [];
     const shown: (string | undefined)[][] = [];
+    const notes: (CellNote | undefined)[][] = [];
     let formulas = false;
     for (let row = r.r1; row <= r.r2; row++) {
+      if (this.notes.size) notes.push(Array.from({ length: r.c2 - r.c1 + 1 }, (_, j) => this.noteAt(row, r.c1 + j)));
       const line: (Cell | undefined)[] = [];
       const seen: (string | undefined)[] = [];
       for (let col = r.c1; col <= r.c2; col++) {
         const c = this.cell(row, col);
-        const input = this.effectiveInput(row, col);
+        // a cell an array spilled into is copied as its value, as in Excel
+        const input = this.effectiveInput(row, col) ?? (this.spillOwner.has(keyOf(row, col)) ? valueInput(this.value(row, col)) || undefined : undefined);
         const style = this.styleAt(row, col);
-        line.push(input || c?.structure || style ? { input, structure: c?.structure, style } : undefined);
+        line.push(input || c?.structure || style || c?.link ? { input, structure: c?.structure, style, ...(c?.link ? { link: c.link } : {}) } : undefined);
         if (input?.startsWith('=')) { formulas = true; seen.push(valueInput(this.value(row, col))); } else seen.push(undefined);
       }
       cells.push(line);
       shown.push(seen);
     }
-    return { rows: r.r2 - r.r1 + 1, cols: r.c2 - r.c1 + 1, cells, origin: { row: r.r1, col: r.c1 }, ...(formulas ? { shown } : {}) };
+    const noted = notes.some((line) => line.some(Boolean));
+    return { rows: r.r2 - r.r1 + 1, cols: r.c2 - r.c1 + 1, cells, origin: { row: r.r1, col: r.c1 }, ...(formulas ? { shown } : {}), ...(noted ? { notes } : {}) };
   }
 
   /** The used part of a range (null when it holds nothing). */
@@ -652,7 +838,7 @@ export class Sheet {
           input = textStep !== null ? countOn(srcCells[0].input!, textStep * pos) : countOn(input, Math.floor(pos / srcLen));
         }
         const keepsDef = !s.cell?.input && this.defAt(r, c) && input === this.effectiveInput(r, c);
-        this.setCell(r, c, { input: keepsDef ? undefined : input, structure: s.cell?.structure, style: s.cell?.style });
+        this.setCell(r, c, { input: keepsDef ? undefined : input, structure: s.cell?.structure, style: s.cell?.style, link: s.cell?.link });
       }
     }
   }
@@ -680,6 +866,15 @@ export class Sheet {
       const nk = moved(k);
       if (nk !== null && nk !== k && (axis === 'row' ? rowOf(nk) : colOf(nk)) < (axis === 'row' ? MAX_ROWS : MAX_COLS)) this.put('cells', this.cells, nk, c);
     }
+    // notes go with their cells (and with them when they are deleted)
+    if (this.notes.size) {
+      const oldNotes = [...this.notes];
+      for (const [k] of oldNotes) if (moved(k) !== k) this.put('notes', this.notes, k, undefined);
+      for (const [k, n] of oldNotes) {
+        const nk = moved(k);
+        if (nk !== null && nk !== k && (axis === 'row' ? rowOf(nk) : colOf(nk)) < (axis === 'row' ? MAX_ROWS : MAX_COLS)) this.put('notes', this.notes, nk, n);
+      }
+    }
     const shiftMap = <V>(field: MapField, map: Map<number, V>, onAxis: boolean) => {
       if (!onAxis) return;
       const entries = [...map];
@@ -696,6 +891,8 @@ export class Sheet {
     shiftMap('hiddenCols', this.hiddenCols, axis === 'col');
     shiftMap('colStyles', this.colStyles, axis === 'col');
     shiftMap('colDefs', this.colDefs, axis === 'col');
+    shiftMap('rowLevels', this.rowLevels, axis === 'row');
+    shiftMap('colLevels', this.colLevels, axis === 'col');
     // blocks: merged cells and the filter
     const moveRange = (r: Range): Range | null => {
       const lo = axis === 'row' ? r.r1 : r.c1, hi = axis === 'row' ? r.r2 : r.c2;
@@ -724,6 +921,10 @@ export class Sheet {
       const ts = this.tables.map((t) => ({ ...t, range: moveRange(t.range)! })).filter((t) => t.range);
       if (JSON.stringify(ts) !== JSON.stringify(this.tables)) this.setTables(ts);
     }
+    if (this.validations.length) {
+      const vs = this.validations.map((v) => ({ ...v, ranges: v.ranges.map(moveRange).filter((r): r is Range => !!r) })).filter((v) => v.ranges.length);
+      if (JSON.stringify(vs) !== JSON.stringify(this.validations)) this.setValidations(vs);
+    }
     // charts sit where their corner cell goes (at the edge of a deleted block when it goes)
     if (this.charts.length) {
       const cs = this.charts.map((c) => {
@@ -732,6 +933,38 @@ export class Sheet {
         return n === i ? c : { ...c, at: axis === 'row' ? { ...c.at, row: n } : { ...c.at, col: n } };
       });
       if (cs.some((c, i) => c !== this.charts[i])) this.setCharts(cs);
+    }
+    if (this.objects.length) {
+      const os = this.objects.map((o) => {
+        if (o.placement === 'absolute') return o;
+        const i = axis === 'row' ? o.at.row : o.at.col;
+        const n = i < at ? i : count > 0 ? i + count : i >= at - count ? i + count : at;
+        return n === i ? o : { ...o, at: axis === 'row' ? { ...o.at, row: n } : { ...o.at, col: n } };
+      });
+      if (os.some((o, i) => o !== this.objects[i])) this.setObjects(os);
+    }
+    if (this.dataTables.length) {
+      const ts = this.dataTables.map((t) => ({ ...t, ref: moveRange(t.ref)! })).filter((t) => t.ref);
+      if (JSON.stringify(ts) !== JSON.stringify(this.dataTables)) this.setDataTables(ts);
+    }
+    // a PivotTable's report sits where its corner cell goes (its source follows in rewriteAllFormulas)
+    if (this.pivots.length) {
+      const ps = this.pivots.map((p) => {
+        const i = axis === 'row' ? p.at.row : p.at.col;
+        const n = i < at ? i : count > 0 ? i + count : i >= at - count ? i + count : at;
+        const last = p.last ? moveRange(p.last) ?? undefined : undefined;
+        return n === i && last === p.last ? p : { ...p, at: axis === 'row' ? { ...p.at, row: n } : { ...p.at, col: n }, last };
+      });
+      if (ps.some((p, i) => p !== this.pivots[i])) this.setPivots(ps);
+    }
+    // sparklines sit where their cells go (and go with them when they are deleted)
+    if (this.sparklines.length) {
+      const sl = moveSparklines(this.sparklines, axis, at, count);
+      if (JSON.stringify(sl) !== JSON.stringify(this.sparklines)) this.setSparklines(sl);
+    }
+    if (this.pageSetup) {
+      const ps = shiftSetup(this.pageSetup, axis, at, count);
+      if (JSON.stringify(ps) !== JSON.stringify(this.pageSetup)) this.setPageSetup(Object.keys(ps).length ? ps : null);
     }
     if (this.filter) {
       const range = moveRange(this.filter.range);
@@ -766,13 +999,16 @@ export class Sheet {
   // ---------------------------------------------------------------- sorting and filtering
 
   /**
-   * Sort the rows of a block by some columns (the first key first). Empty cells go last either
-   * way, as in Excel. Structures sort by molecular weight. Formulas move with their rows.
+   * Sort the rows of a block by some columns (the first key first), or with `byColumns` its
+   * columns by some rows. Empty cells go last either way, as in Excel. Structures sort by
+   * molecular weight. Formulas move with their rows (or columns), and so do notes.
    */
-  sort(r: Range, keys: SortKey[]): void {
-    const rows: number[] = [];
-    for (let row = r.r1; row <= r.r2; row++) rows.push(row);
-    const keyValue = (row: number, col: number): Value => {
+  sort(r: Range, keys: SortKey[], opts: SortOptions = {}): void {
+    const across = !!opts.byColumns;
+    const lines: number[] = [];
+    for (let i = across ? r.c1 : r.r1; i <= (across ? r.c2 : r.r2); i++) lines.push(i);
+    const keyValue = (line: number, at: number): Value => {
+      const [row, col] = across ? [at, line] : [line, at];
       const c = this.cell(row, col);
       if (c?.structure) {
         const p = this.wb.chem?.structure(c.structure);
@@ -780,7 +1016,13 @@ export class Sheet {
       }
       return this.value(row, col);
     };
-    const keyed = rows.map((row) => ({ row, k: keys.map((key) => keyValue(row, key.col)) }));
+    const shown = (line: number, at: number): string => (across ? this.shownText(at, line) : this.shownText(line, at)).toLowerCase();
+    const keyed = lines.map((line) => ({
+      line,
+      k: keys.map((key) => keyValue(line, key.col)),
+      // where the value comes in a custom order (past the end when it isn't in it)
+      o: keys.map((key) => (key.custom ? orderIn(key.custom, shown(line, key.col)) : 0)),
+    }));
     keyed.sort((a, b) => {
       for (let i = 0; i < keys.length; i++) {
         const x = a.k[i], y = b.k[i];
@@ -788,26 +1030,35 @@ export class Sheet {
         if (ex || ey) { if (ex !== ey) return ex ? 1 : -1; continue; }
         const errx = isError(x), erry = isError(y);
         if (errx || erry) { if (errx !== erry) return errx ? 1 : -1; continue; }
-        const c = compareValues(x, y);
+        let c = keys[i].custom ? a.o[i] - b.o[i] : 0;
+        if (!c) c = compareValues(x, y);
+        // with Case Sensitive, equal text puts lowercase first (as Excel does)
+        if (!c && opts.caseSensitive && typeof x === 'string' && typeof y === 'string') c = caseOrder(x, y);
         if (c) return keys[i].descending ? -c : c;
       }
-      return a.row - b.row;
+      return a.line - b.line;
     });
-    if (keyed.every((x, i) => x.row === rows[i])) return;
-    const blocks = keyed.map(({ row }) => {
-      const line: (Cell | undefined)[] = [];
-      for (let col = r.c1; col <= r.c2; col++) line.push(this.cell(row, col));
-      return { row, line };
+    if (keyed.every((x, i) => x.line === lines[i])) return;
+    const width = across ? r.r2 - r.r1 + 1 : r.c2 - r.c1 + 1;
+    const at = (line: number, j: number): [number, number] => (across ? [r.r1 + j, line] : [line, r.c1 + j]);
+    const blocks = keyed.map(({ line }) => {
+      const cells: (Cell | undefined)[] = [];
+      const notes: (CellNote | undefined)[] = [];
+      for (let j = 0; j < width; j++) { const [row, col] = at(line, j); cells.push(this.cell(row, col)); notes.push(this.noteAt(row, col)); }
+      return { line, cells, notes };
     });
-    // rows hidden by a filter (or by hand) stay hidden as they move
-    const hidden = keyed.map(({ row }) => this.hiddenRows.has(row));
-    blocks.forEach(({ row: from, line }, i) => {
-      const to = r.r1 + i;
-      if (hidden[i] !== this.hiddenRows.has(to)) this.setRowHidden(to, hidden[i]);
-      line.forEach((c, j) => {
-        const col = r.c1 + j;
-        const input = c?.input?.startsWith('=') ? shiftFormula(c.input, to - from, 0) : c?.input;
-        this.setCell(to, col, c ? { ...c, input } : undefined);
+    // rows (or columns) hidden by a filter or by hand stay hidden as they move
+    const isHidden = (line: number) => (across ? this.hiddenCols.has(line) : this.hiddenRows.has(line));
+    const hidden = keyed.map(({ line }) => isHidden(line));
+    blocks.forEach(({ line: from, cells, notes }, i) => {
+      const to = lines[0] + i;
+      if (hidden[i] !== isHidden(to)) { if (across) this.setColHidden(to, hidden[i]); else this.setRowHidden(to, hidden[i]); }
+      cells.forEach((c, j) => {
+        const [row, col] = at(to, j);
+        const input = c?.input?.startsWith('=') ? shiftFormula(c.input, across ? 0 : to - from, across ? to - from : 0) : c?.input;
+        this.setCell(row, col, c ? { ...c, input } : undefined);
+        // notes move with their rows, as in Excel
+        this.setNote(row, col, notes[j]);
       });
     });
   }
@@ -896,20 +1147,57 @@ export class Sheet {
 const READER_COLS = 1 << 15;
 
 /** Changes that leave every value as it was. */
-const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'condFormats', 'tables', 'charts', 'dashboard']);
+const NO_VALUES = new Set<string>(['colWidths', 'rowHeights', 'colStyles', 'hiddenRows', 'hiddenCols', 'merges', 'filter', 'frozen', 'split', 'condFormats', 'tables', 'charts', 'dashboard', 'notes', 'validations', 'objects', 'pageSetup', 'pivots',
+  'rowLevels', 'colLevels', 'sparklines', 'viewOpts', 'outline', 'theme', 'customViews', 'queries', 'drawingStyle']);
 
 const isFormulaText = (t: string | undefined): boolean => !!t && t.startsWith('=') && t.length > 1;
+
+/** A formula using INDIRECT or OFFSET, whose cells can't be known from its text. */
+const VOLATILE = new RegExp(`\\b(?:${VOLATILE_FUNCTIONS.join('|')})\\s*\\(`, 'i');
+/** How many times formulas using INDIRECT or OFFSET are worked out again, to catch up with the cells they turned out to read. */
+const VOLATILE_PASSES = 4;
+
+const GONE = Symbol('gone');
+
+/** Keep what a map held before each change from now on; the function returned puts it all back. */
+function journal<V>(m: Map<number, V>): () => void {
+  const log = new Map<number, V | typeof GONE>();
+  const set = m.set, del = m.delete;
+  const note = (k: number) => { if (!log.has(k)) log.set(k, m.has(k) ? m.get(k)! : GONE); };
+  m.set = (k, v) => { note(k); return set.call(m, k, v); };
+  m.delete = (k) => { note(k); return del.call(m, k); };
+  return () => {
+    delete (m as { set?: unknown }).set;
+    delete (m as { delete?: unknown }).delete;
+    for (const [k, v] of log) if (v === GONE) m.delete(k); else m.set(k, v);
+  };
+}
+
+/** Where a formula's array spills ("" when it doesn't), to tell when that changes. */
+function spillState(s: Sheet, key: number): string {
+  const R = s.spills.get(key);
+  if (R) return `spills ${R.r2} ${R.c2}`;
+  const W = s.spillWanted.get(key);
+  return W ? `blocked ${W.r2} ${W.c2}` : '';
+}
+
+/** A formula to work out: a cell's own (which can spill an array), or a property column's in one of its rows. */
+interface FormulaNode { s: Sheet; key: number; text: string; def?: true }
 
 /** The formulas of a workbook and the order they are worked out in, as the last full recalculation found them. */
 interface Graph {
   sheets: Sheet[];
-  nodes: { s: Sheet; key: number; text: string }[];
+  nodes: FormulaNode[];
   /** For each formula, the formulas that read it. */
   dependents: number[][];
   /** For each sheet and column (sheet × READER_COLS + column): first row, last row and formula of each reference into it. */
   readers: Map<number, number[]>;
   /** Formulas in a loop, or reading one: they stay #CIRC! until the formulas change. */
   loop: boolean[];
+  /** The formulas in the order they were worked out (each after those it reads). */
+  order: number[];
+  /** Formulas using INDIRECT or OFFSET. */
+  volatile: number[];
   bounds: { lastRow: number; lastCol: number; lastData: number }[];
 }
 
@@ -920,6 +1208,19 @@ export class Workbook {
   /** How structures in cells are drawn: bond length, line widths, label size. */
   drawingStyle: DocStyle = { ...ACS_1996 };
   chem: ChemHost | null = null;
+  /** Names defined for cells, values and formulas (Formulas > Name Manager). */
+  names: DefinedName[] = [];
+  /**
+   * A macro-enabled workbook's (.xlsm) VBA project, kept byte for byte and saved back into .xlsm
+   * files. It is never run or changed here; null when the workbook has no macros.
+   */
+  macros: Macros | null = null;
+  /** Page Layout > Themes: the colours and fonts of the workbook (null: Excel's default theme). */
+  theme: WorkbookTheme | null = null;
+  /** View > Custom Views: named views of the workbook to go back to. */
+  customViews: CustomView[] = [];
+  /** Data > Get Data: the queries that read data from files and the web into tables, with their steps. */
+  queries: Query[] = [];
   /** Counts changes (edits, undos and redos), so the file knows when it has unsaved changes. */
   edits = 0;
   /** Called after every change, undo and redo. */
@@ -1040,8 +1341,17 @@ export class Workbook {
       this.active = Math.min(this.active, this.sheets.length - 1);
       return;
     }
+    if (c.field === 'names') {
+      this.names = (v as DefinedName[]).slice();
+      this.refsByText.clear();
+      return;
+    }
+    if (c.field === 'theme') { this.theme = v as WorkbookTheme | null; return; }
+    if (c.field === 'drawingStyle') { this.drawingStyle = v as DocStyle; return; }
+    if (c.field === 'customViews') { this.customViews = v as CustomView[]; return; }
+    if (c.field === 'queries') { this.queries = v as Query[]; return; }
     const s = c.sheet!;
-    if (c.field === 'merges' || c.field === 'filter' || c.field === 'frozen' || c.field === 'name' || c.field === 'condFormats' || c.field === 'tables' || c.field === 'charts' || c.field === 'dashboard') {
+    if (VALUE_FIELDS.has(c.field)) {
       (s as unknown as Record<string, unknown>)[c.field] = v;
       return;
     }
@@ -1055,6 +1365,57 @@ export class Workbook {
     const before = this.sheets;
     this.sheets = list.slice();
     this.record({ sheet: null, field: 'sheets', key: 0, before, after: this.sheets });
+  }
+
+  /** Change the defined names, as one recorded change. */
+  setNames(list: DefinedName[]): void {
+    const before = this.names;
+    this.names = list.slice();
+    this.refsByText.clear();
+    this.record({ sheet: null, field: 'names', key: 0, before, after: this.names });
+  }
+
+  /** Change the workbook's theme, as one recorded change. */
+  setTheme(t: WorkbookTheme | null): void {
+    const before = this.theme;
+    if (before === t) return;
+    this.theme = t;
+    this.record({ sheet: null, field: 'theme', key: 0, before, after: t });
+  }
+
+  /**
+   * File > Drawing Style: draw structures in `next`, every structure cell redrawn by `restyle`
+   * (from the old style to the new), as one step Undo takes back.
+   */
+  setDrawingStyle(next: DocStyle, restyle: (c: Contents, old: DocStyle) => Contents): void {
+    const old = this.drawingStyle;
+    this.edit(`Drawing style: ${next.name}`, () => {
+      for (const sh of this.sheets) {
+        for (const [k, c] of [...sh.cells]) {
+          if (c.structure) sh.setCell(rowOf(k), colOf(k), { ...c, structure: makeStructure(restyle(c.structure.contents, old)) });
+        }
+      }
+      this.drawingStyle = { ...next };
+      this.record({ sheet: null, field: 'drawingStyle', key: 0, before: old, after: this.drawingStyle });
+    });
+  }
+
+  setCustomViews(list: CustomView[]): void {
+    const before = this.customViews;
+    this.customViews = list.slice();
+    this.record({ sheet: null, field: 'customViews', key: 0, before, after: this.customViews });
+  }
+
+  /** Change the queries (Data > Get Data), as one recorded change. */
+  setQueries(list: Query[]): void {
+    const before = this.queries;
+    this.queries = list.slice();
+    this.record({ sheet: null, field: 'queries', key: 0, before, after: this.queries });
+  }
+
+  /** The names that apply (a deleted sheet's own names are gone with it). */
+  liveNames(): DefinedName[] {
+    return this.names.filter((n) => !n.sheet || this.sheets.includes(n.sheet));
   }
 
   addSheet(name = this.newSheetName(), at = this.sheets.length): Sheet {
@@ -1110,6 +1471,43 @@ export class Workbook {
         const d = mapDashboardRefs(s.dashboard, (f) => fn(f, s.name));
         if (JSON.stringify(d) !== JSON.stringify(s.dashboard)) s.setDashboard(d);
       }
+      if (s.sparklines.length) {
+        const sl = s.sparklines.map((g) => {
+          const items = g.items.map((it) => { const d = fn('=' + it.data, s.name).slice(1); return d === it.data ? it : { ...it, data: d }; });
+          return items.some((it, i) => it !== g.items[i]) ? { ...g, items } : g;
+        });
+        if (sl.some((g, i) => g !== s.sparklines[i])) s.setSparklines(sl);
+      }
+      // data tables' input cells, and the cells PivotTables report on
+      if (s.dataTables.length) {
+        const f = (t: string | undefined) => (t ? fn(t, s.name) : t);
+        const ts = s.dataTables.map((t) => {
+          const rowInput = f(t.rowInput), colInput = f(t.colInput);
+          return rowInput === t.rowInput && colInput === t.colInput ? t : { ...t, rowInput, colInput };
+        });
+        if (ts.some((t, i) => t !== s.dataTables[i])) s.setDataTables(ts);
+      }
+      if (s.pivots.length) {
+        const ps = s.pivots.map((p) => { const source = fn(p.source, s.name); return source === p.source ? p : { ...p, source }; });
+        if (ps.some((p, i) => p !== s.pivots[i])) s.setPivots(ps);
+      }
+      // data validation limits and lists that are formulas or references
+      if (s.validations.some((v) => v.value1?.startsWith('=') || v.value2?.startsWith('='))) {
+        const f = (t: string | undefined) => (t?.startsWith('=') && t.length > 1 ? fn(t, s.name) : t);
+        const vs = s.validations.map((v) => {
+          const value1 = f(v.value1), value2 = f(v.value2);
+          return value1 === v.value1 && value2 === v.value2 ? v : { ...v, value1, value2 };
+        });
+        if (vs.some((v, i) => v !== s.validations[i])) s.setValidations(vs);
+      }
+    }
+    // defined names (theirs is the sheet they belong to, or the first)
+    if (this.names.length) {
+      const next = this.names.map((n) => {
+        const f = fn(n.formula, (n.sheet ?? this.sheets[0]).name);
+        return f === n.formula ? n : { ...n, formula: f };
+      });
+      if (next.some((n, i) => n !== this.names[i])) this.setNames(next);
     }
   }
 
@@ -1152,13 +1550,55 @@ export class Workbook {
     return isError(p) ? p : p.smiles;
   }
 
-  /** Work out every cell of every sheet. */
+  /**
+   * Work out every cell of every sheet. Formulas reading cells an array spills into are worked
+   * out after it, by where the arrays spilled last time; when an array's size changes, once more.
+   */
   recalc(): void {
+    for (let pass = 0; pass < 3; pass++) {
+      const before = this.spillSignature();
+      this.recalcOnce();
+      if (this.spillSignature() === before) break;
+    }
+    this.workOutDataTables();
+  }
+
+  /** Where every array spills (and where those that can't would), to tell when that changed. */
+  private spillSignature(): string {
+    return this.sheets.map((s) => [...s.spills, ...[...s.spillWanted].map(([k, r]) => [-k - 1, r] as const)]
+      .map(([k, r]) => `${k}:${r.r2}:${r.c2}`).join(',')).join('|');
+  }
+
+  /** The references a formula reads, with those of the defined names it uses. */
+  private refsIn(text: string): RefToken[] {
+    let refs = this.refsByText.get(text);
+    if (refs) return refs;
+    refs = formulaRefs(text);
+    if (this.names.length) {
+      let toks: Token[];
+      try { toks = tokenize(text.startsWith('=') ? text.slice(1) : text); } catch { toks = []; }
+      const seen = new Set<string>();
+      for (const t of toks) {
+        if (t.t !== 'name' && t.t !== 'fn') continue;
+        const low = t.v.toLowerCase();
+        if (seen.has(low)) continue;
+        seen.add(low);
+        for (const n of this.names) if (n.name.toLowerCase() === low && n.formula !== text) refs = [...refs, ...this.refsIn(n.formula)];
+      }
+    }
+    if (this.refsByText.size > 500000) this.refsByText.clear();
+    this.refsByText.set(text, refs);
+    return refs;
+  }
+
+  private recalcOnce(): void {
     this.identityCache.clear();
     this.graph = null;
     const sheetIndex = new Map(this.sheets.map((s, i) => [s, i] as const));
+    // where arrays spilled last time
+    const lastSpills = new Map<Sheet, Map<number, Range>>();
     // 1. what each cell holds; formulas (own and property columns) found
-    const nodes: { s: Sheet; key: number; text: string }[] = [];
+    const nodes: FormulaNode[] = [];
     const byId = new Map<number, number>(); // global id → index in nodes
     const gid = (si: number, key: number) => si * 2 ** 35 + key;
     for (const s of this.sheets) {
@@ -1166,6 +1606,10 @@ export class Workbook {
       s.values = new Map();
       s.valuesGen++;
       s.formulas = new Map();
+      lastSpills.set(s, s.spills);
+      s.spills = new Map();
+      s.spillOwner = new Map();
+      s.spillWanted = new Map();
       let lastRow = -1, lastCol = -1, lastData = -1;
       for (const [k, c] of s.cells) {
         const r = rowOf(k), col = colOf(k);
@@ -1201,7 +1645,7 @@ export class Workbook {
           }
           s.formulas.set(k, text);
           byId.set(gid(si, k), nodes.length);
-          nodes.push({ s, key: k, text });
+          nodes.push({ s, key: k, text, def: true });
         }
       }
     }
@@ -1222,20 +1666,27 @@ export class Workbook {
     const readers = new Map<number, number[]>();
     nodes.forEach((n, i) => {
       const seen = new Set<number>();
-      let refs = this.refsByText.get(n.text);
-      if (!refs) {
-        refs = formulaRefs(n.text);
-        if (this.refsByText.size > 500000) this.refsByText.clear();
-        this.refsByText.set(n.text, refs);
-      }
+      const refs = this.refsIn(n.text);
       for (const ref of refs) {
         if (ref.broken) continue;
         const s = ref.sheet !== undefined ? this.sheetNamed(ref.sheet) : n.s;
         if (!s) continue;
         const si = sheetIndex.get(s)!;
         const b = ref.b ?? ref.a;
-        const r1 = Math.min(ref.a.row, b.row), r2 = Math.max(ref.a.row, b.row);
-        const c1 = Math.min(ref.a.col, b.col), c2 = Math.max(ref.a.col, b.col);
+        let r1 = Math.min(ref.a.row, b.row), r2 = Math.max(ref.a.row, b.row);
+        let c1 = Math.min(ref.a.col, b.col), c2 = Math.max(ref.a.col, b.col);
+        // A1#: the cells A1's array spilled into last time
+        const sp = ref.spill ? lastSpills.get(s)?.get(keyOf(ref.a.row, ref.a.col)) : undefined;
+        if (sp) { r2 = sp.r2; c2 = sp.c2; }
+        // cells filled by an array are read after its formula
+        for (const [anchor, R] of lastSpills.get(s) ?? []) {
+          if (R.r1 > r2 || R.r2 < r1 || R.c1 > c2 || R.c2 < c1) continue;
+          const dep = byId.get(gid(si, anchor));
+          if (dep === undefined || dep === i || seen.has(dep)) continue;
+          seen.add(dep);
+          dependents[dep].push(i);
+          indeg[i]++;
+        }
         for (let col = c1; col <= Math.min(c2, s.lastCol); col++) {
           const k = si * READER_COLS + col;
           let list = readers.get(k);
@@ -1272,10 +1723,45 @@ export class Workbook {
     if (queue.length < nodes.length) {
       for (let i = 0; i < nodes.length; i++) if (!done[i]) nodes[i].s.values.set(nodes[i].key, ERR.circ());
     }
+    const volatile: number[] = [];
+    nodes.forEach((n, i) => { if (done[i] && (VOLATILE.test(n.text) || this.usesVolatileName(n.text))) volatile.push(i); });
     this.graph = {
-      sheets: [...this.sheets], nodes, dependents, readers, loop: done.map((x) => !x),
+      sheets: [...this.sheets], nodes, dependents, readers, loop: done.map((x) => !x), order: queue, volatile,
       bounds: this.sheets.map((s) => ({ lastRow: s.lastRow, lastCol: s.lastCol, lastData: s.lastDataRow })),
     };
+    this.settleVolatile(this.graph);
+  }
+
+  /**
+   * INDIRECT and OFFSET read cells their formula's text doesn't name, so they may have been
+   * worked out before those cells were. Work them out again, with the formulas that read them, in
+   * the same order, until nothing changes.
+   */
+  private settleVolatile(g: Graph): void {
+    if (!g.volatile.length) return;
+    const pos = new Map<number, number>();
+    g.order.forEach((i, k) => pos.set(i, k));
+    const todo = new Set<number>();
+    const stack = [...g.volatile];
+    while (stack.length) {
+      const i = stack.pop()!;
+      if (todo.has(i) || g.loop[i]) continue;
+      todo.add(i);
+      for (const j of g.dependents[i]) if (!todo.has(j)) stack.push(j);
+    }
+    const list = [...todo].sort((a, b) => pos.get(a)! - pos.get(b)!);
+    for (let pass = 0; pass < VOLATILE_PASSES; pass++) {
+      let changed = false;
+      for (const i of list) {
+        const n = g.nodes[i];
+        const before = n.s.values.get(n.key);
+        this.evaluateNode(n);
+        const after = n.s.values.get(n.key);
+        if (!(before === after || (isError(before) && isError(after) && before.code === after.code))) changed = true;
+      }
+      if (!changed) break;
+    }
+    for (const i of list) g.nodes[i].s.valuesGen++;
   }
 
   /**
@@ -1284,8 +1770,15 @@ export class Workbook {
    * formulas that read them, and those that read those, are worked out again; anything else
    * works out the whole workbook, as recalc does.
    */
+  /** Does any formula use SUBTOTAL or AGGREGATE (which leave out hidden rows)? */
+  private usesSubtotal(): boolean {
+    for (const s of this.sheets) for (const f of s.formulas.values()) if (/\b(SUBTOTAL|AGGREGATE)\s*\(/i.test(f)) return true;
+    return false;
+  }
+
   private recalcAfter(changes: Change[], now: 'before' | 'after' = 'after'): void {
     if (!this.recalcChanged(changes, now)) this.recalc();
+    else if (changes.some((c) => c.field === 'cells')) this.workOutDataTables();
   }
 
   /** `now`: which side of each change is in place (undo puts back 'before'). */
@@ -1293,18 +1786,23 @@ export class Workbook {
     const g = this.graph;
     if (!g || g.sheets.length !== this.sheets.length || g.sheets.some((s, i) => s !== this.sheets[i])) return false;
     const typed: { s: Sheet; si: number; key: number; cell: Cell | undefined }[] = [];
+    this.spillsMoved = false;
     for (const c of changes) {
       if (c.field !== 'cells') {
-        // formatting, sizes, hidden rows, rules and charts change no value
-        if (c.sheet && NO_VALUES.has(c.field)) continue;
+        // formatting, sizes, hidden rows, rules and charts change no value (but SUBTOTAL leaves out hidden rows)
+        if (c.field === 'hiddenRows' && this.usesSubtotal()) return false;
+        if ((c.sheet || c.field === 'theme' || c.field === 'customViews' || c.field === 'queries') && NO_VALUES.has(c.field)) continue;
         return false;
       }
       const before = c[now === 'after' ? 'before' : 'after'] as Cell | undefined, after = c[now] as Cell | undefined;
-      if (before?.input === after?.input && before?.structure === after?.structure) continue;
+      if (before?.input === after?.input && before?.structure === after?.structure && before?.compound === after?.compound) continue;
+      if (before?.compound !== after?.compound) return false;
       if (before?.structure || after?.structure || isFormulaText(before?.input) || isFormulaText(after?.input)) return false;
       const s = c.sheet!, si = this.sheets.indexOf(s);
       if (si < 0) return false;
       const r = rowOf(c.key), col = colOf(c.key), b = g.bounds[si];
+      // typing where an array spills (or would) changes where it can
+      if (s.spillOwner.has(c.key) || [...s.spillWanted.values()].some((R) => inRange(R, r, col))) return false;
       // a value typed into a property column takes the place of its formula
       const def = s.colDefs.get(col);
       if (def && r >= def.firstRow) return false;
@@ -1321,6 +1819,8 @@ export class Workbook {
       const r = rowOf(t.key);
       for (let j = 0; j < list.length; j += 3) if (list[j] <= r && r <= list[j + 1]) start.add(list[j + 2]);
     }
+    // formulas using INDIRECT or OFFSET might read any cell
+    for (const i of g.volatile) start.add(i);
     // and those that read those, and so on
     const todo = new Set<number>();
     const stack = [...start];
@@ -1351,7 +1851,141 @@ export class Workbook {
     if (worked < todo.size) for (const i of todo) if (indeg.get(i)) g.nodes[i].s.values.set(g.nodes[i].key, ERR.circ());
     for (const s of new Set(typed.map((t) => t.s))) s.valuesGen++;
     for (const i of todo) g.nodes[i].s.valuesGen++;
-    return true;
+    this.settleVolatile(g);
+    // an array now a different size: what reads the cells around it needs the full order again
+    return !this.spillsMoved;
+  }
+
+  // ---------------------------------------------------------------- trying values (What-If Analysis)
+
+  /**
+   * What cells would show if some cells held other values, without changing anything: the values
+   * are put in for the moment, the formulas that read them (and those that read those) worked
+   * out again, `read` called, and every value put back as it was. Goal Seek, data tables and
+   * Solver try values this way. Nothing is recorded and nothing is unsaved.
+   */
+  whatIf<T>(inputs: { s: Sheet; key: number; value: Value }[], read: () => T): T {
+    const g0 = this.graph;
+    if (!g0 || g0.sheets.length !== this.sheets.length || g0.sheets.some((s, i) => s !== this.sheets[i])) this.recalc();
+    const g = this.graph!;
+    const plan = this.trialPlan(g, inputs);
+    const sheets = new Set<Sheet>(inputs.map((i) => i.s));
+    for (const i of plan) sheets.add(g.nodes[i].s);
+    const undo: (() => void)[] = [];
+    const moved = this.spillsMoved;
+    for (const s of sheets) {
+      undo.push(journal(s.values));
+      const spills = new Map(s.spills), owner = new Map(s.spillOwner), wanted = new Map(s.spillWanted);
+      undo.push(() => { s.spills = spills; s.spillOwner = owner; s.spillWanted = wanted; });
+    }
+    this.identityCache.clear();
+    try {
+      for (const i of inputs) {
+        if (i.value === null) i.s.values.delete(i.key);
+        else i.s.values.set(i.key, i.value);
+      }
+      for (const i of plan) this.evaluateNode(g.nodes[i]);
+      return read();
+    } finally {
+      for (let i = undo.length - 1; i >= 0; i--) undo[i]();
+      this.spillsMoved = moved;
+      this.identityCache.clear();
+    }
+  }
+
+  /** The formulas to work out again, in order, when values are tried in some cells. */
+  private trialPlan(g: Graph, inputs: { s: Sheet; key: number }[]): number[] {
+    const id = inputs.map((i) => `${g.sheets.indexOf(i.s)}:${i.key}`).join(',');
+    let plans = this.plans.get(g);
+    if (!plans) this.plans.set(g, (plans = new Map()));
+    const had = plans.get(id);
+    if (had) return had;
+    const start = new Set<number>(g.volatile);
+    let all = false;
+    for (const inp of inputs) {
+      const si = g.sheets.indexOf(inp.s);
+      const col = colOf(inp.key), r = rowOf(inp.key);
+      // the index of readers covers the columns in use; anything further out could be read by any formula
+      if (si < 0 || col > g.bounds[si].lastCol) { all = true; break; }
+      const list = g.readers.get(si * READER_COLS + col);
+      if (list) for (let j = 0; j < list.length; j += 3) if (list[j] <= r && r <= list[j + 1]) start.add(list[j + 2]);
+    }
+    const inputKeys = new Set(inputs.map((i) => `${i.s.uid}|${i.key}`));
+    const todo = new Set<number>();
+    if (all) g.order.forEach((i) => todo.add(i));
+    const stack = [...start];
+    while (stack.length) {
+      const i = stack.pop()!;
+      if (todo.has(i) || g.loop[i]) continue;
+      todo.add(i);
+      for (const j of g.dependents[i]) if (!todo.has(j)) stack.push(j);
+    }
+    // the cells being tried keep the values put in them, even when they hold formulas
+    const plan = g.order.filter((i) => todo.has(i) && !inputKeys.has(`${g.nodes[i].s.uid}|${g.nodes[i].key}`));
+    if (plans.size > 200) plans.clear();
+    plans.set(id, plan);
+    return plan;
+  }
+
+  private plans = new WeakMap<Graph, Map<string, number[]>>();
+
+  /**
+   * Fill every data table's results: for each result cell, its input values tried in the input
+   * cells and its formula's answer read. Then the formulas that read the results are worked out
+   * again.
+   */
+  private workOutDataTables(): void {
+    if (!this.sheets.some((s) => s.dataTables.length)) return;
+    const results: { s: Sheet; key: number; v: Value }[] = [];
+    for (const s of this.sheets) {
+      for (const t of s.dataTables) {
+        const input = (ref: string | undefined) => {
+          if (!ref) return null;
+          const R = parseRange(ref.replace(/^=/, '').replace(/\$/g, '').toUpperCase());
+          return R && R.r1 === R.r2 && R.c1 === R.c2 ? keyOf(R.r1, R.c1) : -1;
+        };
+        const rowIn = input(t.rowInput), colIn = input(t.colInput);
+        const R = t.ref;
+        for (let r = R.r1; r <= R.r2; r++) for (let c = R.c1; c <= R.c2; c++) {
+          const key = keyOf(r, c);
+          if (s.cells.get(key)?.input) continue;
+          if (rowIn === -1 || colIn === -1 || (rowIn === null && colIn === null)) { results.push({ s, key, v: ERR.ref('The data table\'s input cell is missing') }); continue; }
+          const dc = dataTableCell(t, r, c);
+          const fk = keyOf(dc.formula.row, dc.formula.col);
+          const inputs: { s: Sheet; key: number; value: Value }[] = [];
+          if (rowIn !== null && dc.rowValue) inputs.push({ s, key: rowIn, value: s.values.get(keyOf(dc.rowValue.row, dc.rowValue.col)) ?? null });
+          if (colIn !== null && dc.colValue) inputs.push({ s, key: colIn, value: s.values.get(keyOf(dc.colValue.row, dc.colValue.col)) ?? null });
+          results.push({ s, key, v: this.whatIf(inputs, () => s.values.get(fk) ?? 0) });
+        }
+      }
+    }
+    for (const x of results) x.s.values.set(x.key, x.v);
+    this.workOutReaders(results);
+    for (const s of new Set(results.map((x) => x.s))) s.valuesGen++;
+  }
+
+  /** Work out again the formulas that read some cells whose values changed (and those that read those). */
+  private workOutReaders(cells: { s: Sheet; key: number }[]): void {
+    const g = this.graph;
+    if (!g || !cells.length) return;
+    const start = new Set<number>();
+    for (const t of cells) {
+      const si = g.sheets.indexOf(t.s);
+      const list = si < 0 ? undefined : g.readers.get(si * READER_COLS + colOf(t.key));
+      if (!list) continue;
+      const r = rowOf(t.key);
+      for (let j = 0; j < list.length; j += 3) if (list[j] <= r && r <= list[j + 1]) start.add(list[j + 2]);
+    }
+    if (!start.size) return;
+    const todo = new Set<number>();
+    const stack = [...start];
+    while (stack.length) {
+      const i = stack.pop()!;
+      if (todo.has(i) || g.loop[i]) continue;
+      todo.add(i);
+      for (const j of g.dependents[i]) if (!todo.has(j)) stack.push(j);
+    }
+    for (const i of g.order) if (todo.has(i)) { this.evaluateNode(g.nodes[i]); g.nodes[i].s.valuesGen++; }
   }
 
   /** A formula written for cell `home`, worked out as if moved to (row, col) of a sheet (conditional formatting's formula rules). */
@@ -1359,25 +1993,130 @@ export class Workbook {
     // read once, then moved as a tree for each cell
     const tree = this.parse(formula.startsWith('=') ? formula : '=' + formula);
     try {
-      return tree instanceof CellError ? tree : evaluate(shiftTree(tree, row - home.row, col - home.col), this.hostFor(s));
+      const host = this.hostFor(s);
+      host.home = { row, col };
+      return tree instanceof CellError ? tree : evaluate(shiftTree(tree, row - home.row, col - home.col), host);
     } catch (e) {
       return ERR.value(`This formula could not be worked out (${(e as Error).message})`);
     }
   }
 
-  private evaluateNode(n: { s: Sheet; key: number; text: string }): void {
-    const tree = this.parse(n.text);
-    let v: Value | CellError;
+  /** A formula worked out in a cell of a sheet with arrays and blocks kept whole (the Function Arguments and Name Manager previews). */
+  formulaArg(s: Sheet, formula: string, row: number, col: number): Arg {
+    const tree = this.parse(formula.startsWith('=') ? formula : '=' + formula);
+    if (tree instanceof CellError) return tree;
     try {
-      v = tree instanceof CellError ? tree : evaluate(tree, this.hostFor(n.s));
+      const host = this.hostFor(s);
+      host.home = { row, col };
+      return evaluateArg(tree, host);
+    } catch (e) {
+      return ERR.value(`This formula could not be worked out (${(e as Error).message})`);
+    }
+  }
+
+  /** What data validation needs to work out its limits and lists on a sheet. */
+  validationHost(s: Sheet): ValidationHost {
+    return {
+      formulaAt: (f, home, row, col) => this.formulaAt(s, f, home, row, col),
+      sheetNamed: (name) => this.sheetNamed(name),
+    };
+  }
+
+  /** Set when working out a formula moved where its array spills. */
+  private spillsMoved = false;
+
+  private evaluateNode(n: FormulaNode): void {
+    const tree = this.parse(n.text);
+    const s = n.s;
+    const host = this.hostFor(s);
+    host.home = { row: rowOf(n.key), col: colOf(n.key) };
+    let v: Value | CellError;
+    const had = spillState(s, n.key);
+    if (had) this.unspill(s, n.key);
+    try {
+      if (tree instanceof CellError) v = tree;
+      else if (n.def) v = evaluate(tree, host);
+      else {
+        const a = evaluateArg(tree, host);
+        v = isMulti(a) ? this.spill(s, n.key, a) : tidyValue(isBlock(a) ? rowsOf(a)[0][0] : a);
+      }
     } catch (e) {
       // one formula that fails outright shows an error in its cell rather than stopping every other
       v = ERR.value(`This formula could not be worked out (${(e as Error).message})`);
     }
-    n.s.values.set(n.key, v === null ? 0 : v);
+    if (spillState(s, n.key) !== had) this.spillsMoved = true;
+    s.values.set(n.key, v === null ? 0 : v);
+  }
+
+  /** Take an array's values out of the cells it spilled into. */
+  private unspill(s: Sheet, key: number): void {
+    const R = s.spills.get(key);
+    if (R) {
+      for (let r = R.r1; r <= R.r2; r++) for (let c = R.c1; c <= R.c2; c++) {
+        const k = keyOf(r, c);
+        if (k === key || s.spillOwner.get(k) !== key) continue;
+        s.spillOwner.delete(k);
+        s.values.delete(k);
+      }
+    }
+    s.spills.delete(key);
+    s.spillWanted.delete(key);
+  }
+
+  /**
+   * Spill an array from a formula's cell into the cells below and to the right, as Excel does:
+   * the formula's cell shows the first value. When anything is in the way (a typed value, another
+   * formula, a merged block, another array) or the array runs off the sheet, the cell shows #SPILL!.
+   */
+  private spill(s: Sheet, key: number, a: Arg): Value {
+    const rows = rowsOf(a);
+    const h = rows.length, w = rows[0]?.length ?? 0;
+    const r0 = rowOf(key), c0 = colOf(key);
+    const R: Range = { r1: r0, c1: c0, r2: Math.min(r0 + h - 1, MAX_ROWS - 1), c2: Math.min(c0 + w - 1, MAX_COLS - 1) };
+    if (r0 + h > MAX_ROWS || c0 + w > MAX_COLS) {
+      s.spillWanted.set(key, R);
+      return ERR.spill('The array runs off the edge of the sheet');
+    }
+    const inTheWay = (k: number): boolean => {
+      if (k === key) return false;
+      const c = s.cells.get(k);
+      return !!(c?.input || c?.structure) || s.formulas.has(k) || s.spillOwner.has(k);
+    };
+    let blocked = s.merges.some((m) => rangesOverlap(m, R));
+    if (!blocked) {
+      if (h * w > s.cells.size + s.spillOwner.size + s.formulas.size) {
+        for (const k of [...s.cells.keys(), ...s.formulas.keys(), ...s.spillOwner.keys()]) if (inRange(R, rowOf(k), colOf(k)) && inTheWay(k)) { blocked = true; break; }
+      } else {
+        for (let r = R.r1; r <= R.r2 && !blocked; r++) for (let c = R.c1; c <= R.c2; c++) if (inTheWay(keyOf(r, c))) { blocked = true; break; }
+      }
+    }
+    if (blocked) {
+      s.spillWanted.set(key, R);
+      return ERR.spill(`The array needs ${rangeName(R)} (${h} × ${w}), and something is in the way`);
+    }
+    // empty cells come out as 0, as Excel spills them
+    const cell = (v: Value): Value => { const t = tidyValue(v); return t === null ? 0 : t; };
+    for (let i = 0; i < h; i++) for (let j = 0; j < w; j++) {
+      if (!i && !j) continue;
+      const k = keyOf(r0 + i, c0 + j);
+      s.values.set(k, cell(rows[i][j]));
+      s.spillOwner.set(k, key);
+    }
+    s.spills.set(key, R);
+    s.lastRow = Math.max(s.lastRow, R.r2);
+    s.lastCol = Math.max(s.lastCol, R.c2);
+    return cell(rows[0][0]);
+  }
+
+  /** Does a formula use a defined name whose formula is worked out again after every change (TODAY, INDIRECT…)? */
+  private usesVolatileName(text: string): boolean {
+    for (const n of this.names) if (VOLATILE.test(n.formula) && new RegExp(`\\b${n.name.replace(/\./g, '\\.')}\\b`, 'i').test(text)) return true;
+    return false;
   }
 
   private hosts = new WeakMap<Sheet, EvalHost>();
+  /** Names being worked out (a name that uses itself is an error, not a hang). */
+  private namesBusy = new Set<DefinedName>();
   /** Which molecule each cell of a block holds, kept while the sheets are worked out (DUPLICATE asks once per row). */
   private identityCache = new Map<string, (string | CellError | null)[][]>();
 
@@ -1400,6 +2139,45 @@ export class Workbook {
         return out.length ? out : [[null]];
       },
       hasSheet: (name) => !!this.sheetNamed(name),
+      subtotalSkip: (sheet, row, col, hidden) => {
+        const s = sheetOf(sheet);
+        if (!s) return false;
+        if (s.hiddenRows.has(row)) {
+          if (hidden) return true;
+          const fr = s.filter && Object.keys(s.filter.conditions).length ? s.filterRows() : null;
+          if (fr && row >= fr.r1 && row <= fr.r2) return true;
+        }
+        const f = s.formulas.get(keyOf(row, col));
+        return !!f && /^=\s*(SUBTOTAL|AGGREGATE)\s*\(/i.test(f);
+      },
+      name: (nm) => {
+        const d = resolveName(this.liveNames(), nm, home);
+        if (!d) return undefined;
+        if (this.namesBusy.has(d)) return ERR.ref(`The name ${d.name} refers to itself`);
+        const tree = this.parse(d.formula.startsWith('=') ? d.formula : '=' + d.formula);
+        if (tree instanceof CellError) return tree;
+        this.namesBusy.add(d);
+        try {
+          return evaluateArg(tree, h!);
+        } finally {
+          this.namesBusy.delete(d);
+        }
+      },
+      nameRef: (nm) => {
+        const d = resolveName(this.liveNames(), nm, home);
+        const tree = d ? this.parse(d.formula.startsWith('=') ? d.formula : '=' + d.formula) : null;
+        return tree && !(tree instanceof CellError) && tree.t === 'ref' ? tree.v : undefined;
+      },
+      spill: (sheet, row, col) => {
+        const s = sheetOf(sheet);
+        if (!s) return ERR.ref();
+        return s.spills.get(keyOf(row, col)) ?? ERR.ref(`${cellName(row, col)} has no array spilling from it`);
+      },
+      field: (sheet, row, col, name) => {
+        const card = sheetOf(sheet)?.cell(row, col)?.compound;
+        if (!card) return undefined;
+        return fieldValue(card, name) ?? null;
+      },
       molecule: (src) => {
         if (!this.chem) return ERR.busy();
         if ('smiles' in src) return src.smiles.trim() ? this.chem.smiles(src.smiles.trim()) : null;
@@ -1489,4 +2267,20 @@ export function growToMerges(sheet: Sheet, r: Range): Range {
     }
   }
   return out;
+}
+
+/** Where a text comes in a custom sort order (ignoring capitals), or past the end. */
+function orderIn(list: string[], text: string): number {
+  const i = list.findIndex((x) => x.trim().toLowerCase() === text.trim());
+  return i < 0 ? list.length : i;
+}
+
+/** Two texts equal but for capitals: the one with a lowercase letter first, at the first place they differ, comes first. */
+function caseOrder(a: string, b: string): number {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] === b[i]) continue;
+    const la = a[i] === a[i].toLowerCase(), lb = b[i] === b[i].toLowerCase();
+    if (la !== lb) return la ? -1 : 1;
+  }
+  return 0;
 }

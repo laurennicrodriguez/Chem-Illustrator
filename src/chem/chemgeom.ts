@@ -3,6 +3,7 @@
 // the same spot. All positions are in points with y running down.
 
 import { Doc, Atom, Bond, BondDisplay } from '../model';
+import { ringsThroughBond } from './aromatic';
 import { Vec, add, sub, mul, norm, perp, dot, angleOf, fromAngle, dist, normAngle, DEG } from '../geom';
 
 /** New atoms closer than this fraction of a bond length to an existing atom join it. */
@@ -49,8 +50,16 @@ export function sproutDir(doc: Doc, atomId: number): Vec {
     const n = nb[0];
     const back = angleOf(sub(n, a));
     const cands = [fromAngle(back + 120 * DEG), fromAngle(back - 120 * DEG)];
-    // Zig-zag: the new bond runs parallel to the bond before the neighbour (trans).
-    const prev = doc.neighbors(n.id).filter((x) => x.id !== a.id);
+    // Zig-zag: the new bond runs parallel to the bond before the neighbour (trans). A C=O or
+    // =CH2 on the neighbour, or a wedged methyl, is not part of the chain, so it doesn't steer
+    // (acetyl, then 1, carries on; so does the chain past an alanine's methyl)
+    const all = doc.neighbors(n.id).filter((x) => x.id !== a.id);
+    const chainLike = all.filter((pp) => {
+      if (doc.degree(pp.id) > 1) return true;
+      const b = doc.bondBetween(n.id, pp.id);
+      return !b || b.order < 2 && b.display !== 'wedge' && b.display !== 'hashWedge';
+    });
+    const prev = chainLike.length ? chainLike : all;
     const score = (d: Vec) => {
       let s = -3 * crowding(doc, add(a, mul(d, L)), L, ignore);
       for (const pp of prev) s += dot(d, norm(sub(n, pp)));
@@ -59,19 +68,41 @@ export function sproutDir(doc: Doc, atomId: number): Vec {
     };
     return score(cands[0]) >= score(cands[1]) ? cands[0] : cands[1];
   }
-  // Widest angular gap between existing bonds.
-  const angs = nb.map((n) => normAngle(angleOf(sub(n, a)))).sort((x, y) => x - y);
+  // Widest angular gap between existing bonds, never one inside a ring the atom is in (the
+  // angular methyl of a decalin or steroid goes outside, though all three gaps are equal)
+  const byAngle = nb.map((n) => ({ id: n.id, ang: normAngle(angleOf(sub(n, a))) })).sort((x, y) => x.ang - y.ang);
+  const inRing = ringGaps(doc, atomId);
   let best = -1, bestGap = -1, bestMid = 0;
-  for (let i = 0; i < angs.length; i++) {
-    const a0 = angs[i];
-    const a1 = i + 1 < angs.length ? angs[i + 1] : angs[0] + 2 * Math.PI;
-    const gap = a1 - a0;
-    const mid = a0 + gap / 2;
-    // Prefer the emptier side when two gaps are nearly equal (e.g. a straight chain).
-    const tieBreak = -0.05 * crowding(doc, add(a, fromAngle(mid, L)), L, ignore);
-    if (gap + tieBreak > bestGap + 1e-6) { bestGap = gap + tieBreak; best = i; bestMid = mid; }
+  for (const skipRings of [true, false]) {
+    for (let i = 0; i < byAngle.length; i++) {
+      const next = byAngle[(i + 1) % byAngle.length];
+      if (skipRings && inRing.has(gapKey(byAngle[i].id, next.id))) continue;
+      const a0 = byAngle[i].ang;
+      const a1 = i + 1 < byAngle.length ? next.ang : byAngle[0].ang + 2 * Math.PI;
+      const gap = a1 - a0;
+      const mid = a0 + gap / 2;
+      // Prefer the emptier side when two gaps are nearly equal (e.g. a straight chain).
+      const tieBreak = -0.05 * crowding(doc, add(a, fromAngle(mid, L)), L, ignore);
+      if (gap + tieBreak > bestGap + 1e-6) { bestGap = gap + tieBreak; best = i; bestMid = mid; }
+    }
+    if (best >= 0) break;
   }
   return best >= 0 ? fromAngle(bestMid) : fromAngle(-30 * DEG);
+}
+
+const gapKey = (p: number, q: number) => (p < q ? `${p},${q}` : `${q},${p}`);
+
+/** The pairs of an atom's neighbours that sit either side of it in one of its rings (the gaps inside rings). */
+function ringGaps(doc: Doc, atomId: number): Set<string> {
+  const out = new Set<string>();
+  for (const bid of doc.adj.get(atomId) ?? []) {
+    for (const ring of ringsThroughBond(doc, bid)) {
+      const i = ring.indexOf(atomId);
+      if (i < 0) continue;
+      out.add(gapKey(ring[(i + ring.length - 1) % ring.length], ring[(i + 1) % ring.length]));
+    }
+  }
+  return out;
 }
 
 /**

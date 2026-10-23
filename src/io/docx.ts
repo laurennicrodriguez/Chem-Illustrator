@@ -9,12 +9,16 @@ import type { Contents, ParaStyle, TableData } from '../model';
 import type { DocStyle } from '../style';
 import type { CiteStyle, Reference } from '../document/references';
 import type { CiteFormat } from '../document/cite-styles';
+import type { ChartBox } from '../sheet/chart-box';
+import type { CiteManager } from '../document/live-cites';
 
 export const W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 export const WP_NS = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
 export const PIC_NS = 'http://schemas.openxmlformats.org/drawingml/2006/picture';
 /** Word 2010's shapes (text boxes), and the markup that lets older programs skip them. */
 export const WPS_NS = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape';
+/** Word 2010's groups of shapes. */
+export const WPG_NS = 'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup';
 export const MC_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006';
 /** Office Math: Word's equations. */
 export const M_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/math';
@@ -29,11 +33,14 @@ export const DOCX_CT = {
   footer: 'application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml',
   core: 'application/vnd.openxmlformats-package.core-properties+xml',
   app: 'application/vnd.openxmlformats-officedocument.extended-properties+xml',
+  custom: 'application/vnd.openxmlformats-officedocument.custom-properties+xml',
   itemProps: 'application/vnd.openxmlformats-officedocument.customXmlProperties+xml',
   fontTable: 'application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml',
   font: 'application/vnd.openxmlformats-officedocument.obfuscatedFont',
   comments: 'application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml',
   commentsExtended: 'application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml',
+  footnotes: 'application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml',
+  endnotes: 'application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml',
 };
 
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/';
@@ -51,13 +58,35 @@ export const DOCX_REL = {
   fontTable: R + 'fontTable',
   font: R + 'font',
   comments: R + 'comments',
+  footnotes: R + 'footnotes',
+  endnotes: R + 'endnotes',
   /** Word 2013's part saying which comments are replies, and which are resolved. */
   commentsExtended: 'http://schemas.microsoft.com/office/2011/relationships/commentsExtended',
+  /** Word 365's parts giving each comment a lasting id, and that id its time in UTC. */
+  commentsIds: 'http://schemas.microsoft.com/office/2016/09/relationships/commentsIds',
+  commentsExtensible: 'http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible',
 };
 
 /** Word 2010's and 2013's additions (paragraph ids, and the comments' replies and Resolved marks). */
 export const W14_NS = 'http://schemas.microsoft.com/office/word/2010/wordml';
 export const W15_NS = 'http://schemas.microsoft.com/office/word/2012/wordml';
+export const W16CID_NS = 'http://schemas.microsoft.com/office/word/2016/wordml/cid';
+export const W16CEX_NS = 'http://schemas.microsoft.com/office/word/2018/wordml/cex';
+
+/**
+ * Word's w:date is the writer's local clock time, though it ends in Z (the real UTC time, when
+ * there is one, is in commentsExtensible.xml). These convert between that and an ISO date.
+ */
+export function toWordDate(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}Z`;
+}
+export function fromWordDate(s: string): string {
+  const d = new Date(s.replace(/Z$/i, ''));
+  return isNaN(d.getTime()) ? s : d.toISOString();
+}
 
 /** Names Word's pictures of our drawings carry (kept by Word), so each can be found again. */
 export const DRAWING_NAME = 'Chem Illustrator drawing';
@@ -67,6 +96,9 @@ export const TABLE_NAME = 'Chem Illustrator table';
 export const FORMULA_STYLE = 'ChemFormula';
 
 /** What our own part holds: what Word can't. */
+/** The format of Word's custom document properties (docProps/custom.xml): where Zotero keeps its document preferences. */
+export const CUSTOM_PROPS_FMTID = '{D5CDD505-2E9C-101B-9397-08002B2CF9AE}';
+
 export interface DocxModel {
   app: 'Chem Illustrator';
   version: 1;
@@ -79,9 +111,22 @@ export interface DocxModel {
   references?: Reference[];
   citeStyle?: CiteStyle;
   citeOptions?: Partial<CiteFormat>;
+  /** The reference manager citations are saved for (Zotero, Mendeley, EndNote), when chosen. */
+  citeManager?: CiteManager;
   /** Each bibliography by its id: the text written (to tell whether Word changed it) and its paragraph's settings. */
   bibliographies?: Record<number, { text: string; ps: ParaStyle }>;
+  /** Each chart by its id, as made here (used when Word's copy charts the same numbers). */
+  charts?: Record<number, ChartBox>;
+  /** How near a colour Remove Background takes, for each picture by its id ("Picture 4"), which Word has no place for. */
+  pictureTol?: Record<number, number>;
+  /** Design's theme, style set and paragraph spacing, by name. */
+  design?: import('../document/document').DocDesign;
+  /** Floating figures' groups and Selection Pane names, by their wp:docPr id. */
+  floats?: Record<number, { group?: number; name?: string }>;
 }
+
+/** The name of a chart's frame in Word ("Chart 4", 4 its id in our part). */
+export const CHART_NAME = 'Chart';
 
 /** The field instruction of a citation: Word shows the numbers written as its result and leaves them alone. */
 export const CITE_FIELD = 'ADDIN CHEMILLUSTRATOR_CITE';

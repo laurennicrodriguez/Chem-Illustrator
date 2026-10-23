@@ -6,13 +6,15 @@ Chem Illustrator draws structures and reaction schemes the way ChemDraw does, wi
 
 It is free and open source (GPL v3), and runs on Windows, macOS and Linux.
 
+> **Beta.** Chem Illustrator is under active development: new features arrive every few days and some things may not work as they should yet. Save often, and please [report anything that goes wrong](docs/guide/feedback.md). If you would rather update less often, choose **Stable** updates in **Edit ▸ Settings ▸ Online**: those versions are tried out on a real computer before they are offered.
+
 **[Download the latest version](https://github.com/nathanohare/Chem-Illustrator/releases/latest)** · **[User guide](docs/README.md)** · **[Send feedback](docs/guide/feedback.md)**
 
 ![A two-step reaction scheme in Drawing mode, with the Analysis panel showing the product's formula and masses](docs/images/drawing.png)
 
 ## Smart reaction arrows
 
-Draw an arrow between two structures and a **+** box appears above and below it. Click one and type the reagents: formulas get their subscripts as you type, the text sits just clear of the arrow, and the arrow grows to fit it, pushing the products along so nothing overlaps. **Scheme ▸ Scheme Settings** sets the gaps, the text size and alignment, and whether arrows fit their text.
+Draw an arrow between two structures and a **+** box appears above and below it. Click one and type the reagents: formulas get their subscripts as you type, the text sits just clear of the arrow, and the arrow grows to fit it, pushing the products along so nothing overlaps. **Chemistry ▸ Reactions and Schemes ▸ Scheme Settings** sets the gaps, the text size and alignment, and whether arrows fit their text.
 
 ![Typing reagents above and conditions below a new reaction arrow: the arrow lengthens to fit the text and the product moves along](docs/images/smart-arrows.gif)
 
@@ -71,7 +73,7 @@ The eye button shows the page dark on screen, with your structures in light ink.
 
 ## Make it yours
 
-Every hotkey can be changed (**Edit ▸ Hotkeys**), and the hotkeys can be exported and shared. Toolboxes unlock to dock on any edge or float anywhere, and **My Toolbox** holds whichever tools and commands you use most. The dark page colours, each mode's accent colour, the scheme spacing, your own templates, nicknames and drawing styles are all settings, kept in one file you can back up.
+Every hotkey can be changed (**Edit ▸ Hotkeys**), and the hotkeys can be exported and shared. Toolboxes unlock to dock on any edge or float anywhere, and **Customize Toolboxes** rearranges any of them (or new ones of your own) by dragging icons about, as on a phone's home screen. The dark page colours, each mode's accent colour, the scheme spacing, your own templates, nicknames and drawing styles are all settings, kept in one file you can export and import on another computer.
 
 ![Toolboxes moved to new places, the dark page in Slate colours, and the Hotkeys window open](docs/images/customize.png)
 
@@ -138,6 +140,6 @@ Chem Illustrator is free software: you can use, share and change it under the te
 
 Everything it uses is free and open source, and keeps its own licence: RDKit (BSD-3-Clause), OPSIN (MIT), cdxmorph (MIT), Tauri (MIT or Apache-2.0), the bundled fonts (SIL Open Font License) and others listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-Reaction animation (Scheme ▸ Animate Reaction) is based on [cdxmorph](https://github.com/rshenvi/cdxmorph) by Ryan Shenvi (Shenvi Lab), used with permission.
+Reaction animation (Chemistry ▸ Animate ▸ Animate Reaction) is based on [cdxmorph](https://github.com/rshenvi/cdxmorph) by Ryan Shenvi (Shenvi Lab), used with permission.
 
 ChemDraw is a trademark of Revvity, Inc. Chem Illustrator is not made by, connected with or endorsed by Revvity; it reads and writes ChemDraw's published CDXML and CDX file formats so that your files work in both.

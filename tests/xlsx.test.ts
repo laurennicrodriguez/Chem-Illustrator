@@ -190,6 +190,24 @@ describe('saving for Excel', () => {
     expect(book.undo()).toBeNull();
   });
 
+  it('keeps a split window, and frozen columns', async () => {
+    const wb = new Workbook(['Split', 'Frozen']);
+    wb.edit('Panes', () => {
+      wb.sheets[0].setColWidth(0, 100);
+      wb.sheets[0].setSplit({ rows: 3, cols: 2 });
+      wb.sheets[1].setFrozen(0, 1);
+    });
+    const bytes = await writeXlsx(wb, pictures);
+    // (100 + 64) pixels across and 3 × 20 down, in twentieths of a point
+    expect(part(bytes, 'xl/worksheets/sheet1.xml')).toContain('<pane xSplit="2460" ySplit="900" topLeftCell="C4" activePane="bottomRight"/>');
+    expect(part(bytes, 'xl/worksheets/sheet2.xml')).toContain('<pane xSplit="1" topLeftCell="B1" activePane="topRight" state="frozen"/>');
+    const { book } = await readXlsx(bytes);
+    expect(book.sheets[0].split).toEqual({ rows: 3, cols: 2 });
+    expect(book.sheets[0].frozen).toEqual({ rows: 0, cols: 0 });
+    expect(book.sheets[1].frozen).toEqual({ rows: 0, cols: 1 });
+    expect(book.sheets[1].split).toBeNull();
+  });
+
   it('keeps the filter and the rows it hides', async () => {
     const wb = new Workbook();
     const s = wb.sheet;
@@ -336,7 +354,7 @@ describe('opening files made in Excel', () => {
       '<row r="1"><c r="A1" t="inlineStr"><is><t>n</t></is></c><c r="B1" t="s"><v>0</v></c></row>' +
       '<row><c r="A2"><v>1</v></c><c r="B2"><f t="shared" ref="B2:B4" si="0">A2*10</f><v>10</v></c></row>' +
       '<row><c><v>2</v></c><c><f t="shared" si="0"/><v>20</v></c></row>' +
-      '<row r="4"><c r="A4"><v>3</v></c><c r="B4"><f t="shared" si="0"/><v>30</v></c><c r="C4"><f>_xlfn.CONCAT("x",A4)</f><v>x3</v></c></row>' +
+      '<row r="4"><c r="A4"><v>3</v></c><c r="B4"><f t="shared" si="0"/><v>30</v></c><c r="C4"><f>_xlfn.CONCAT("x",A4)</f><v>x3</v></c><c r="D4"><f>_xlfn.RANDARRAY(3)</f><v>1</v></c></row>' +
       '</sheetData>';
     const { book, warnings } = await readXlsx(excelFile(sheet, { strings: ['<si><t>ten times</t></si>'] }));
     const s = book.sheet;
@@ -348,8 +366,10 @@ describe('opening files made in Excel', () => {
     expect(s.cell(3, 1)?.input).toBe('=A4*10');
     expect(s.value(3, 1)).toBe(30);
     expect(s.cell(3, 2)?.input).toBe('=CONCAT("x",A4)');
+    expect(s.value(3, 2)).toBe('x3');
     expect(s.colWidths.get(1)).toBe(145);
     expect(s.colWidths.get(2)).toBe(145);
+    // CONCAT is worked out here; RANDARRAY isn't
     expect(warnings).toEqual(['1 formula uses newer Excel functions this program can\'t work out yet.']);
   });
 
@@ -372,9 +392,9 @@ describe('opening files made in Excel', () => {
   });
 
   it('says what it could not keep', async () => {
-    const sheet = '<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData><conditionalFormatting sqref="A1"><cfRule type="timePeriod" timePeriod="today" priority="1"/></conditionalFormatting><hyperlinks/>';
+    const sheet = '<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData><conditionalFormatting sqref="A1"><cfRule type="timePeriod" timePeriod="today" priority="1"/></conditionalFormatting>';
     const { warnings } = await readXlsx(excelFile(sheet));
-    expect(warnings).toEqual(['Not shown here, and left out if you save over this file: some conditional formatting rules, links.']);
+    expect(warnings).toEqual(['Not shown here, and left out if you save over this file: some conditional formatting rules.']);
   });
 
   it('refuses files that are not workbooks', async () => {
@@ -411,5 +431,38 @@ describe('a file to check in other programs', () => {
       return w;
     })();
     writeFileSync(out, await writeXlsx(wb, pictures));
+  });
+});
+
+describe('links in Excel files', () => {
+  it('saves cell links as Excel\'s own and reads them back: web pages, files and places in the workbook', async () => {
+    const wb = new Workbook(['Data', 'My runs']);
+    const s = wb.sheets[0];
+    wb.edit('Type', () => {
+      s.setInput(0, 0, 'paper');
+      s.setLink(0, 0, 'https://doi.org/10.1021/ja00001');
+      s.setInput(1, 0, 'spectrum');
+      s.setLink(1, 0, 'spectra/run 4.mnova');
+      s.setInput(2, 0, 'runs');
+      s.setLink(2, 0, "#'My runs'!B4");
+    });
+    const bytes = await writeXlsx(wb, pictures);
+    const sheet1 = part(bytes, 'xl/worksheets/sheet1.xml');
+    expect(sheet1).toMatch(/<hyperlinks><hyperlink ref="A1" r:id="rId\d+"\/><hyperlink ref="A2" r:id="rId\d+"\/><hyperlink ref="A3" location="'My runs'!B4" display="runs"\/><\/hyperlinks><pageMargins/);
+    const rels = part(bytes, 'xl/worksheets/_rels/sheet1.xml.rels');
+    expect(rels).toContain('Target="https://doi.org/10.1021/ja00001" TargetMode="External"');
+    expect(rels).toContain('Target="spectra/run%204.mnova" TargetMode="External"');
+
+    const { book, warnings } = await readXlsx(bytes);
+    expect(warnings.join(' ')).not.toMatch(/link/i);
+    const r = book.sheets[0];
+    expect([0, 1, 2].map((i) => r.cell(i, 0)?.link)).toEqual(['https://doi.org/10.1021/ja00001', 'spectra/run 4.mnova', "#'My runs'!B4"]);
+    expect(r.value(2, 0)).toBe('runs');
+  });
+
+  it('reads a link Excel put on a range of cells onto each of them', async () => {
+    const bytes = excelFile('<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>a</t></is></c><c r="B1" t="inlineStr"><is><t>b</t></is></c></row></sheetData><hyperlinks><hyperlink ref="A1:B1" location="Data!C9"/></hyperlinks>');
+    const { book } = await readXlsx(bytes);
+    expect([book.sheets[0].cell(0, 0)?.link, book.sheets[0].cell(0, 1)?.link]).toEqual(['#Data!C9', '#Data!C9']);
   });
 });

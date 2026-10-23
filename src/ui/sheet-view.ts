@@ -11,16 +11,34 @@ import { Workbook, Sheet, Structure, CellStyle, Side, growToMerges, countOn } fr
 import { Range, MAX_ROWS, MAX_COLS, colName, rangeName, normRange, inRange, keyOf, rowOf, colOf, cellName } from '../sheet/refs';
 import { formatValue, generalFitting } from '../sheet/numfmt';
 import { readTyped, isError, CellError } from '../sheet/values';
-import { chemPieces } from '../sheet/cell-text';
+import { chemPieces, showsChem } from '../sheet/cell-text';
 import { DEFAULT_COL_W, DEFAULT_ROW_H, STRUCTURE_SCALE, STRUCTURE_PAD, MAX_AUTO_ROW, structureHeight, structurePlace } from '../sheet/layout';
 import { formulaRefs, normalizeFormula } from '../sheet/formula';
 import { Chart, chartData } from '../sheet/chart';
 import { drawChart, ChartHits, Box } from '../render/chart-draw';
 import { DashboardView } from './dashboard-view';
 import { newDashboard, Tile } from '../sheet/dashboard';
+import { Validation, passes, invalidCells } from '../sheet/validation';
+import { followLink, linkTip } from './links-ui';
+import { linkOfFormula } from '../links';
+import { typingPrefs } from '../text/typing';
+import { SheetObject, objectLook, shapePath, arrowHead, lineEnds, isLine } from '../sheet/sheet-objects';
+import { sheetPages, sheetSizes } from '../sheet/print-range';
+import { breakLines, withSetup, toggleBreak, type PrintPage } from '../sheet/page-setup';
+import { defaultPaper } from '../print-layout';
+import { BRUSH } from '../editor/cursors';
+import { OutlineGroup, outlineGroups, maxLevel, setCollapsed, showLevel } from '../sheet/outline';
+import { SparklineGroup, sparkShape, sparkSource, sparklineAt } from '../sheet/sparklines';
+import { headerRuns, paperSize, DEFAULT_MARGINS } from '../sheet/page-setup';
+import { themeOf } from '../sheet/themes';
 
-const HEADER_W = 44;
-const HEADER_H = 22;
+/** The row numbers' width and the column letters' height (when shown). */
+const HEAD_W = 44;
+const HEAD_H = 22;
+/** One level of the outline's buttons beside the row numbers or above the column letters. */
+const OUTLINE_STEP = 16;
+/** The bar between split panes. */
+const SPLIT_BAR = 5;
 /** Calibri, as Excel uses, with stand-ins that have the same widths elsewhere. */
 export const CELL_FONT = "Calibri, Carlito, 'Segoe UI', Arial, sans-serif";
 export const CELL_SIZE = 11;
@@ -34,6 +52,8 @@ export interface Selection {
   /** Where the selection was started from (Shift+click and Shift+arrows move the other corner). */
   anchor: Cursor;
   range: Range;
+  /** More blocks selected with it (Go To Special, Find All, Ctrl+click): typing with Ctrl+Enter, Delete and formatting reach them too. */
+  more?: Range[];
 }
 
 export interface ViewState {
@@ -52,10 +72,16 @@ export interface SheetViewHost {
   editStructure(row: number, col: number): void;
   /** A key not handled by the grid (menus, hotkeys). True when it did something. */
   key(e: KeyboardEvent): boolean;
+  /** F3 and its variants (names and Insert Function), in a cell or while typing. */
+  f3?(e: KeyboardEvent): void;
   /** The selection, the sheet showing or the cell being typed in changed. */
   changed(): void;
   /** A right-click: what was clicked. */
-  contextMenu(x: number, y: number, where: 'cell' | 'row' | 'col' | 'chart' | 'tile'): void;
+  contextMenu(x: number, y: number, where: 'cell' | 'row' | 'col' | 'chart' | 'tile' | 'object'): void;
+  /** A picture, shape or text box was double-clicked (change its text). */
+  editObject?(id: number): void;
+  /** A letter typed while a shape is picked starts typing in it. True when it did. */
+  typeInObject?(id: number, key: string): boolean;
   /** A dashboard tile was double-clicked (open its settings). */
   openTile?(tile: Tile): void;
   /** A chart was double-clicked (open its settings). */
@@ -65,20 +91,45 @@ export interface SheetViewHost {
   flash(msg: string, ms?: number): void;
   /** The typing in a cell (or the formula bar) changed. */
   typing(text: string | null): void;
+  /** Text was typed into one cell and kept (not a formula). */
+  typed?(row: number, col: number, text: string): void;
+  /** The pointer is over a cell with a note or comment (null: over none), at this box on the screen. */
+  hoverNote?(cell: Cursor | null, box: DOMRect | null): void;
+  /** The grid was drawn (notes shown all the time follow it). */
+  drawn?(): void;
+  /** The drop-down of a cell with a list rule was opened, under this point on the screen. */
+  dropDown?(r: number, c: number, at: { x: number; y: number }): void;
+  /** Typing broke a cell's data validation rule: what to do about it. */
+  invalid?(rule: Validation, text: string): Promise<'retry' | 'keep' | 'cancel'>;
+  /** Page Layout view: a header or footer was double-clicked (open the Header and Footer window). */
+  headerFooter?(): void;
 }
 
-/** Sizes of rows or columns, with the position of each worked out once. */
+/**
+ * Sizes of rows or columns, with the position of each worked out once. In Page Layout view some
+ * have a gap before them (the space between pages, and the margins).
+ */
 class Axis {
   tops: Float64Array;
-  constructor(public n: number, size: (i: number) => number, public def: number) {
+  sizes: Float64Array;
+  constructor(public n: number, size: (i: number) => number, public def: number, gap?: (i: number) => number) {
     this.tops = new Float64Array(n + 1);
-    for (let i = 0; i < n; i++) this.tops[i + 1] = this.tops[i] + size(i);
+    this.sizes = new Float64Array(n);
+    let p = gap?.(0) ?? 0;
+    for (let i = 0; i < n; i++) {
+      this.tops[i] = p;
+      const s = size(i);
+      this.sizes[i] = s;
+      p += s;
+      if (gap && i + 1 < n) p += gap(i + 1);
+    }
+    this.tops[n] = p;
   }
   pos(i: number): number {
     return i <= this.n ? this.tops[i] : this.tops[this.n] + (i - this.n) * this.def;
   }
   size(i: number): number {
-    return this.pos(i + 1) - this.pos(i);
+    return i < this.n ? this.sizes[i] : this.def;
   }
   /** The row or column at a position. */
   at(p: number): number {
@@ -91,14 +142,27 @@ class Axis {
       if (this.tops[mid] <= p) lo = mid; else hi = mid - 1;
     }
     // hidden ones (no size) are skipped
-    while (lo < this.n && this.tops[lo + 1] === this.tops[lo]) lo++;
+    while (lo < this.n && this.sizes[lo] === 0) lo++;
     return lo;
   }
   limit = MAX_ROWS;
   get total(): number { return this.tops[this.n]; }
 }
 
-type Region = { x: number; y: number; w: number; h: number; ox: number; oy: number; r1: number; r2: number; c1: number; c2: number };
+/** Page Layout view: where pages start along each axis, and the paper and margins in screen pixels. */
+interface PageGrid {
+  rowStarts: number[];
+  colStarts: number[];
+  paperW: number;
+  paperH: number;
+  margins: { left: number; right: number; top: number; bottom: number; header: number; footer: number };
+}
+
+/** The space between pages in Page Layout view, in pixels. */
+const PAGE_GAP = 18;
+
+/** A part of the grid on the screen: where it is, the sheet position at its corner, the cells it shows, and the rows and columns that belong in it. */
+type Region = { x: number; y: number; w: number; h: number; ox: number; oy: number; r1: number; r2: number; c1: number; c2: number; rlo: number; rhi: number; clo: number; chi: number };
 
 type Drag =
   | { kind: 'select'; pointer: number }
@@ -108,7 +172,14 @@ type Drag =
   | { kind: 'resize-row'; row: number; start: number; size: number; orig: number | undefined; pointer: number }
   | { kind: 'fill'; src: Range; to: Range; pointer: number; ctrl: boolean }
   | { kind: 'point'; pointer: number; start: Cursor }
-  | { kind: 'chart'; pointer: number; id: number; how: 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | 'label'; series?: number; x0: number; y0: number; orig: Chart; moved: boolean };
+  | { kind: 'split'; pointer: number; axis: 'row' | 'col' }
+  | { kind: 'break'; pointer: number; axis: 'row' | 'col'; from: number }
+  | { kind: 'chart'; pointer: number; id: number; how: 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | 'label'; series?: number; x0: number; y0: number; orig: Chart; moved: boolean }
+  | { kind: 'object'; pointer: number; id: number; how: Handle; x0: number; y0: number; orig: SheetObject; moved: boolean };
+
+type Handle = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | 'start' | 'end';
+/** Anything floating over the cells: a corner cell and offset, and a size, in pixels at 100%. */
+type Floating = { at: Chart['at']; w: number; h: number };
 
 const HANDLE = 7;
 
@@ -117,12 +188,14 @@ export class SheetView {
   zoom = 1;
   /** The cell being typed in, if any. 'enter': arrows finish typing (Excel's Enter mode); 'edit': arrows move in the text. */
   editing: { r: number; c: number; mode: 'enter' | 'edit'; original: string } | null = null;
+  /** Format Painter, while the brush is held (set by the app): called when a click or drag has picked the cells to paint. */
+  painter: (() => void) | null = null;
   /** Cells copied (shown with a dashed border until Esc or the next edit). */
   copied: { sheet: Sheet; range: Range } | null = null;
   /** Called with the reference to put in a formula being typed (pointing at cells). */
   readonly el: HTMLDivElement;
   readonly input: HTMLTextAreaElement;
-  private scroller: HTMLDivElement;
+  readonly scroller: HTMLDivElement;
   private spacer: HTMLDivElement;
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -142,14 +215,46 @@ export class SheetView {
   private pendingPictures = false;
   /** Point mode: a reference put in a formula by clicking, replaced as the pointer moves. */
   private pointRef: { start: number; end: number } | null = null;
-  private findBar: HTMLDivElement;
   /** The chart picked (by its id), on the sheet showing. */
   chartSel: number | null = null;
   /** A chart being dragged, drawn in place of the saved one until the drag ends. */
   private chartPreview: Chart | null = null;
+  /** The picture, shape or text box picked (by its id). */
+  objSel: number | null = null;
+  private objPreview: SheetObject | null = null;
+  private objImages = new Map<string, HTMLImageElement>();
+  /** Page Layout > Page Breaks: the lines where pages end, drawn on the grid. */
+  showPageBreaks = false;
+  private breakCache: { key: string; rows: Set<number>; cols: Set<number>; manualRows: Set<number>; manualCols: Set<number>; pages: PrintPage[]; innerRows: Set<number>; innerCols: Set<number> } | null = null;
   /** Shows a dashboard sheet in place of the grid. */
   readonly dash: DashboardView;
   private chartCache = new Map<number, { key: string; chart: Chart; canvas: HTMLCanvasElement; hits: ChartHits }>();
+  /** The input message of the selected cell's data validation rule. */
+  private promptBox: HTMLDivElement;
+  /** Notes shown all the time sit in this layer over the cells. */
+  readonly noteLayer: HTMLDivElement;
+  /** Data > Circle Invalid Data: red rings round cells that break their rules, until cleared. */
+  circleInvalid = false;
+  private circles: { gen: number; sheet: Sheet; rules: Validation[]; cells: { row: number; col: number }[] } | null = null;
+  /** The cell with a note the pointer is over. */
+  private hovered: Cursor | null = null;
+  /** An alert about typing that broke a rule is showing. */
+  private alerting = false;
+  /** How far the upper and left panes of a split window are scrolled (pixels on the sheet), by sheet. */
+  private paneScroll = new Map<Sheet, { top: number; left: number }>();
+  /** The width of the row numbers and the height of the column letters, with the outline's buttons beside them (0 when hidden). */
+  private HW = HEAD_W;
+  private HH = HEAD_H;
+  /** The outline's buttons: their width beside the row numbers and height above the column letters. */
+  private OW = 0;
+  private OH = 0;
+  private rowOutline: OutlineGroup[] = [];
+  private colOutline: OutlineGroup[] = [];
+  /** Page Layout view: the pages (null in the other views). */
+  private pageGrid: PageGrid | null = null;
+  /** Page Break Preview: a page break being dragged. */
+  private breakPreview: { axis: 'row' | 'col'; at: number } | null = null;
+  private sparkCache: { key: string; values: Map<SparklineGroup, (number | null)[][]>; limits: Map<SparklineGroup, { min?: number; max?: number }> } | null = null;
 
   constructor(root: HTMLElement, private host: SheetViewHost) {
     this.el = root as HTMLDivElement;
@@ -169,15 +274,18 @@ export class SheetView {
     this.input.spellcheck = false;
     this.input.hidden = true;
     this.input.setAttribute('aria-label', 'Cell contents');
-    this.scroller.append(this.canvas, this.spacer, this.input);
+    this.promptBox = document.createElement('div');
+    this.promptBox.className = 'sh-prompt';
+    this.promptBox.hidden = true;
+    this.promptBox.setAttribute('role', 'tooltip');
+    this.noteLayer = document.createElement('div');
+    this.noteLayer.className = 'sh-note-layer';
+    this.scroller.append(this.canvas, this.spacer, this.noteLayer, this.input, this.promptBox);
     this.tabsEl = document.createElement('div');
     this.tabsEl.className = 'sh-tabs';
     this.tabsEl.setAttribute('role', 'tablist');
     this.tabsEl.setAttribute('aria-label', 'Sheets');
-    this.findBar = document.createElement('div');
-    this.findBar.className = 'sh-find';
-    this.findBar.hidden = true;
-    root.append(this.findBar, this.scroller, this.tabsEl);
+    root.append(this.scroller, this.tabsEl);
     this.measureCtx = document.createElement('canvas').getContext('2d')!;
     this.rows = new Axis(0, () => DEFAULT_ROW_H, DEFAULT_ROW_H);
     this.cols = new Axis(0, () => DEFAULT_COL_W, DEFAULT_COL_W);
@@ -189,6 +297,7 @@ export class SheetView {
     });
     this.scroller.addEventListener('pointerdown', (e) => this.onDown(e));
     this.scroller.addEventListener('pointermove', (e) => this.onMove(e));
+    this.scroller.addEventListener('pointerleave', () => this.setHovered(null));
     this.scroller.addEventListener('pointerup', (e) => this.onUp(e));
     this.scroller.addEventListener('dblclick', (e) => this.onDouble(e));
     this.scroller.addEventListener('contextmenu', (e) => this.onContext(e));
@@ -198,7 +307,6 @@ export class SheetView {
     this.input.addEventListener('input', () => { this.pointRef = null; this.fitInput(); this.host.typing(this.input.value); });
     this.input.addEventListener('pointerdown', (e) => e.stopPropagation());
     new ResizeObserver(() => this.render()).observe(this.scroller);
-    this.buildFindBar();
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const view = this;
     this.dash = new DashboardView(root, {
@@ -224,6 +332,7 @@ export class SheetView {
   show(wb: Workbook | null, state?: ViewState | null): void {
     this.cancelEdit();
     this.chartSel = null;
+    this.objSel = null;
     this.chartCache.clear();
     this.wb = wb;
     this.copied = null;
@@ -318,6 +427,15 @@ export class SheetView {
         const w = (s.colWidths.get(col) ?? DEFAULT_COL_W) - 2 * PAD;
         const lines = this.wrapLines(s.shownText(row, col), this.font(style, 1), w).length;
         h = lines * this.lineHeight(style) + 6;
+      } else if (style?.rotate && c.input) {
+        // turned text: as tall as it reaches
+        const text = s.shownText(row, col);
+        const lh = this.lineHeight(style);
+        if (style.rotate === 255) h = [...text].length * lh + 6;
+        else {
+          const a = (style.rotate * Math.PI) / 180;
+          h = Math.abs(this.textWidth(text, this.font(style, 1)) * Math.sin(a)) + Math.abs(lh * Math.cos(a)) + 6;
+        }
       } else if (style?.size && style.size > CELL_SIZE) {
         h = this.lineHeight(style) + 6;
       }
@@ -342,11 +460,64 @@ export class SheetView {
     this.extentRows = Math.max(this.extentRows, s.lastRow + 60, sel.range.r2 + 30);
     this.extentCols = Math.max(this.extentCols, s.lastCol + 12, sel.range.c2 + 8);
     const auto = this.autoHeights(s);
-    this.rows = new Axis(Math.min(this.extentRows, MAX_ROWS), (r) => (s.hiddenRows.has(r) ? 0 : (s.rowHeights.get(r) ?? auto.get(r) ?? DEFAULT_ROW_H) * z), DEFAULT_ROW_H * z);
-    this.cols = new Axis(Math.min(this.extentCols, MAX_COLS), (c) => (s.hiddenCols.has(c) ? 0 : (s.colWidths.get(c) ?? DEFAULT_COL_W) * z), DEFAULT_COL_W * z);
+    // the row numbers and column letters (unless hidden), and the outline's buttons beside them
+    const heads = s.viewOpts?.headings !== false;
+    const symbols = s.viewOpts?.outlineSymbols !== false;
+    const lr = symbols ? maxLevel(s, 'row') : 0, lc = symbols ? maxLevel(s, 'col') : 0;
+    this.OW = lr ? (lr + 1) * OUTLINE_STEP + 4 : 0;
+    this.OH = lc ? (lc + 1) * OUTLINE_STEP + 4 : 0;
+    this.HW = this.OW + (heads ? HEAD_W : this.OH ? OUTLINE_STEP + 4 : 0);
+    this.HH = this.OH + (heads ? HEAD_H : this.OW ? OUTLINE_STEP + 4 : 0);
+    this.rowOutline = lr ? outlineGroups(s, 'row') : [];
+    this.colOutline = lc ? outlineGroups(s, 'col') : [];
+    const nr = Math.min(this.extentRows, MAX_ROWS), nc = Math.min(this.extentCols, MAX_COLS);
+    const rowSize = (r: number) => (s.hiddenRows.has(r) ? 0 : (s.rowHeights.get(r) ?? auto.get(r) ?? DEFAULT_ROW_H) * z);
+    const colSize = (c: number) => (s.hiddenCols.has(c) ? 0 : (s.colWidths.get(c) ?? DEFAULT_COL_W) * z);
+    this.pageGrid = s.viewOpts?.layout === 'pageLayout' ? this.pagesFor(s, nr, nc, rowSize, colSize) : null;
+    const pg = this.pageGrid;
+    const gaps = (starts: number[], size: (i: number) => number, paper: number, before: number, after: number) => {
+      const out = new Map<number, number>([[0, PAGE_GAP + before]]);
+      let band = 0, k = 1;
+      for (let i = 0; i < starts[starts.length - 1]; i++) {
+        band += size(i);
+        if (i + 1 === starts[k]) { out.set(i + 1, Math.max(PAGE_GAP + before + after, paper + PAGE_GAP - band)); band = 0; k++; }
+      }
+      return (i: number) => out.get(i) ?? 0;
+    };
+    this.rows = new Axis(nr, rowSize, DEFAULT_ROW_H * z, pg ? gaps(pg.rowStarts, rowSize, pg.paperH, pg.margins.top, pg.margins.bottom) : undefined);
+    this.cols = new Axis(nc, colSize, DEFAULT_COL_W * z, pg ? gaps(pg.colStarts, colSize, pg.paperW, pg.margins.left, pg.margins.right) : undefined);
     this.cols.limit = MAX_COLS;
-    this.spacer.style.width = `${HEADER_W + this.cols.total}px`;
-    this.spacer.style.height = `${HEADER_H + this.rows.total}px`;
+    // a split window's lower pane is shorter, so it scrolls that much further
+    const { x0, y0 } = this.frozen();
+    this.spacer.style.width = `${x0 + this.cols.total}px`;
+    this.spacer.style.height = `${y0 + this.rows.total}px`;
+  }
+
+  /** Page Layout view: pages cut from the paper size, margins and page breaks (at 100%, as the cells show). */
+  private pagesFor(s: Sheet, nr: number, nc: number, rowSize: (r: number) => number, colSize: (c: number) => number): PageGrid {
+    const ps = s.pageSetup;
+    const paper = paperSize(ps, defaultPaper(navigator.language));
+    const m = ps?.margins ?? DEFAULT_MARGINS;
+    const z = this.zoom, px = (inch: number) => inch * 96 * z;
+    const paperW = (paper.w / 0.75) * z, paperH = (paper.h / 0.75) * z;
+    const margins = { left: px(m.left), right: px(m.right), top: px(m.top), bottom: px(m.bottom), header: px(m.header), footer: px(m.footer) };
+    const cut = (n: number, size: (i: number) => number, room: number, manual: number[] | undefined) => {
+      const breaks = new Set(ps?.fit ? [] : manual ?? []);
+      const starts = [0];
+      let used = 0;
+      for (let i = 0; i < n; i++) {
+        const sz = size(i);
+        if (i > 0 && (breaks.has(i) || (used + sz > room + 0.01 && used > 0))) { starts.push(i); used = 0; }
+        used += sz;
+      }
+      starts.push(n);
+      return starts;
+    };
+    return {
+      rowStarts: cut(nr, rowSize, Math.max(20, paperH - margins.top - margins.bottom), ps?.rowBreaks),
+      colStarts: cut(nc, colSize, Math.max(20, paperW - margins.left - margins.right), ps?.colBreaks),
+      paperW, paperH, margins,
+    };
   }
 
   /** Scrolling near the end makes more rows and columns. */
@@ -369,67 +540,109 @@ export class SheetView {
     return this.cols.size(c) / this.zoom;
   }
 
-  private frozen(): { fr: number; fc: number; FH: number; FW: number } {
+  /**
+   * Where the panes are. Frozen rows and columns (fr, fc; FH, FW pixels) don't scroll. A split
+   * window's upper and left panes (SH, SW pixels) scroll on their own. x0 and y0 are where the
+   * part that scrolls with the scroll bars starts on the screen, before frozen rows and columns.
+   */
+  private frozen(): { fr: number; fc: number; FH: number; FW: number; SH: number; SW: number; x0: number; y0: number } {
     const s = this.sheet!;
-    const fr = s.frozen.rows, fc = s.frozen.cols;
-    return { fr, fc, FH: this.rows.pos(fr), FW: this.cols.pos(fc) };
+    // Page Layout view has no frozen or split panes (as in Excel)
+    const paged = s.viewOpts?.layout === 'pageLayout';
+    const fr = paged ? 0 : s.frozen.rows, fc = paged ? 0 : s.frozen.cols;
+    const sp = !fr && !fc && !paged ? s.split : null;
+    const vw = this.scroller.clientWidth || 800, vh = this.scroller.clientHeight || 600;
+    // a split pane takes the height of its rows, but leaves room for the pane below it
+    const SH = sp?.rows ? Math.max(8, Math.min(this.rows.pos(sp.rows), vh - this.HH - 60)) : 0;
+    const SW = sp?.cols ? Math.max(8, Math.min(this.cols.pos(sp.cols), vw - this.HW - 60)) : 0;
+    return { fr, fc, FH: this.rows.pos(fr), FW: this.cols.pos(fc), SH, SW, x0: this.HW + (SW ? SW + SPLIT_BAR : 0), y0: this.HH + (SH ? SH + SPLIT_BAR : 0) };
   }
 
-  /** The four parts of the grid: frozen corner, frozen rows, frozen columns, and the part that scrolls. */
+  /** How far a split window's upper and left panes are scrolled. */
+  private panes(): { top: number; left: number } {
+    const s = this.sheet!;
+    let p = this.paneScroll.get(s);
+    if (!p) { p = { top: 0, left: 0 }; this.paneScroll.set(s, p); }
+    return p;
+  }
+
+  /** The parts of the grid: frozen corner, frozen rows, frozen columns and the part that scrolls; or the two or four panes of a split window. */
   private regions(): Region[] {
     const vw = this.scroller.clientWidth, vh = this.scroller.clientHeight;
     const sx = this.scroller.scrollLeft, sy = this.scroller.scrollTop;
-    const { fr, fc, FH, FW } = this.frozen();
+    const { fr, fc, FH, FW, SH, SW, x0, y0 } = this.frozen();
     const make = (x: number, y: number, w: number, h: number, ox: number, oy: number, rowsFrom: number, rowsTo: number | null, colsFrom: number, colsTo: number | null): Region => {
       const r1 = rowsTo === null ? this.rows.at(oy) : rowsFrom;
       const r2 = rowsTo === null ? this.rows.at(oy + h) : rowsTo;
       const c1 = colsTo === null ? this.cols.at(ox) : colsFrom;
       const c2 = colsTo === null ? this.cols.at(ox + w) : colsTo;
-      return { x, y, w, h, ox, oy, r1: Math.max(r1, rowsFrom), r2, c1: Math.max(c1, colsFrom), c2 };
+      return { x, y, w, h, ox, oy, r1: Math.max(r1, rowsFrom), r2, c1: Math.max(c1, colsFrom), c2, rlo: rowsFrom, rhi: rowsTo ?? Infinity, clo: colsFrom, chi: colsTo ?? Infinity };
     };
     const out: Region[] = [];
-    const mainW = Math.max(0, vw - HEADER_W - FW), mainH = Math.max(0, vh - HEADER_H - FH);
-    out.push(make(HEADER_W + FW, HEADER_H + FH, mainW, mainH, FW + sx, FH + sy, fr, null, fc, null));
-    if (fr) out.push(make(HEADER_W + FW, HEADER_H, mainW, FH, FW + sx, 0, 0, fr - 1, fc, null));
-    if (fc) out.push(make(HEADER_W, HEADER_H + FH, FW, mainH, 0, FH + sy, fr, null, 0, fc - 1));
-    if (fr && fc) out.push(make(HEADER_W, HEADER_H, FW, FH, 0, 0, 0, fr - 1, 0, fc - 1));
+    const mainW = Math.max(0, vw - x0 - FW), mainH = Math.max(0, vh - y0 - FH);
+    out.push(make(x0 + FW, y0 + FH, mainW, mainH, FW + sx, FH + sy, fr, null, fc, null));
+    if (fr) out.push(make(x0 + FW, y0, mainW, FH, FW + sx, 0, 0, fr - 1, fc, null));
+    if (fc) out.push(make(x0, y0 + FH, FW, mainH, 0, FH + sy, fr, null, 0, fc - 1));
+    if (fr && fc) out.push(make(x0, y0, FW, FH, 0, 0, 0, fr - 1, 0, fc - 1));
+    // a split: panes in a row scroll up and down together, panes in a column across together
+    if (SH || SW) {
+      const p = this.panes();
+      if (SH) out.push(make(x0, this.HH, mainW, SH, sx, p.top, 0, null, 0, null));
+      if (SW) out.push(make(this.HW, y0, SW, mainH, p.left, sy, 0, null, 0, null));
+      if (SH && SW) out.push(make(this.HW, this.HH, SW, SH, p.left, p.top, 0, null, 0, null));
+    }
     return out;
+  }
+
+  /** The part of the grid under a point (by its column alone over the column letters, by its row alone over the row numbers). */
+  private regionAt(x: number, y: number, regions = this.regions()): Region {
+    const inX = (g: Region) => x >= g.x && x < g.x + g.w, inY = (g: Region) => y >= g.y && y < g.y + g.h;
+    if (y < this.HH && x >= this.HW) return regions.find(inX) ?? regions[0];
+    if (x < this.HW && y >= this.HH) return regions.find(inY) ?? regions[0];
+    return regions.find((g) => inX(g) && inY(g))
+      // on a split bar or past the edge: the pane nearest
+      ?? regions.find((g) => inX(g) && y >= g.y + g.h - SPLIT_BAR - 1) ?? regions.find((g) => inY(g) && x >= g.x + g.w - SPLIT_BAR - 1) ?? regions[0];
   }
 
   /** The cell at a point in the grid (view coordinates), and whether it's on a header. */
   private hit(x: number, y: number): { r: number; c: number; where: 'cell' | 'col' | 'row' | 'corner' } {
-    const { FH, FW } = this.frozen();
-    const sx = this.scroller.scrollLeft, sy = this.scroller.scrollTop;
-    const gx = x - HEADER_W, gy = y - HEADER_H;
-    const sheetX = gx < FW ? gx : gx + sx;
-    const sheetY = gy < FH ? gy : gy + sy;
+    const g = this.regionAt(x, y);
+    const sheetX = x - g.x + g.ox, sheetY = y - g.y + g.oy;
     const c = this.cols.at(Math.max(0, sheetX)), r = this.rows.at(Math.max(0, sheetY));
-    const where = x < HEADER_W && y < HEADER_H ? 'corner' : y < HEADER_H ? 'col' : x < HEADER_W ? 'row' : 'cell';
+    const where = x < this.HW && y < this.HH ? 'corner' : y < this.HH ? 'col' : x < this.HW ? 'row' : 'cell';
     return { r, c, where };
+  }
+
+  /** The split bar under a point (to drag), if any. */
+  private splitBarAt(x: number, y: number): 'row' | 'col' | null {
+    const { SH, SW, x0, y0 } = this.frozen();
+    if (SH && y >= y0 - SPLIT_BAR - 1 && y <= y0 + 1 && x >= this.HW) return 'row';
+    if (SW && x >= x0 - SPLIT_BAR - 1 && x <= x0 + 1 && y >= this.HH) return 'col';
+    return null;
   }
 
   /** Where a cell is on the screen (view coordinates); null when it's scrolled out of sight. */
   cellRect(r: number, c: number): { x: number; y: number; w: number; h: number } | null {
     this.layout();
-    const { fr, fc } = this.frozen();
-    const sx = this.scroller.scrollLeft, sy = this.scroller.scrollTop;
-    const { FH, FW } = this.frozen();
-    const x = HEADER_W + (c < fc ? this.cols.pos(c) : this.cols.pos(c) - sx);
-    const y = HEADER_H + (r < fr ? this.rows.pos(r) : this.rows.pos(r) - sy);
     const m = this.sheet?.mergeAt(r, c);
     const w = m ? this.cols.pos(m.c2 + 1) - this.cols.pos(m.c1) : this.cols.size(c);
     const h = m ? this.rows.pos(m.r2 + 1) - this.rows.pos(m.r1) : this.rows.size(r);
-    if (c >= fc && x + w < HEADER_W + FW) return null;
-    if (r >= fr && y + h < HEADER_H + FH) return null;
-    return { x, y, w, h };
+    // the pane it belongs in (the one that scrolls first), unless it is scrolled out of sight there
+    for (const g of this.regions()) {
+      if (r < g.rlo || r > g.rhi || c < g.clo || c > g.chi) continue;
+      const x = g.x + this.cols.pos(c) - g.ox, y = g.y + this.rows.pos(r) - g.oy;
+      if (x + w < g.x || y + h < g.y) continue;
+      return { x, y, w, h };
+    }
+    return null;
   }
 
   /** Scroll so a cell can be seen. */
   reveal(r: number, c: number): void {
     this.layout();
-    const { fr, fc, FH, FW } = this.frozen();
+    const { fr, fc, FH, FW, x0, y0 } = this.frozen();
     const sc = this.scroller;
-    const vw = sc.clientWidth - HEADER_W - FW, vh = sc.clientHeight - HEADER_H - FH;
+    const vw = sc.clientWidth - x0 - FW, vh = sc.clientHeight - y0 - FH;
     if (r >= fr) {
       const top = this.rows.pos(r) - FH, bottom = this.rows.pos(r + 1) - FH;
       if (top < sc.scrollTop) sc.scrollTop = top;
@@ -488,14 +701,37 @@ export class SheetView {
       this.drawSelection(g);
       ctx.restore();
     }
+    if (s.viewOpts?.layout === 'pageBreakPreview') for (const g of regions) this.drawBreakPreview(g);
+    else if (this.showPageBreaks) for (const g of regions) this.drawPageBreaks(g);
     this.drawCharts(vw, vh);
+    this.drawObjects(vw, vh);
     this.drawHeaders(regions);
-    const { FH, FW } = this.frozen();
+    const { FH, FW, SH, SW, x0, y0 } = this.frozen();
     ctx.strokeStyle = '#9aa3b5';
     ctx.lineWidth = 1;
-    if (FH) { ctx.beginPath(); ctx.moveTo(0, HEADER_H + FH + 0.5); ctx.lineTo(vw, HEADER_H + FH + 0.5); ctx.stroke(); }
-    if (FW) { ctx.beginPath(); ctx.moveTo(HEADER_W + FW + 0.5, 0); ctx.lineTo(HEADER_W + FW + 0.5, vh); ctx.stroke(); }
+    if (FH) { ctx.beginPath(); ctx.moveTo(0, y0 + FH + 0.5); ctx.lineTo(vw, y0 + FH + 0.5); ctx.stroke(); }
+    if (FW) { ctx.beginPath(); ctx.moveTo(x0 + FW + 0.5, 0); ctx.lineTo(x0 + FW + 0.5, vh); ctx.stroke(); }
+    // a split window's bars, which can be dragged (or double-clicked to take the split away)
+    ctx.fillStyle = '#c9ced8';
+    if (SH) ctx.fillRect(0, y0 - SPLIT_BAR, vw, SPLIT_BAR);
+    if (SW) ctx.fillRect(x0 - SPLIT_BAR, 0, SPLIT_BAR, vh);
+    const bp = this.breakPreview;
+    if (bp) {
+      ctx.fillStyle = 'rgba(47, 91, 211, 0.7)';
+      if (bp.axis === 'row') ctx.fillRect(0, bp.at - 1.5, vw, 3);
+      else ctx.fillRect(bp.at - 1.5, 0, 3, vh);
+    }
+    const sp = this.splitPreview;
+    if (sp) {
+      ctx.fillStyle = 'rgba(80, 90, 110, 0.5)';
+      if (sp.axis === 'row') ctx.fillRect(0, sp.at - 2, vw, SPLIT_BAR);
+      else ctx.fillRect(sp.at - 2, 0, SPLIT_BAR, vh);
+    }
+    this.drawCircles(regions);
+    this.drawDropButton();
+    this.placePrompt();
     if (this.editing) this.placeInput();
+    this.host.drawn?.();
     if (this.pendingPictures) this.render();
     budget = { n: 0 };
   }
@@ -519,22 +755,24 @@ export class SheetView {
   pickChart(id: number | null): void {
     if (id === this.chartSel) return;
     this.chartSel = id;
+    if (id !== null) this.objSel = null;
     this.render();
     this.host.changed();
   }
 
-  /** Where a chart is on the screen (view coordinates). */
-  chartBox(c: Chart): Box {
+  /** Where a chart (or a picture, shape or text box) is on the screen (view coordinates). */
+  chartBox(c: Floating): Box {
     this.layout();
-    const { fr, fc } = this.frozen();
+    const { fr, fc, x0, y0 } = this.frozen();
     const z = this.zoom;
-    const x = HEADER_W + this.cols.pos(c.at.col) + c.at.dx * z - (c.at.col < fc ? 0 : this.scroller.scrollLeft);
-    const y = HEADER_H + this.rows.pos(c.at.row) + c.at.dy * z - (c.at.row < fr ? 0 : this.scroller.scrollTop);
+    // (in a split window, charts show in the lower right pane)
+    const x = (c.at.col < fc ? this.HW : x0 - this.scroller.scrollLeft) + this.cols.pos(c.at.col) + c.at.dx * z;
+    const y = (c.at.row < fr ? this.HH : y0 - this.scroller.scrollTop) + this.rows.pos(c.at.row) + c.at.dy * z;
     return { x, y, w: c.w * z, h: c.h * z };
   }
 
   /** The cell and offset (pixels at 100%) of a point on the sheet, for placing a chart. */
-  private anchorAt(sheetX: number, sheetY: number): Chart['at'] {
+  anchorAt(sheetX: number, sheetY: number): Chart['at'] {
     const col = this.cols.at(Math.max(0, sheetX)), row = this.rows.at(Math.max(0, sheetY));
     return { row, col, dx: Math.max(0, (sheetX - this.cols.pos(col)) / this.zoom), dy: Math.max(0, (sheetY - this.rows.pos(row)) / this.zoom) };
   }
@@ -584,13 +822,15 @@ export class SheetView {
     const charts = this.chartsShown();
     if (!charts.length) return;
     const ctx = this.ctx;
+    const { x0, y0, SH, SW } = this.frozen();
+    const left = SW ? x0 : this.HW, top = SH ? y0 : this.HH;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(HEADER_W, HEADER_H, vw - HEADER_W, vh - HEADER_H);
+    ctx.rect(left, top, vw - left, vh - top);
     ctx.clip();
     for (const c of charts) {
       const b = this.chartBox(c);
-      if (b.x > vw || b.y > vh || b.x + b.w < HEADER_W || b.y + b.h < HEADER_H) continue;
+      if (b.x > vw || b.y > vh || b.x + b.w < left || b.y + b.h < top) continue;
       const pic = this.chartPicture(c);
       ctx.drawImage(pic.canvas, b.x, b.y, b.w, b.h);
       if (c.id === this.chartSel) {
@@ -616,7 +856,7 @@ export class SheetView {
 
   /** The chart under a point (the top one), and which part of it. */
   private chartAt(x: number, y: number): { chart: Chart; how: Extract<Drag, { kind: 'chart' }>['how']; series?: number } | null {
-    if (x < HEADER_W || y < HEADER_H) return null;
+    if (x < this.HW || y < this.HH) return null;
     const charts = this.chartsShown();
     for (let i = charts.length - 1; i >= 0; i--) {
       const c = charts[i];
@@ -645,10 +885,10 @@ export class SheetView {
     if (!d.moved && Math.abs(dx) + Math.abs(dy) < 3) return;
     d.moved = true;
     const box = this.chartBox(o);
-    const { fr, fc } = this.frozen();
+    const { fr, fc, x0, y0 } = this.frozen();
     const toSheet = (vx: number, vy: number) => ({
-      x: vx - HEADER_W + (o.at.col < fc ? 0 : this.scroller.scrollLeft),
-      y: vy - HEADER_H + (o.at.row < fr ? 0 : this.scroller.scrollTop),
+      x: o.at.col < fc ? vx - this.HW : vx - x0 + this.scroller.scrollLeft,
+      y: o.at.row < fr ? vy - this.HH : vy - y0 + this.scroller.scrollTop,
     });
     let next: Chart;
     if (d.how === 'label') {
@@ -704,9 +944,9 @@ export class SheetView {
       e.preventDefault();
       const step = e.shiftKey ? 10 : 1;
       const b = this.chartBox(c);
-      const { fr, fc } = this.frozen();
-      const sx = b.x - HEADER_W + (c.at.col < fc ? 0 : this.scroller.scrollLeft) + arrows[k][0] * step * this.zoom;
-      const sy = b.y - HEADER_H + (c.at.row < fr ? 0 : this.scroller.scrollTop) + arrows[k][1] * step * this.zoom;
+      const { fr, fc, x0, y0 } = this.frozen();
+      const sx = (c.at.col < fc ? b.x - this.HW : b.x - x0 + this.scroller.scrollLeft) + arrows[k][0] * step * this.zoom;
+      const sy = (c.at.row < fr ? b.y - this.HH : b.y - y0 + this.scroller.scrollTop) + arrows[k][1] * step * this.zoom;
       this.replaceChart({ ...c, at: this.anchorAt(sx, sy) }, 'Move chart');
       return true;
     }
@@ -716,9 +956,363 @@ export class SheetView {
     return true;
   }
 
+  // ---------------------------------------------------------------- pictures, shapes and text boxes
+
+  private objectsShown(): SheetObject[] {
+    const list = this.sheet?.objects ?? [];
+    const p = this.objPreview;
+    return p ? list.map((o) => (o.id === p.id ? p : o)) : list;
+  }
+
+  get selectedObject(): SheetObject | null {
+    if (this.objSel === null) return null;
+    return this.sheet?.objects.find((o) => o.id === this.objSel) ?? null;
+  }
+
+  /** Pick a picture, shape or text box (null: back to the cells). */
+  pickObject(id: number | null): void {
+    if (id === this.objSel) return;
+    this.objSel = id;
+    if (id !== null) this.chartSel = null;
+    this.render();
+    this.host.changed();
+  }
+
+  /** Where a new object goes: by the active cell, in sight. */
+  newObjectPlace(): Chart['at'] {
+    const { r, c } = this.sel.active;
+    return { row: r, col: c, dx: 8, dy: 4 };
+  }
+
+  private objectImage(src: string): HTMLImageElement | null {
+    let img = this.objImages.get(src);
+    if (!img) {
+      img = new Image();
+      img.onload = () => this.render();
+      img.src = src;
+      this.objImages.set(src, img);
+    }
+    return img.complete && img.naturalWidth ? img : null;
+  }
+
+  private drawObjects(vw: number, vh: number): void {
+    const list = this.objectsShown();
+    if (!list.length) return;
+    const ctx = this.ctx, z = this.zoom;
+    // (in a split window, like charts, only in the lower right pane)
+    const { x0, y0, SH, SW } = this.frozen();
+    const left = SW ? x0 : this.HW, top = SH ? y0 : this.HH;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(left, top, vw - left, vh - top);
+    ctx.clip();
+    for (const o of list) {
+      const b = this.chartBox(o);
+      if (b.x > vw + 50 || b.y > vh + 50 || b.x + b.w < left - 50 || b.y + b.h < top - 50) continue;
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      if (o.rot) { ctx.translate(b.w / 2, b.h / 2); ctx.rotate((o.rot * Math.PI) / 180); ctx.translate(-b.w / 2, -b.h / 2); }
+      this.paintObject(ctx, o, z);
+      ctx.restore();
+      if (o.id === this.objSel) this.drawObjectHandles(o, b);
+    }
+    ctx.restore();
+  }
+
+  /** One object drawn at the origin, `z` pixels to each pixel at 100%. */
+  paintObject(ctx: CanvasRenderingContext2D, o: SheetObject, z: number): void {
+    const look = objectLook(o);
+    const w = o.w * z, h = o.h * z;
+    const lw = Math.max(0.5, (look.lineW * 4) / 3 * z);
+    if (o.kind === 'picture') {
+      const img = o.src ? this.objectImage(o.src) : null;
+      if (img) ctx.drawImage(img, 0, 0, w, h);
+      else { ctx.fillStyle = '#f0f1f4'; ctx.fillRect(0, 0, w, h); }
+      if (look.line !== 'none') { ctx.strokeStyle = look.line; ctx.lineWidth = lw; ctx.strokeRect(0, 0, w, h); }
+      return;
+    }
+    if (isLine(o)) {
+      const [x1, y1, x2, y2] = lineEnds(o, w, h);
+      ctx.strokeStyle = look.line;
+      ctx.lineWidth = lw;
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      const head = arrowHead(o, w, h, lw);
+      if (head) { ctx.fillStyle = look.line; ctx.fill(new Path2D(head)); }
+      return;
+    }
+    const path = new Path2D(shapePath(o.shape ?? 'rect', w, h));
+    if (look.fill !== 'none') { ctx.fillStyle = look.fill; ctx.fill(path); }
+    if (look.line !== 'none') { ctx.strokeStyle = look.line; ctx.lineWidth = lw; ctx.stroke(path); }
+    if (o.text) {
+      const size = ((o.size ?? 11) * 96) / 72 * z;
+      const font = `${o.italic ? 'italic ' : ''}${o.bold ? 'bold ' : ''}${size.toFixed(2)}px ${o.font ? `"${o.font}", ` : ''}${CELL_FONT}`;
+      const pad = 7 * z;
+      const lines = this.wrapLines(o.text, font, Math.max(4, w - 2 * pad));
+      const lh = size * 1.2;
+      const align = o.align ?? (o.kind === 'text' ? 'left' : 'center');
+      const valign = o.valign ?? (o.kind === 'text' ? 'top' : 'middle');
+      const total = lines.length * lh;
+      let y = valign === 'top' ? pad * 0.6 : valign === 'bottom' ? h - pad * 0.6 - total : (h - total) / 2;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip();
+      ctx.font = font;
+      ctx.fillStyle = look.color;
+      ctx.textBaseline = 'top';
+      ctx.textAlign = align === 'center' ? 'center' : align === 'right' ? 'right' : 'left';
+      const x = align === 'center' ? w / 2 : align === 'right' ? w - pad : pad;
+      for (const line of lines) { ctx.fillText(line, x, y + size * 0.1); y += lh; }
+      ctx.restore();
+    }
+  }
+
+  private objectHandles(o: SheetObject, b: Box): [number, number, Handle][] {
+    if (isLine(o)) {
+      const [x1, y1, x2, y2] = lineEnds(o, b.w, b.h);
+      return [[b.x + x1, b.y + y1, 'start'], [b.x + x2, b.y + y2, 'end']];
+    }
+    return this.handlePoints(b) as [number, number, Handle][];
+  }
+
+  private drawObjectHandles(o: SheetObject, b: Box): void {
+    const ctx = this.ctx;
+    ctx.strokeStyle = this.accent();
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash(isLine(o) ? [] : [4, 3]);
+    if (!isLine(o)) ctx.strokeRect(Math.round(b.x) + 0.5, Math.round(b.y) + 0.5, Math.round(b.w) - 1, Math.round(b.h) - 1);
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ffffff';
+    for (const [hx, hy] of this.objectHandles(o, b)) {
+      ctx.beginPath();
+      ctx.arc(hx, hy, HANDLE / 2 + 0.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+
+  /** The object under a point (the top one), and which handle. */
+  private objectAt(x: number, y: number): { o: SheetObject; how: Handle } | null {
+    if (x < this.HW || y < this.HH) return null;
+    const list = this.objectsShown();
+    const sel = list.find((o) => o.id === this.objSel);
+    if (sel) {
+      for (const [hx, hy, how] of this.objectHandles(sel, this.chartBox(sel))) if (Math.abs(x - hx) <= HANDLE && Math.abs(y - hy) <= HANDLE) return { o: sel, how };
+    }
+    for (let i = list.length - 1; i >= 0; i--) {
+      const o = list[i], b = this.chartBox(o);
+      if (isLine(o)) {
+        const [x1, y1, x2, y2] = lineEnds(o, b.w, b.h);
+        const dx = x2 - x1, dy = y2 - y1, len2 = dx * dx + dy * dy || 1;
+        const t = Math.max(0, Math.min(1, ((x - b.x - x1) * dx + (y - b.y - y1) * dy) / len2));
+        if (Math.hypot(b.x + x1 + t * dx - x, b.y + y1 + t * dy - y) <= 5) return { o, how: 'move' };
+        continue;
+      }
+      // a point turned back by the object's turn, to test against its box
+      let px = x, py = y;
+      if (o.rot) {
+        const cx = b.x + b.w / 2, cy = b.y + b.h / 2, a = (-o.rot * Math.PI) / 180;
+        px = cx + (x - cx) * Math.cos(a) - (y - cy) * Math.sin(a);
+        py = cy + (x - cx) * Math.sin(a) + (y - cy) * Math.cos(a);
+      }
+      if (px >= b.x && py >= b.y && px <= b.x + b.w && py <= b.y + b.h) return { o, how: 'move' };
+    }
+    return null;
+  }
+
+  /** A view point as a point on the sheet (pixels at this zoom), for an object at `at`. */
+  private toSheet(at: Chart['at'], vx: number, vy: number): { x: number; y: number } {
+    const { fr, fc, x0, y0 } = this.frozen();
+    return { x: at.col < fc ? vx - this.HW : vx - x0 + this.scroller.scrollLeft, y: at.row < fr ? vy - this.HH : vy - y0 + this.scroller.scrollTop };
+  }
+
+  private dragObject(d: Extract<Drag, { kind: 'object' }>, x: number, y: number, shift: boolean): void {
+    const z = this.zoom, o = d.orig;
+    const dx = (x - d.x0) / z, dy = (y - d.y0) / z;
+    if (!d.moved && Math.abs(dx) + Math.abs(dy) < 3) return;
+    d.moved = true;
+    const box = this.chartBox(o);
+    let next: SheetObject;
+    if (d.how === 'move') {
+      const p = this.toSheet(o.at, box.x + dx * z, box.y + dy * z);
+      next = { ...o, at: this.anchorAt(p.x, p.y) };
+    } else if (d.how === 'start' || d.how === 'end') {
+      // a line's end moves; the box is made again round both ends
+      const [x1, y1, x2, y2] = lineEnds(o, o.w, o.h);
+      let a = { x: x1, y: y1 }, b = { x: x2, y: y2 };
+      if (d.how === 'start') a = { x: x1 + dx, y: y1 + dy }; else b = { x: x2 + dx, y: y2 + dy };
+      const left = Math.min(a.x, b.x), top = Math.min(a.y, b.y);
+      const p = this.toSheet(o.at, box.x + left * z, box.y + top * z);
+      const flipH = a.x > b.x, flipV = a.y > b.y;
+      next = { ...o, at: this.anchorAt(p.x, p.y), w: Math.max(1, Math.round(Math.abs(b.x - a.x))), h: Math.max(1, Math.round(Math.abs(b.y - a.y))), flipH: flipH || undefined, flipV: flipV || undefined };
+    } else {
+      let bx = box.x, by = box.y, w = o.w, h = o.h;
+      const min = 8;
+      if (d.how.includes('e')) w = Math.max(min, o.w + dx);
+      if (d.how.includes('s')) h = Math.max(min, o.h + dy);
+      if (d.how.includes('w')) w = Math.max(min, o.w - dx);
+      if (d.how.includes('n')) h = Math.max(min, o.h - dy);
+      // pictures keep their shape from a corner (Shift does it for shapes)
+      if (d.how.length === 2 && (o.kind === 'picture') !== shift) {
+        const k = Math.max(w / o.w, h / o.h);
+        w = Math.max(min, o.w * k); h = Math.max(min, o.h * k);
+      }
+      if (d.how.includes('w')) bx += (o.w - w) * z;
+      if (d.how.includes('n')) by += (o.h - h) * z;
+      const p = this.toSheet(o.at, bx, by);
+      next = { ...o, at: this.anchorAt(p.x, p.y), w: Math.round(w), h: Math.round(h) };
+      this.host.flash(`${Math.round(w)} × ${Math.round(h)} pixels`, 800);
+    }
+    this.objPreview = next;
+    this.render();
+  }
+
+  /** Put a changed object in the sheet (one undo step). */
+  replaceObject(o: SheetObject, label = 'Change shape'): void {
+    const s = this.sheet!;
+    this.wb!.edit(label, () => s.setObjects(s.objects.map((x) => (x.id === o.id ? o : x))), this.place());
+    this.render();
+    this.host.changed();
+  }
+
+  deleteObject(id = this.objSel): void {
+    const s = this.sheet;
+    if (id === null || !s) return;
+    const o = s.objects.find((x) => x.id === id);
+    this.wb!.edit(`Delete ${o?.kind === 'picture' ? 'picture' : o?.kind === 'text' ? 'text box' : 'shape'}`, () => s.setObjects(s.objects.filter((x) => x.id !== id)), this.place());
+    if (this.objSel === id) this.objSel = null;
+    this.render();
+    this.host.changed();
+  }
+
+  /** Keys while an object is picked: Delete, arrows to nudge, Esc back to the cells, Enter or F2 to change its text. */
+  private objectKey(e: KeyboardEvent): boolean {
+    const o = this.selectedObject;
+    if (!o) { this.objSel = null; return false; }
+    const k = e.key;
+    if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); this.deleteObject(); return true; }
+    if (k === 'Escape') { e.preventDefault(); this.pickObject(null); return true; }
+    const arrows: Record<string, [number, number]> = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+    if (arrows[k]) {
+      e.preventDefault();
+      const step = (e.shiftKey ? 10 : 1) * this.zoom;
+      const b = this.chartBox(o);
+      const p = this.toSheet(o.at, b.x + arrows[k][0] * step, b.y + arrows[k][1] * step);
+      this.replaceObject({ ...o, at: this.anchorAt(p.x, p.y) }, 'Move');
+      return true;
+    }
+    if ((k === 'Enter' || k === 'F2') && o.kind !== 'picture' && !isLine(o)) { e.preventDefault(); this.host.editObject?.(o.id); return true; }
+    if (this.host.key(e)) { e.preventDefault(); return true; }
+    if (k.length === 1 && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      this.host.typeInObject?.(o.id, k);
+    }
+    return true;
+  }
+
+  // ---------------------------------------------------------------- page breaks
+
+  private pageBreaks(): NonNullable<SheetView['breakCache']> {
+    const s = this.sheet!;
+    const key = `${s.uid}|${this.wb!.edits}`;
+    if (this.breakCache?.key === key) return this.breakCache;
+    const p = sheetPages(s, sheetSizes(s, (r) => this.rowHeight(r)), defaultPaper(navigator.language));
+    const { rows, cols } = breakLines(p);
+    // breaks between two pages (not the edges of what prints), which Page Break Preview can drag
+    const innerRows = new Set(p.pages.filter((a) => p.pages.some((b) => b.rows[1] === a.rows[0] - 1 && b.cols[0] === a.cols[0])).map((a) => a.rows[0]));
+    const innerCols = new Set(p.pages.filter((a) => p.pages.some((b) => b.cols[1] === a.cols[0] - 1 && b.rows[0] === a.rows[0])).map((a) => a.cols[0]));
+    this.breakCache = { key, rows, cols, manualRows: new Set(s.pageSetup?.fit ? [] : s.pageSetup?.rowBreaks ?? []), manualCols: new Set(s.pageSetup?.fit ? [] : s.pageSetup?.colBreaks ?? []), pages: p.pages, innerRows, innerCols };
+    return this.breakCache;
+  }
+
+  /**
+   * Page Break Preview: what doesn't print greyed, each page's number over it, and the breaks as
+   * blue lines (dashed where Excel put them, solid where put by hand or at the edge of what prints).
+   */
+  private drawBreakPreview(g: Region): void {
+    const b = this.pageBreaks();
+    const ctx = this.ctx;
+    const X = (c: number) => g.x + this.cols.pos(c) - g.ox;
+    const Y = (r: number) => g.y + this.rows.pos(r) - g.oy;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(g.x, g.y, g.w, g.h);
+    ctx.clip();
+    const box = (p: PrintPage) => ({ x: X(p.cols[0]), y: Y(p.rows[0]), w: X(p.cols[1] + 1) - X(p.cols[0]), h: Y(p.rows[1] + 1) - Y(p.rows[0]) });
+    ctx.beginPath();
+    ctx.rect(g.x, g.y, g.w, g.h);
+    for (const p of b.pages) { const r = box(p); ctx.rect(r.x, r.y, r.w, r.h); }
+    ctx.fillStyle = 'rgba(110, 116, 128, 0.32)';
+    ctx.fill('evenodd');
+    ctx.font = `bold ${Math.round(44 * this.zoom)}px ${CELL_FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(120, 130, 150, 0.3)';
+    for (const p of b.pages) {
+      const r = box(p);
+      if (r.x > g.x + g.w || r.y > g.y + g.h || r.x + r.w < g.x || r.y + r.h < g.y) continue;
+      ctx.fillText(`Page ${p.index}`, r.x + r.w / 2, r.y + r.h / 2);
+    }
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.strokeStyle = '#2f5bd3';
+    ctx.lineWidth = 2.5;
+    for (const p of b.pages) {
+      const r = box(p);
+      const edge = (x1: number, y1: number, x2: number, y2: number, dashed: boolean) => {
+        ctx.setLineDash(dashed ? [6, 4] : []);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      };
+      // the left and top edges of a page that follows another are its breaks
+      edge(r.x, r.y, r.x + r.w, r.y, b.innerRows.has(p.rows[0]) && !b.manualRows.has(p.rows[0]));
+      edge(r.x, r.y, r.x, r.y + r.h, b.innerCols.has(p.cols[0]) && !b.manualCols.has(p.cols[0]));
+      edge(r.x + r.w, r.y, r.x + r.w, r.y + r.h, false);
+      edge(r.x, r.y + r.h, r.x + r.w, r.y + r.h, false);
+    }
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  /** Page Break Preview: the break between two pages under a point, to drag. */
+  private breakAt(x: number, y: number): { axis: 'row' | 'col'; at: number } | null {
+    if (this.sheet?.viewOpts?.layout !== 'pageBreakPreview' || x < this.HW || y < this.HH) return null;
+    const b = this.pageBreaks();
+    const g = this.regionAt(x, y);
+    const sx = x - g.x + g.ox, sy = y - g.y + g.oy;
+    for (const r of b.innerRows) if (Math.abs(this.rows.pos(r) - sy) <= 3) return { axis: 'row', at: r };
+    for (const c of b.innerCols) if (Math.abs(this.cols.pos(c) - sx) <= 3) return { axis: 'col', at: c };
+    return null;
+  }
+
+  /** Page Layout > Page Breaks: dashed lines where Excel would start new pages, solid ones for breaks put in by hand. */
+  private drawPageBreaks(g: Region): void {
+    const b = this.pageBreaks();
+    const ctx = this.ctx;
+    const X = (c: number) => Math.round(g.x + this.cols.pos(c) - g.ox) - 0.5;
+    const Y = (r: number) => Math.round(g.y + this.rows.pos(r) - g.oy) - 0.5;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(g.x, g.y, g.w, g.h);
+    ctx.clip();
+    ctx.lineWidth = 1.5;
+    for (const manual of [false, true]) {
+      ctx.strokeStyle = manual ? '#2f5bd3' : '#4a4f5a';
+      ctx.setLineDash(manual ? [] : [5, 4]);
+      ctx.beginPath();
+      for (let c = g.c1; c <= g.c2 + 1; c++) if (b.cols.has(c) && b.manualCols.has(c) === manual) { ctx.moveTo(X(c), g.y); ctx.lineTo(X(c), g.y + g.h); }
+      for (let r = g.r1; r <= g.r2 + 1; r++) if (b.rows.has(r) && b.manualRows.has(r) === manual) { ctx.moveTo(g.x, Y(r)); ctx.lineTo(g.x + g.w, Y(r)); }
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
   private font(style: CellStyle | undefined, z = this.zoom, pos: 'base' | 'sub' | 'sup' = 'base', italic = false): string {
     const size = ((style?.size ?? CELL_SIZE) * 96) / 72 * z * (pos === 'base' ? 1 : 0.7);
-    return `${style?.italic || italic ? 'italic ' : ''}${style?.bold ? 'bold ' : ''}${size.toFixed(2)}px ${style?.font ? `"${style.font}", ` : ''}${CELL_FONT}`;
+    // cells with no font of their own are in the theme's body font
+    const family = style?.font ?? (this.wb?.theme ? themeOf(this.wb.theme).minor : undefined);
+    return `${style?.italic || italic ? 'italic ' : ''}${style?.bold ? 'bold ' : ''}${size.toFixed(2)}px ${family ? `"${family}", ` : ''}${CELL_FONT}`;
   }
 
   private textWidth(text: string, font: string): number {
@@ -747,21 +1341,29 @@ export class SheetView {
     const z = this.zoom;
     const X = (c: number) => g.x + this.cols.pos(c) - g.ox;
     const Y = (r: number) => g.y + this.rows.pos(r) - g.oy;
-    // grid lines
-    ctx.strokeStyle = '#e1e4e8';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let c = g.c1; c <= g.c2 + 1; c++) {
-      const x = Math.round(X(c)) - 0.5;
-      ctx.moveTo(x, g.y);
-      ctx.lineTo(x, g.y + g.h);
+    // Page Layout view: sheets of paper on grey, the cells only on the paper inside the margins
+    const pg = this.pageGrid;
+    if (pg) this.drawPaper(g, pg, X, Y);
+    // grid lines (unless hidden: View > Gridlines)
+    if (s.viewOpts?.gridlines !== false) {
+      ctx.strokeStyle = '#e1e4e8';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let c = g.c1; c <= g.c2 + 1; c++) {
+        const x = Math.round(X(c)) - 0.5;
+        ctx.moveTo(x, g.y);
+        ctx.lineTo(x, g.y + g.h);
+        // pages have gaps between them: each column's right edge too
+        if (pg) { const x2 = Math.round(X(c) + this.cols.size(c)) - 0.5; ctx.moveTo(x2, g.y); ctx.lineTo(x2, g.y + g.h); }
+      }
+      for (let r = g.r1; r <= g.r2 + 1; r++) {
+        const y = Math.round(Y(r)) - 0.5;
+        ctx.moveTo(g.x, y);
+        ctx.lineTo(g.x + g.w, y);
+        if (pg) { const y2 = Math.round(Y(r) + this.rows.size(r)) - 0.5; ctx.moveTo(g.x, y2); ctx.lineTo(g.x + g.w, y2); }
+      }
+      ctx.stroke();
     }
-    for (let r = g.r1; r <= g.r2 + 1; r++) {
-      const y = Math.round(Y(r)) - 0.5;
-      ctx.moveTo(g.x, y);
-      ctx.lineTo(g.x + g.w, y);
-    }
-    ctx.stroke();
     // merged blocks in view
     const merges = s.merges.filter((m) => m.r2 >= g.r1 && m.r1 <= g.r2 && m.c2 >= g.c1 && m.c1 <= g.c2);
     const inMerge = (r: number, c: number) => merges.find((m) => inRange(m, r, c));
@@ -797,10 +1399,16 @@ export class SheetView {
         }
         if (look?.bar) this.drawDataBar(look.bar, x, y, w, h);
         if (look?.icon) this.drawIcon(look.icon.set, look.icon.level, x + 3 * z, y + h / 2, Math.min(14 * z, h - 4));
+        if (s.sparklines.length) {
+          const sp = sparklineAt(s.sparklines, rr, cc);
+          if (sp) this.drawSparkline(s, sp.group, sp.item, x, y, w, h);
+        }
         if (cell?.structure) this.drawStructure(cell.structure, x, y, w, h, style, budget);
         else if (look?.hideValue) { /* only the bar or icon shows */ }
         else if (v !== undefined && v !== null && v !== '' && c > spillUntil) {
-          const last = this.drawText(rr, cc, x, y, w, h, style, g, X);
+          // a compound (Data > Data Types): its mark before the name, as Excel marks its data types
+          const mark = cell?.compound ? this.drawCompoundMark(x, y, h) : 0;
+          const last = this.drawText(rr, cc, x + mark, y, w - mark, h, style, g, X);
           if (last > c) spillUntil = last;
         }
         if (style?.borders) borders.push(() => this.drawBorders(style.borders!, x, y, w, h));
@@ -813,8 +1421,20 @@ export class SheetView {
           ctx.lineTo(x, y + 6 * z);
           ctx.fill();
         }
+        const note = s.notes.size ? s.noteAt(rr, cc) : undefined;
         if (isError(v) && v.code !== '#BUSY!') {
+          // (at the bottom when a note's mark has the top corner)
+          const top = note ? y + h - 1 : y, edge = note ? y + h - 1 - 6 * z : y + 6 * z;
           ctx.fillStyle = '#18794e';
+          ctx.beginPath();
+          ctx.moveTo(x + w - 7 * z, top);
+          ctx.lineTo(x + w - 1, top);
+          ctx.lineTo(x + w - 1, edge);
+          ctx.fill();
+        }
+        // a note: a red triangle in the top right corner; a comment: purple, as in Excel
+        if (note) {
+          ctx.fillStyle = note.kind === 'comment' ? (note.done ? '#a59bb8' : '#7b3fbf') : '#e02020';
           ctx.beginPath();
           ctx.moveTo(x + w - 7 * z, y);
           ctx.lineTo(x + w - 1, y);
@@ -825,6 +1445,7 @@ export class SheetView {
       }
     }
     for (const b of borders) b();
+    if (pg) ctx.restore();
     // the copied cells
     const cp = this.copied;
     if (cp && cp.sheet === s) {
@@ -836,6 +1457,175 @@ export class SheetView {
       ctx.strokeRect(x1 + 0.5, y1 + 0.5, x2 - x1 - 2, y2 - y1 - 2);
       ctx.restore();
     }
+    // the array the active cell spilled into (or would, dashed, when something is in the way)
+    const sp = s.spillAt(this.sel.active.r, this.sel.active.c);
+    if (sp) {
+      const x1 = X(sp.range.c1), y1 = Y(sp.range.r1), x2 = X(sp.range.c2 + 1), y2 = Y(sp.range.r2 + 1);
+      ctx.save();
+      if (sp.blocked) ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = '#4a7fd6';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x1 + 1.5, y1 + 1.5, x2 - x1 - 3, y2 - y1 - 3);
+      ctx.restore();
+    }
+  }
+
+  /**
+   * Page Layout view: grey round the pages, each page white with its header and footer, and the
+   * cells clipped to the part inside the margins (the clip is undone at the end of drawRegion).
+   */
+  private drawPaper(g: Region, pg: PageGrid, X: (c: number) => number, Y: (r: number) => number): void {
+    const s = this.sheet!, ctx = this.ctx, m = pg.margins;
+    ctx.fillStyle = '#dfe2e7';
+    ctx.fillRect(g.x, g.y, g.w, g.h);
+    const bands = (starts: number[], lo: number, hi: number) => {
+      const out: [number, number][] = [];
+      for (let k = 0; k + 1 < starts.length; k++) if (starts[k + 1] - 1 >= lo && starts[k] <= hi) out.push([starts[k], starts[k + 1] - 1]);
+      return out;
+    };
+    const rowBands = bands(pg.rowStarts, g.r1, g.r2), colBands = bands(pg.colStarts, g.c1, g.c2);
+    // pages of the cells in use get their header, footer and number
+    const used = s.usedRange();
+    const usedRows = used ? pg.rowStarts.filter((r, k) => k + 1 < pg.rowStarts.length && r <= used.r2).length : 0;
+    const usedCols = used ? pg.colStarts.filter((c, k) => k + 1 < pg.colStarts.length && c <= used.c2).length : 0;
+    const pages = usedRows * usedCols;
+    const content: { x: number; y: number; w: number; h: number }[] = [];
+    for (const [r1] of rowBands) {
+      for (const [c1] of colBands) {
+        const px = X(c1) - m.left, py = Y(r1) - m.top;
+        ctx.fillStyle = 'rgba(0,0,0,0.12)';
+        ctx.fillRect(px + 2, py + 2, pg.paperW, pg.paperH);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(px, py, pg.paperW, pg.paperH);
+        content.push({ x: X(c1), y: Y(r1), w: pg.paperW - m.left - m.right, h: pg.paperH - m.top - m.bottom });
+        const rb = pg.rowStarts.indexOf(r1), cb = pg.colStarts.indexOf(c1);
+        if (rb < usedRows && cb < usedCols) {
+          const index = (s.pageSetup?.order === 'over' ? rb * usedCols + cb : cb * usedRows + rb) + (s.pageSetup?.firstPage ?? 1);
+          this.drawHeaderFooter(s, px, py, pg, index, pages);
+        }
+      }
+    }
+    ctx.save();
+    ctx.beginPath();
+    for (const b of content) ctx.rect(b.x, b.y, b.w, b.h);
+    ctx.clip();
+  }
+
+  /** A page's header and footer in Page Layout view (double-click them to change them). */
+  private drawHeaderFooter(s: Sheet, px: number, py: number, pg: PageGrid, page: number, pages: number): void {
+    const ps = s.pageSetup, ctx = this.ctx, m = pg.margins;
+    const first = ps?.differentFirst && page === (ps.firstPage ?? 1);
+    const head = first ? ps?.firstHeader : ps?.header, foot = first ? ps?.firstFooter : ps?.footer;
+    const hf = { page, pages, sheet: s.name, file: '', date: new Date() };
+    ctx.save();
+    ctx.font = `${(11 * 96) / 72 * this.zoom}px ${CELL_FONT}`;
+    ctx.fillStyle = '#3a414d';
+    const put = (h: typeof head, base: number) => {
+      for (const k of ['left', 'center', 'right'] as const) {
+        const t = headerRuns(h?.[k], hf).map((r) => r.text).join('');
+        if (!t) continue;
+        ctx.textAlign = k === 'center' ? 'center' : k;
+        ctx.fillText(t, k === 'left' ? px + m.left : k === 'right' ? px + pg.paperW - m.right : px + pg.paperW / 2, base);
+      }
+    };
+    put(head, py + m.header + 12 * this.zoom);
+    put(foot, py + pg.paperH - m.footer);
+    // an empty header shows where to click
+    if (!head?.left && !head?.center && !head?.right) {
+      ctx.fillStyle = '#a3a9b4';
+      ctx.textAlign = 'center';
+      ctx.fillText('Double-click to add header', px + pg.paperW / 2, py + m.header + 12 * this.zoom);
+    }
+    ctx.restore();
+  }
+
+  /** Is a point in the header or footer of a page in Page Layout view? */
+  headerFooterAt(x: number, y: number): boolean {
+    const pg = this.pageGrid;
+    if (!pg) return false;
+    const g = this.regionAt(x, y);
+    const sy = y - g.y + g.oy;
+    const r = this.rows.at(sy), k = pg.rowStarts.findIndex((st, i) => i + 1 < pg.rowStarts.length && r >= st && r < pg.rowStarts[i + 1]);
+    if (k < 0) return false;
+    const top = this.rows.pos(pg.rowStarts[k]) - pg.margins.top, bottom = top + pg.paperH;
+    return sy >= top && sy < top + pg.margins.top || sy >= bottom - pg.margins.bottom && sy < bottom;
+  }
+
+  /** The values a sparkline charts (null for empty cells; hidden rows and columns left out unless the group shows them). */
+  private sparkValues(s: Sheet, g: SparklineGroup): { values: (number | null)[][]; min?: number; max?: number } {
+    const wb = this.wb!;
+    const key = `${wb.edits}|${s.valuesGen}|${s.uid}`;
+    if (this.sparkCache?.key !== key) this.sparkCache = { key, values: new Map(), limits: new Map() };
+    const c = this.sparkCache;
+    let values = c.values.get(g);
+    if (!values) {
+      values = g.items.map((it) => {
+        const src = sparkSource(it.data);
+        const sh = src?.sheet ? wb.sheetNamed(src.sheet) : s;
+        if (!src || !sh) return [];
+        const R = src.range, out: (number | null)[] = [];
+        for (let r = R.r1; r <= R.r2; r++) {
+          if (!g.hidden && sh.hiddenRows.has(r)) continue;
+          for (let col = R.c1; col <= R.c2; col++) {
+            if (!g.hidden && sh.hiddenCols.has(col)) continue;
+            const v = sh.values.get(keyOf(r, col));
+            out.push(typeof v === 'number' ? v : typeof v === 'boolean' ? Number(v) : null);
+          }
+        }
+        return out;
+      });
+      c.values.set(g, values);
+      const all = values.flat().filter((v): v is number => v !== null);
+      c.limits.set(g, {
+        min: typeof g.minAxis === 'number' ? g.minAxis : g.minAxis === 'group' && all.length ? Math.min(...all, g.kind === 'column' ? 0 : Infinity) : undefined,
+        max: typeof g.maxAxis === 'number' ? g.maxAxis : g.maxAxis === 'group' && all.length ? Math.max(...all) : undefined,
+      });
+    }
+    return { values, ...c.limits.get(g) };
+  }
+
+  /** A sparkline in its cell. */
+  private drawSparkline(s: Sheet, g: SparklineGroup, it: { row: number; col: number }, x: number, y: number, w: number, h: number): void {
+    const { values, min, max } = this.sparkValues(s, g);
+    const vals = values[g.items.findIndex((i) => i.row === it.row && i.col === it.col)] ?? [];
+    const nums = vals.filter((v): v is number => v !== null);
+    const lim = min !== undefined || max !== undefined ? { min: min ?? Math.min(...nums), max: max ?? Math.max(...nums) } : undefined;
+    const shape = sparkShape(g, vals, w - 2, h - 2, lim);
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w - 1, h - 1);
+    ctx.clip();
+    ctx.translate(x + 1, y + 1);
+    if (shape.axis !== undefined) {
+      ctx.strokeStyle = g.axisColor ?? '#000000';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, Math.round(shape.axis) + 0.5);
+      ctx.lineTo(w - 2, Math.round(shape.axis) + 0.5);
+      ctx.stroke();
+    }
+    for (const b of shape.bars ?? []) { ctx.fillStyle = b.color; ctx.fillRect(b.x, b.y, b.w, b.h); }
+    if (shape.line) {
+      ctx.strokeStyle = g.color;
+      ctx.lineWidth = Math.max(0.75, ((g.weight ?? 0.75) * 96) / 72 * this.zoom);
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      let pen = false;
+      for (const p of shape.line) {
+        if (!p) { pen = false; continue; }
+        if (pen) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+        pen = true;
+      }
+      ctx.stroke();
+      for (const d of shape.dots ?? []) {
+        ctx.fillStyle = d.color;
+        ctx.beginPath();
+        ctx.arc(d.x, d.y, Math.max(1.5, 2 * this.zoom), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
   }
 
   /** A data bar across a cell (conditional formatting). */
@@ -1009,20 +1799,45 @@ export class SheetView {
   }
 
   /** Draw a cell's text; returns the last column its text spills into. */
+  /** A compound cell's mark: a small ring at the left of the cell. Returns the room it takes. */
+  private drawCompoundMark(x: number, y: number, h: number): number {
+    const ctx = this.ctx, z = this.zoom;
+    const r = 4.2 * z, cx = x + 3 * z + r, cy = y + h - Math.min(h, 20 * z) / 2 - 0.5;
+    ctx.save();
+    ctx.strokeStyle = '#2b6cb0';
+    ctx.lineWidth = Math.max(1, 1.1 * z);
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = Math.PI / 6 + (i * Math.PI) / 3;
+      const px = cx + r * Math.cos(a), py = cy + r * Math.sin(a);
+      if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    return 2 * r + 4 * z;
+  }
+
   private drawText(r: number, c: number, x: number, y: number, w: number, h: number, style: CellStyle | undefined, g: Region, X: (c: number) => number): number {
     const s = this.sheet!;
     const ctx = this.ctx;
     const v = s.values.get(keyOf(r, c)) ?? null;
+    style = this.chemLook(style, v);
     const shown = formatValue(v, style?.numFmt);
     let text = shown.text;
     const align = style?.align ?? shown.align;
     const font = this.font(style);
     ctx.font = font;
     ctx.fillStyle = shown.color ?? style?.color ?? (isError(v) ? '#b4232a' : '#000000');
-    const pad = 3 * this.zoom;
+    // an indent moves the text in from the side it is aligned to (about three characters a level)
+    const pad = (3 + (align === 'center' ? 0 : 9 * (style?.indent ?? 0))) * this.zoom;
     const lineH = this.lineHeight(style) * this.zoom;
     const valign = style?.valign ?? 'bottom';
     let last = c;
+    if (style?.rotate) { this.drawTurned(text, style, x, y, w, h, pad, align, valign, font); return c; }
     if (style?.wrap) {
       const lines = this.wrapLines(text, font, w - 2 * pad);
       const total = lines.length * lineH;
@@ -1080,6 +1895,53 @@ export class SheetView {
     return last;
   }
 
+  /**
+   * Text turned in its cell (Format Cells > Orientation): at an angle, up or down the cell, or
+   * stacked a letter to a line. Turned text stays in its cell (it doesn't run on over the next).
+   */
+  private drawTurned(text: string, style: CellStyle, x: number, y: number, w: number, h: number, pad: number, align: string, valign: string, font: string): void {
+    const ctx = this.ctx;
+    const lineH = this.lineHeight(style) * this.zoom;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w - 1, h - 1);
+    ctx.clip();
+    text = text.replace(/\n/g, ' ');
+    if (style.rotate === 255) {
+      // stacked: one letter under another, centred across the cell
+      const chars = [...text];
+      const total = chars.length * lineH;
+      let ty = valign === 'top' ? y + 2 : valign === 'middle' ? y + (h - total) / 2 : y + h - total - 2;
+      ctx.textAlign = 'center';
+      const cx = align === 'left' ? x + pad + lineH / 2 : align === 'right' ? x + w - pad - lineH / 2 : x + w / 2;
+      for (const ch of chars) { ctx.fillText(ch, cx, ty + lineH * 0.78); ty += lineH; }
+      ctx.textAlign = 'left';
+      ctx.restore();
+      return;
+    }
+    const a = (style.rotate! * Math.PI) / 180;
+    const tw = this.textWidth(text, font);
+    // the turned text's box, to place it in the cell as aligned
+    const bw = Math.abs(tw * Math.cos(a)) + Math.abs(lineH * Math.sin(a)), bh = Math.abs(tw * Math.sin(a)) + Math.abs(lineH * Math.cos(a));
+    const cx = align === 'left' ? x + pad + bw / 2 : align === 'center' ? x + w / 2 : x + w - pad - bw / 2;
+    const cy = valign === 'top' ? y + 2 + bh / 2 : valign === 'middle' ? y + h / 2 : y + h - 2 - bh / 2;
+    ctx.translate(cx, cy);
+    ctx.rotate(-a);
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    ctx.font = font;
+    ctx.fillText(text, 0, 0);
+    if (style.underline) ctx.fillRect(-tw / 2, lineH * 0.35, tw, Math.max(1, this.zoom));
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+    ctx.restore();
+  }
+
+  /** The cell's look with chemistry on where its text has a formula in it (see showsChem). */
+  private chemLook(style: CellStyle | undefined, v: unknown): CellStyle | undefined {
+    return style?.chem === undefined && showsChem(undefined, v) ? { ...style, chem: true } : style;
+  }
+
   private piecesWidth(text: string, style: CellStyle | undefined): number {
     let w = 0;
     for (const p of chemPieces(text)) w += this.textWidth(p.text, this.font(style, this.zoom, p.pos, p.italic));
@@ -1116,7 +1978,21 @@ export class SheetView {
     const range = growToMerges(s, sel.range);
     const x1 = X(range.c1), y1 = Y(range.r1), x2 = X(range.c2 + 1), y2 = Y(range.r2 + 1);
     const accent = this.accent();
-    const one = range.r1 === range.r2 && range.c1 === range.c2 || !!(s.mergeAt(sel.active.r, sel.active.c) && sameRange(s.mergeAt(sel.active.r, sel.active.c)!, range));
+    // the other blocks selected: shaded, with a thin edge
+    for (const m of sel.more ?? []) {
+      const a = growToMerges(s, m);
+      const mx = X(a.c1), my = Y(a.r1), mw = X(a.c2 + 1) - mx, mh = Y(a.r2 + 1) - my;
+      if (mx > g.x + g.w || my > g.y + g.h || mx + mw < g.x || my + mh < g.y) continue;
+      ctx.save();
+      ctx.globalAlpha = 0.16;
+      ctx.fillStyle = accent;
+      ctx.fillRect(mx, my, mw, mh);
+      ctx.restore();
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(mx + 0.5, my + 0.5, mw - 1, mh - 1);
+    }
+    const one = !sel.more?.length && (range.r1 === range.r2 && range.c1 === range.c2 || !!(s.mergeAt(sel.active.r, sel.active.c) && sameRange(s.mergeAt(sel.active.r, sel.active.c)!, range)));
     if (!one) {
       ctx.save();
       ctx.globalAlpha = 0.12;
@@ -1160,6 +2036,8 @@ export class SheetView {
     const s = this.sheet!;
     const ctx = this.ctx;
     const vw = this.scroller.clientWidth, vh = this.scroller.clientHeight;
+    const HW = this.HW, HH = this.HH, OW = this.OW, OH = this.OH;
+    if (!HW && !HH) return;
     const sel = growToMerges(s, this.sel.range);
     const accent = this.accent();
     const css = getComputedStyle(this.el);
@@ -1167,80 +2045,229 @@ export class SheetView {
     const headText = css.getPropertyValue('--sh-head-text').trim() || '#3a414d';
     const soft = css.getPropertyValue('--accent-soft').trim() || '#d8eee2';
     ctx.fillStyle = headBg;
-    ctx.fillRect(0, 0, vw, HEADER_H);
-    ctx.fillRect(0, 0, HEADER_W, vh);
+    ctx.fillRect(0, 0, vw, HH);
+    ctx.fillRect(0, 0, HW, vh);
     const filtered = s.filterRows();
     ctx.font = `${12 * Math.min(1.2, Math.max(0.8, this.zoom))}px ${CELL_FONT}`;
     ctx.textBaseline = 'middle';
     const allRows = sel.r1 === 0 && sel.r2 >= MAX_ROWS - 1, allCols = sel.c1 === 0 && sel.c2 >= MAX_COLS - 1;
-    // column letters
-    const doneCols = new Set<number>();
-    for (const g of regions) {
+    const heads = s.viewOpts?.headings !== false;
+    // column letters (below the outline's buttons)
+    const doneCols = new Set<string>();
+    if (heads) for (const g of regions) {
       ctx.save();
       ctx.beginPath();
-      ctx.rect(g.x, 0, g.w, HEADER_H);
+      ctx.rect(g.x, OH, g.w, HH - OH);
       ctx.clip();
       for (let c = g.c1; c <= g.c2; c++) {
-        if (doneCols.has(c)) continue;
-        doneCols.add(c);
+        const id = `${g.x}|${c}`;
+        if (doneCols.has(id)) continue;
+        doneCols.add(id);
         const x = g.x + this.cols.pos(c) - g.ox, w = this.cols.size(c);
         if (!w) continue;
         const on = c >= sel.c1 && c <= sel.c2;
         if (on) {
           ctx.fillStyle = soft;
-          ctx.fillRect(x, 0, w, HEADER_H);
+          ctx.fillRect(x, OH, w, HH - OH);
           ctx.fillStyle = accent;
-          ctx.fillRect(x, HEADER_H - 2, w, 2);
+          ctx.fillRect(x, HH - 2, w, 2);
         }
         ctx.fillStyle = on && allRows ? accent : headText;
         ctx.textAlign = 'center';
-        ctx.fillText(colName(c), x + w / 2, HEADER_H / 2 + 1);
+        ctx.fillText(colName(c), x + w / 2, OH + (HH - OH) / 2 + 1);
         ctx.fillStyle = '#d6dae1';
-        ctx.fillRect(Math.round(x + w) - 1, 0, 1, HEADER_H);
+        ctx.fillRect(Math.round(x + w) - 1, OH, 1, HH - OH);
       }
       ctx.restore();
     }
-    // row numbers
-    const doneRows = new Set<number>();
-    for (const g of regions) {
+    // row numbers (right of the outline's buttons)
+    const doneRows = new Set<string>();
+    if (heads) for (const g of regions) {
       ctx.save();
       ctx.beginPath();
-      ctx.rect(0, g.y, HEADER_W, g.h);
+      ctx.rect(OW, g.y, HW - OW, g.h);
       ctx.clip();
       for (let r = g.r1; r <= g.r2; r++) {
-        if (doneRows.has(r)) continue;
-        doneRows.add(r);
+        const id = `${g.y}|${r}`;
+        if (doneRows.has(id)) continue;
+        doneRows.add(id);
         const y = g.y + this.rows.pos(r) - g.oy, h = this.rows.size(r);
         if (!h) continue;
         const on = r >= sel.r1 && r <= sel.r2;
         if (on) {
           ctx.fillStyle = soft;
-          ctx.fillRect(0, y, HEADER_W, h);
+          ctx.fillRect(OW, y, HW - OW, h);
           ctx.fillStyle = accent;
-          ctx.fillRect(HEADER_W - 2, y, 2, h);
+          ctx.fillRect(HW - 2, y, 2, h);
         }
         // rows of a filtered table show their numbers in the accent colour, as in Excel
         const inFilter = filtered && r >= filtered.r1 && r <= filtered.r2 && Object.keys(s.filter!.conditions).length > 0;
         ctx.fillStyle = (on && allCols) || inFilter ? accent : headText;
         ctx.textAlign = 'right';
-        ctx.fillText(String(r + 1), HEADER_W - 6, y + Math.min(h, 20 * this.zoom) / 2 + 1);
+        ctx.fillText(String(r + 1), HW - 6, y + Math.min(h, 20 * this.zoom) / 2 + 1);
         ctx.fillStyle = '#d6dae1';
-        ctx.fillRect(0, Math.round(y + h) - 1, HEADER_W, 1);
+        ctx.fillRect(OW, Math.round(y + h) - 1, HW - OW, 1);
       }
       ctx.restore();
     }
+    if (OW || OH) this.drawOutline(regions, headBg, headText);
     ctx.textBaseline = 'alphabetic';
     ctx.textAlign = 'left';
     // the corner (select all)
     ctx.fillStyle = headBg;
-    ctx.fillRect(0, 0, HEADER_W, HEADER_H);
-    ctx.fillStyle = '#b8bec9';
-    ctx.beginPath();
-    ctx.moveTo(HEADER_W - 4, 6); ctx.lineTo(HEADER_W - 4, HEADER_H - 4); ctx.lineTo(HEADER_W - 4 - (HEADER_H - 10), HEADER_H - 4);
-    ctx.fill();
+    ctx.fillRect(OW, OH, HW - OW, HH - OH);
+    if (heads) {
+      ctx.fillStyle = '#b8bec9';
+      ctx.beginPath();
+      ctx.moveTo(HW - 4, OH + 6); ctx.lineTo(HW - 4, HH - 4); ctx.lineTo(HW - 4 - (HH - OH - 10), HH - 4);
+      ctx.fill();
+    }
+    // the level buttons (1 2 3) of the row outline sit beside the corner, the columns' above it
+    const levelButtons = (n: number, across: boolean) => {
+      ctx.font = `${10 * Math.min(1.2, Math.max(0.8, this.zoom))}px ${CELL_FONT}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (let i = 0; i <= n; i++) {
+        const bx = across ? i * OUTLINE_STEP + 3 : HW - OUTLINE_STEP - 1, by = across ? HH - OUTLINE_STEP - 1 : i * OUTLINE_STEP + 3;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(bx, by, OUTLINE_STEP - 3, OUTLINE_STEP - 3);
+        ctx.strokeStyle = '#8a93a3';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bx + 0.5, by + 0.5, OUTLINE_STEP - 4, OUTLINE_STEP - 4);
+        ctx.fillStyle = headText;
+        ctx.fillText(String(i + 1), bx + (OUTLINE_STEP - 3) / 2, by + (OUTLINE_STEP - 3) / 2 + 0.5);
+      }
+      ctx.textBaseline = 'alphabetic';
+      ctx.textAlign = 'left';
+    };
+    if (OW) { ctx.fillStyle = headBg; ctx.fillRect(0, 0, OW, HH); levelButtons(maxLevel(s, 'row'), true); }
+    if (OH) { ctx.fillStyle = headBg; ctx.fillRect(0, 0, HW, OH); levelButtons(maxLevel(s, 'col'), false); }
     ctx.fillStyle = '#c5cad3';
-    ctx.fillRect(0, HEADER_H - 1, vw, 1);
-    ctx.fillRect(HEADER_W - 1, 0, 1, vh);
+    ctx.fillRect(0, HH - 1, vw, 1);
+    ctx.fillRect(HW - 1, 0, 1, vh);
+  }
+
+  /** The outline beside the row numbers and above the column letters: a bracket for each group, and its − or + button. */
+  private drawOutline(regions: Region[], bg: string, ink: string): void {
+    const ctx = this.ctx;
+    const vw = this.scroller.clientWidth, vh = this.scroller.clientHeight;
+    const box = OUTLINE_STEP - 5;
+    const button = (cx: number, cy: number, plus: boolean) => {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(cx - box / 2, cy - box / 2, box, box);
+      ctx.strokeStyle = '#7b8494';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(Math.round(cx - box / 2) + 0.5, Math.round(cy - box / 2) + 0.5, box - 1, box - 1);
+      ctx.fillStyle = ink;
+      ctx.fillRect(Math.round(cx - box / 2 + 2), Math.round(cy) - 0.5, box - 4, 1.2);
+      if (plus) ctx.fillRect(Math.round(cx) - 0.5, Math.round(cy - box / 2 + 2), 1.2, box - 4);
+    };
+    if (this.OW) {
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, this.HH, this.OW, vh);
+      const done = new Set<number>();
+      for (const g of regions) {
+        if (done.has(g.y)) continue;
+        done.add(g.y);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, g.y, this.OW, g.h);
+        ctx.clip();
+        const Y = (r: number) => g.y + this.rows.pos(r) - g.oy;
+        for (const o of this.rowOutline) {
+          if (o.to < g.r1 - 1 && o.button < g.r1) continue;
+          if (o.from > g.r2 + 1 && o.button > g.r2) continue;
+          const cx = (o.level - 1) * OUTLINE_STEP + OUTLINE_STEP / 2 + 2;
+          const by = Y(o.button) + Math.min(this.rows.size(o.button) || DEFAULT_ROW_H * this.zoom, 20 * this.zoom) / 2;
+          if (!o.collapsed) {
+            const y1 = Y(o.from) + 2, y2 = Y(o.to + 1) - 1;
+            ctx.strokeStyle = '#7b8494';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(cx + 0.5, Math.min(y1, by));
+            ctx.lineTo(cx + 0.5, Math.max(y2, by));
+            // a tick at the far end from the button
+            const tip = o.button > o.to ? y1 : y2;
+            ctx.moveTo(cx + 0.5, tip + 0.5);
+            ctx.lineTo(cx + 5.5, tip + 0.5);
+            ctx.stroke();
+          }
+          button(cx + 0.5, by, o.collapsed);
+        }
+        ctx.restore();
+      }
+    }
+    if (this.OH) {
+      ctx.fillStyle = bg;
+      ctx.fillRect(this.HW, 0, vw, this.OH);
+      const done = new Set<number>();
+      for (const g of regions) {
+        if (done.has(g.x)) continue;
+        done.add(g.x);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(g.x, 0, g.w, this.OH);
+        ctx.clip();
+        const X = (c: number) => g.x + this.cols.pos(c) - g.ox;
+        for (const o of this.colOutline) {
+          if (o.to < g.c1 - 1 && o.button < g.c1) continue;
+          if (o.from > g.c2 + 1 && o.button > g.c2) continue;
+          const cy = (o.level - 1) * OUTLINE_STEP + OUTLINE_STEP / 2 + 2;
+          const bx = X(o.button) + (this.cols.size(o.button) || DEFAULT_COL_W * this.zoom) / 2;
+          if (!o.collapsed) {
+            const x1 = X(o.from) + 2, x2 = X(o.to + 1) - 1;
+            ctx.strokeStyle = '#7b8494';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(Math.min(x1, bx), cy + 0.5);
+            ctx.lineTo(Math.max(x2, bx), cy + 0.5);
+            const tip = o.button > o.to ? x1 : x2;
+            ctx.moveTo(tip + 0.5, cy + 0.5);
+            ctx.lineTo(tip + 0.5, cy + 5.5);
+            ctx.stroke();
+          }
+          button(bx, cy + 0.5, o.collapsed);
+        }
+        ctx.restore();
+      }
+    }
+  }
+
+  /**
+   * A click on the outline: a group's − or + (hide or show its details), or a level button.
+   * True when it was one.
+   */
+  private outlineClick(x: number, y: number): boolean {
+    const s = this.sheet, wb = this.wb;
+    if (!s || !wb || (!this.OW && !this.OH)) return false;
+    const act = (label: string, fn: () => void) => { this.commitEdit(); wb.edit(label, fn, this.place()); this.refresh(); this.host.changed(); };
+    // level buttons
+    if (this.OW && x < this.OW && y >= this.HH - OUTLINE_STEP - 1 && y < this.HH) {
+      const n = Math.floor((x - 3) / OUTLINE_STEP) + 1;
+      if (n >= 1 && n <= maxLevel(s, 'row') + 1) act(`Show row level ${n}`, () => showLevel(s, 'row', n));
+      return true;
+    }
+    if (this.OH && y < this.OH && x >= this.HW - OUTLINE_STEP - 1 && x < this.HW) {
+      const n = Math.floor((y - 3) / OUTLINE_STEP) + 1;
+      if (n >= 1 && n <= maxLevel(s, 'col') + 1) act(`Show column level ${n}`, () => showLevel(s, 'col', n));
+      return true;
+    }
+    // a group's button
+    if (this.OW && x < this.OW && y >= this.HH) {
+      const level = Math.floor((x - 2) / OUTLINE_STEP) + 1;
+      const r = this.hit(this.HW, y).r;
+      const g = this.rowOutline.find((o) => o.level === level && o.button === r);
+      if (g) act(g.collapsed ? 'Show Detail' : 'Hide Detail', () => setCollapsed(s, 'row', g, !g.collapsed));
+      return true;
+    }
+    if (this.OH && y < this.OH && x >= this.HW) {
+      const level = Math.floor((y - 2) / OUTLINE_STEP) + 1;
+      const c = this.hit(x, this.HH).c;
+      const g = this.colOutline.find((o) => o.level === level && o.button === c);
+      if (g) act(g.collapsed ? 'Show Detail' : 'Hide Detail', () => setCollapsed(s, 'col', g, !g.collapsed));
+      return true;
+    }
+    return false;
   }
 
   // ---------------------------------------------------------------- sheet tabs
@@ -1371,11 +2398,11 @@ export class SheetView {
   // ---------------------------------------------------------------- selecting
 
   /** Select a block (the active cell at `active`). */
-  select(range: Range, active: Cursor = { r: range.r1, c: range.c1 }, anchor: Cursor = active, reveal = true): void {
+  select(range: Range, active: Cursor = { r: range.r1, c: range.c1 }, anchor: Cursor = active, reveal = true, more?: Range[]): void {
     const s = this.sheet;
     if (!s) return;
     const r = normRange({ r1: clampR(range.r1), c1: clampC(range.c1), r2: clampR(range.r2), c2: clampC(range.c2) });
-    this.sels.set(s, { active: { r: clampR(active.r), c: clampC(active.c) }, anchor: { r: clampR(anchor.r), c: clampC(anchor.c) }, range: r });
+    this.sels.set(s, { active: { r: clampR(active.r), c: clampC(active.c) }, anchor: { r: clampR(anchor.r), c: clampC(anchor.c) }, range: r, ...(more?.length ? { more } : {}) });
     if (r.r2 + 30 > this.extentRows || r.c2 + 8 > this.extentCols) { this.metricsKey = ''; }
     if (reveal) this.reveal(active.r, active.c);
     this.render();
@@ -1388,12 +2415,27 @@ export class SheetView {
     this.select(m ?? { r1: r, c1: c, r2: r, c2: c }, { r: m?.r1 ?? r, c: m?.c1 ?? c });
   }
 
-  /** Grow the selection from its anchor to a cell. */
+  /** Grow the selection from its anchor to a cell (the last block, when several are selected). */
   private extendTo(r: number, c: number, reveal = true): void {
     const sel = this.sel;
     const range = growToMerges(this.sheet!, { r1: sel.anchor.r, c1: sel.anchor.c, r2: r, c2: c });
-    this.select(range, sel.active, sel.anchor, false);
+    this.select(range, sel.active, sel.anchor, false, sel.more);
     if (reveal) this.reveal(r, c);
+  }
+
+  /** Every block selected: the one being worked in first. */
+  areas(): Range[] {
+    const sel = this.sel;
+    return [sel.range, ...(sel.more ?? [])];
+  }
+
+  /** Select several blocks (Go To Special, Find All); the active cell is the first block's corner unless given. */
+  selectAreas(areas: Range[], active?: Cursor): void {
+    if (!areas.length) return;
+    const i = active ? Math.max(0, areas.findIndex((a) => inRange(a, active.r, active.c))) : 0;
+    const first = areas[i];
+    const at = active && inRange(first, active.r, active.c) ? active : { r: first.r1, c: first.c1 };
+    this.select(first, at, at, true, areas.filter((_, j) => j !== i));
   }
 
   /** Ctrl+A: the table around the active cell, then the whole sheet. */
@@ -1472,6 +2514,18 @@ export class SheetView {
 
   // ---------------------------------------------------------------- typing in a cell
 
+  /** Insert > Symbol: type text at the caret in the cell being typed in, or start typing in the active cell (keeping what is there). */
+  typeText(text: string): boolean {
+    if (!this.sheet) return false;
+    if (!this.editing) this.editCell();
+    if (!this.editing) return false;
+    const inp = this.input;
+    inp.setRangeText(text, inp.selectionStart ?? inp.value.length, inp.selectionEnd ?? inp.value.length, 'end');
+    this.host.typing(inp.value);
+    this.fitInput();
+    return true;
+  }
+
   /** Start typing in the active cell: `text` replaces it (typing), or undefined keeps it (F2, double-click). */
   editCell(text?: string): void {
     const s = this.sheet;
@@ -1542,30 +2596,53 @@ export class SheetView {
     inp.style.height = `${inp.scrollHeight}px`;
   }
 
-  /** Put what was typed into the cell. False when nothing was being typed. */
-  commitEdit(dr = 0, dc = 0, allSelected = false): boolean {
+  /**
+   * Put what was typed into the cell. False when nothing was being typed. Typing that breaks the
+   * cell's data validation rule stays in the cell while its alert asks what to do (`force` puts
+   * it in anyway).
+   */
+  commitEdit(dr = 0, dc = 0, allSelected = false, force = false): boolean {
     const e = this.editing;
     const wb = this.wb;
     if (!e || !wb) return false;
     const s = wb.sheet;
     const text = this.input.value;
+    if (this.alerting) return true;
+    const rule = !force && text !== e.original && this.host.invalid ? s.validationAt(e.r, e.c) : undefined;
+    if (rule && !rule.noAlert && !this.typedPasses(s, rule, e.r, e.c, text)) {
+      this.alerting = true;
+      void this.host.invalid!(rule, text).then((what) => {
+        this.alerting = false;
+        if (this.editing !== e) return;
+        if (what === 'keep') this.commitEdit(dr, dc, allSelected, true);
+        else if (what === 'cancel') this.cancelEdit();
+        else { this.input.focus(); this.input.select(); }
+      });
+      return true;
+    }
     this.editing = null;
     this.pointRef = null;
     this.input.hidden = true;
     this.copied = null;
     if (text !== e.original) {
-      const sel = this.sel.range;
+      const areas = this.areas();
       wb.edit('Typing', () => {
         if (allSelected) {
-          // Ctrl+Enter: the same typing in every selected cell (formulas move with each cell)
+          // Ctrl+Enter: the same typing in every selected cell, in every block (formulas move with each cell)
           const block = { rows: 1, cols: 1, cells: [[{ input: text }]], origin: { row: e.r, col: e.c } };
-          for (let r = sel.r1; r <= Math.min(sel.r2, Math.max(s.lastRow, e.r) + 1); r++) for (let c = sel.c1; c <= Math.min(sel.c2, Math.max(s.lastCol, e.c) + 1); c++) {
-            if (text.startsWith('=')) s.paste({ row: r, col: c }, block, 'values');
-            else s.setInput(r, c, text);
+          for (const sel of areas) {
+            for (let r = sel.r1; r <= Math.min(sel.r2, Math.max(s.lastRow, e.r, sel.r1) + 1); r++) for (let c = sel.c1; c <= Math.min(sel.c2, Math.max(s.lastCol, e.c, sel.c1) + 1); c++) {
+              if (text.startsWith('=')) s.paste({ row: r, col: c }, block, 'values');
+              else s.setInput(r, c, text);
+            }
           }
-        } else this.typeInto(s, e.r, e.c, text);
+        } else {
+          this.typeInto(s, e.r, e.c, text);
+          this.widenForDate(s, e.r, e.c, text);
+        }
       }, this.place());
       this.metricsKey = '';
+      if (!allSelected && text.trim() && !text.startsWith('=')) this.host.typed?.(e.r, e.c, text.trim());
     }
     this.host.typing(null);
     this.scroller.focus({ preventScroll: true });
@@ -1573,6 +2650,27 @@ export class SheetView {
     else this.render();
     this.host.changed();
     return true;
+  }
+
+  /** Excel widens a column still at its first width to fit a date or time typed in it, rather than show ####. */
+  private widenForDate(s: Sheet, r: number, c: number, text: string): void {
+    if (s.colWidths.has(c) || !text.trim()) return;
+    const typed = readTyped(text);
+    const style = s.styleAt(r, c);
+    const fmt = style?.numFmt ?? typed.format;
+    if (!fmt || !/[dmyh]/i.test(fmt.replace(/"[^"]*"|\[[^\]]*\]/g, '')) || /[0#?]/.test(fmt)) return;
+    const v = typed.formula ? this.wb!.formulaAt(s, text, { row: r, col: c }, r, c) : typed.value;
+    if (typeof v !== 'number') return;
+    const w = this.textWidth(formatValue(v, fmt).text, this.font(style, 1)) + 10;
+    if (w > DEFAULT_COL_W) s.setColWidth(c, Math.min(600, Math.ceil(w)));
+  }
+
+  /** Would typing this into a cell pass its rule? (A formula's answer isn't known yet, so it passes, and Circle Invalid Data finds it.) */
+  private typedPasses(s: Sheet, rule: Validation, r: number, c: number, text: string): boolean {
+    const typed = readTyped(text);
+    if (typed.formula) return true;
+    const shown = formatValue(typed.value, s.styleAt(r, c)?.numFmt ?? typed.format).text;
+    return passes(rule, typed.value, shown, s, this.wb!.validationHost(s), r, c);
   }
 
   /** Typing into a property column puts back its own formula when the typing is that formula, or nothing at all. */
@@ -1601,6 +2699,7 @@ export class SheetView {
   private moveWithin(dr: number, dc: number): void {
     const sel = this.sel;
     const R = sel.range;
+    if (sel.more?.length) { this.moveAcrossAreas(dr || dc); return; }
     if (R.r1 === R.r2 && R.c1 === R.c2 || this.sheet!.mergeAt(sel.active.r, sel.active.c) && sameRange(this.sheet!.mergeAt(sel.active.r, sel.active.c)!, R)) {
       // as in Excel, Enter after typing across a row with Tab goes to the next row's first cell
       const a = sel.active, t = this.tabStart;
@@ -1626,6 +2725,27 @@ export class SheetView {
     }
     this.sels.set(this.sheet!, { ...sel, active: { r, c } });
     this.reveal(r, c);
+    this.render();
+    this.host.changed();
+  }
+
+  /** Enter and Tab with several blocks selected: on through each block, then into the next (as in Excel). */
+  private moveAcrossAreas(dir: number): void {
+    const sel = this.sel;
+    const R = sel.range, { r, c } = sel.active;
+    const width = R.c2 - R.c1 + 1, size = width * (R.r2 - R.r1 + 1);
+    const i = (r - R.r1) * width + (c - R.c1) + dir;
+    if (i >= 0 && i < size) {
+      this.sels.set(this.sheet!, { ...sel, active: { r: R.r1 + Math.floor(i / width), c: R.c1 + (i % width) } });
+    } else {
+      // the next block becomes the one worked in, starting at its first cell (or its last, going back)
+      const all = [R, ...sel.more!];
+      const next = all[(dir > 0 ? 1 : all.length - 1) % all.length];
+      const rest = dir > 0 ? [...all.slice(2), R] : [R, ...all.slice(1, -1)];
+      const at = dir > 0 ? { r: next.r1, c: next.c1 } : { r: next.r2, c: next.c2 };
+      this.sels.set(this.sheet!, { active: at, anchor: at, range: next, more: rest });
+    }
+    this.reveal(this.sel.active.r, this.sel.active.c);
     this.render();
     this.host.changed();
   }
@@ -1677,6 +2797,7 @@ export class SheetView {
     if (k === 'Tab') { e.preventDefault(); this.commitEdit(0, e.shiftKey ? -1 : 1); return; }
     if (k === 'Escape') { e.preventDefault(); this.cancelEdit(); return; }
     if (k === 'F2') { e.preventDefault(); ed.mode = ed.mode === 'enter' ? 'edit' : 'enter'; return; }
+    if (k === 'F3' && this.host.f3) { e.preventDefault(); this.host.f3(e); return; }
     if (ed.mode === 'enter' && /^Arrow/.test(k) && !this.pointing()) {
       e.preventDefault();
       const [dr, dc] = k === 'ArrowUp' ? [-1, 0] : k === 'ArrowDown' ? [1, 0] : k === 'ArrowLeft' ? [0, -1] : [0, 1];
@@ -1690,9 +2811,12 @@ export class SheetView {
     if (!this.wb || e.defaultPrevented) return;
     if (e.target !== this.scroller) return;
     if (this.chartSel !== null && this.chartKey(e)) return;
+    if (this.objSel !== null && this.objectKey(e)) return;
     const k = e.key;
     const ctrl = e.ctrlKey || e.metaKey;
     const arrows: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+    // Alt+Down: the cell's drop-down list, as in Excel
+    if (k === 'ArrowDown' && e.altKey && !ctrl) { e.preventDefault(); this.openDropDown(); return; }
     if (arrows[k] && !e.altKey) {
       e.preventDefault();
       this.move(arrows[k][0], arrows[k][1], e.shiftKey, ctrl);
@@ -1719,13 +2843,13 @@ export class SheetView {
       if (ctrl) { this.goSheet(this.wb.active + (k === 'PageDown' ? 1 : -1)); return; }
       const page = Math.max(1, Math.floor(this.scroller.clientHeight / (DEFAULT_ROW_H * this.zoom)) - 2);
       this.move(k === 'PageDown' ? page : -page, 0, e.shiftKey);
-      this.scroller.scrollTop += (k === 'PageDown' ? 1 : -1) * (this.scroller.clientHeight - HEADER_H - 40);
+      this.scroller.scrollTop += (k === 'PageDown' ? 1 : -1) * (this.scroller.clientHeight - this.HH - 40);
       return;
     }
-    if (k === 'F2') { e.preventDefault(); this.editCell(); return; }
+    if (k === 'F2' && !e.shiftKey && !ctrl) { e.preventDefault(); this.editCell(); return; }
+    if (k === 'F3' && this.host.f3) { e.preventDefault(); this.host.f3(e); return; }
     if (k === 'Escape') {
       if (this.copied) { this.copied = null; this.render(); }
-      if (!this.findBar.hidden) this.closeFind();
       return;
     }
     if (k === ' ' && ctrl && !e.shiftKey) { e.preventDefault(); this.selectCols(); return; }
@@ -1756,8 +2880,8 @@ export class SheetView {
   clearSelection(): void {
     const wb = this.wb!;
     const s = wb.sheet;
-    const r = this.sel.range;
-    wb.edit('Clear', () => s.clear(r, 'contents'), this.place());
+    const areas = this.areas();
+    wb.edit('Clear', () => { for (const r of areas) s.clear(r, 'contents'); }, this.place());
     this.copied = null;
     this.metricsKey = '';
     this.render();
@@ -1772,12 +2896,11 @@ export class SheetView {
 
   /** Near a column or row border on the headers (for resizing): which one. */
   private borderAt(x: number, y: number): { kind: 'col' | 'row'; index: number } | null {
-    const { FW, FH } = this.frozen();
-    if (y < HEADER_H && x > HEADER_W) {
-      const gx = x - HEADER_W;
-      const sheetX = gx < FW ? gx : gx + this.scroller.scrollLeft;
+    if (y < this.HH && x > this.HW) {
+      const g = this.regionAt(x, y);
+      const sheetX = x - g.x + g.ox;
       const c = this.cols.at(sheetX);
-      const left = this.cols.pos(c), right = this.cols.pos(c + 1);
+      const left = this.cols.pos(c), right = left + this.cols.size(c);
       if (right - sheetX <= 4) return { kind: 'col', index: c };
       if (sheetX - left <= 3 && c > 0) {
         let p = c - 1;
@@ -1785,11 +2908,11 @@ export class SheetView {
         return { kind: 'col', index: p };
       }
     }
-    if (x < HEADER_W && y > HEADER_H) {
-      const gy = y - HEADER_H;
-      const sheetY = gy < FH ? gy : gy + this.scroller.scrollTop;
+    if (x < this.HW && y > this.HH) {
+      const g = this.regionAt(x, y);
+      const sheetY = y - g.y + g.oy;
       const r = this.rows.at(sheetY);
-      const top = this.rows.pos(r), bottom = this.rows.pos(r + 1);
+      const top = this.rows.pos(r), bottom = top + this.rows.size(r);
       if (bottom - sheetY <= 3) return { kind: 'row', index: r };
       if (sheetY - top <= 2 && r > 0) return { kind: 'row', index: r - 1 };
     }
@@ -1813,6 +2936,21 @@ export class SheetView {
     const { x, y } = this.viewPoint(e);
     if (x > this.scroller.clientWidth || y > this.scroller.clientHeight) return; // the scroll bars
     e.preventDefault();
+    if (this.overDrop(x, y)) {
+      this.commitEdit();
+      if (!this.editing) this.openDropDown();
+      return;
+    }
+    if (this.outlineClick(x, y)) return;
+    if (this.pageGrid && this.headerFooterAt(x, y) && e.detail >= 2) { this.commitEdit(); this.host.headerFooter?.(); return; }
+    const pb = this.breakAt(x, y);
+    if (pb) {
+      this.commitEdit();
+      this.scroller.setPointerCapture(e.pointerId);
+      this.drag = { kind: 'break', pointer: e.pointerId, axis: pb.axis, from: pb.at };
+      this.breakPreview = { axis: pb.axis, at: pb.axis === 'row' ? y : x };
+      return;
+    }
     const fb = this.filterButtonAt(x, y);
     if (fb !== null) {
       this.commitEdit();
@@ -1821,6 +2959,16 @@ export class SheetView {
       this.host.filterMenu(fb, { x: b.left + rect.x + rect.w - 16, y: b.top + rect.y + rect.h });
       return;
     }
+    const onObj = this.pointing() ? null : this.objectAt(x, y);
+    if (onObj) {
+      this.commitEdit();
+      this.scroller.focus({ preventScroll: true });
+      this.scroller.setPointerCapture(e.pointerId);
+      this.pickObject(onObj.o.id);
+      this.drag = { kind: 'object', pointer: e.pointerId, id: onObj.o.id, how: onObj.how, x0: x, y0: y, orig: onObj.o, moved: false };
+      return;
+    }
+    if (this.objSel !== null) this.pickObject(null);
     const onChart = this.pointing() ? null : this.chartAt(x, y);
     if (onChart) {
       this.commitEdit();
@@ -1831,6 +2979,13 @@ export class SheetView {
       return;
     }
     if (this.chartSel !== null) this.pickChart(null);
+    const bar = this.splitBarAt(x, y);
+    if (bar) {
+      this.commitEdit();
+      this.scroller.setPointerCapture(e.pointerId);
+      this.drag = { kind: 'split', pointer: e.pointerId, axis: bar };
+      return;
+    }
     const border = this.borderAt(x, y);
     if (border) {
       this.commitEdit();
@@ -1856,6 +3011,17 @@ export class SheetView {
       return;
     }
     this.commitEdit();
+    // typing that broke its cell's rule stays until its alert is answered
+    if (this.editing) return;
+    // a cell's link: Ctrl+click follows it (or a plain click, if Edit > Typing and Spelling says so)
+    if (h.where === 'cell' && !e.shiftKey && !e.altKey) {
+      const link = this.linkOf(h.r, h.c);
+      if (link && (e.ctrlKey || e.metaKey || !typingPrefs.linkCtrlClick)) {
+        this.selectCell(h.r, h.c);
+        void followLink(link);
+        return;
+      }
+    }
     this.scroller.setPointerCapture(e.pointerId);
     if (h.where === 'corner') { this.select({ r1: 0, c1: 0, r2: MAX_ROWS - 1, c2: MAX_COLS - 1 }, this.sel.active, this.sel.active, false); return; }
     if (h.where === 'col') {
@@ -1871,8 +3037,21 @@ export class SheetView {
       return;
     }
     if (e.shiftKey) this.extendTo(h.r, h.c, false);
-    else this.selectCell(h.r, h.c);
+    else if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      // Ctrl+click: another block, keeping those selected (as in Excel)
+      const sel = this.sel, m = this.sheet!.mergeAt(h.r, h.c);
+      this.select(m ?? { r1: h.r, c1: h.c, r2: h.r, c2: h.c }, { r: m?.r1 ?? h.r, c: m?.c1 ?? h.c }, undefined, false, [...(sel.more ?? []), sel.range]);
+    } else this.selectCell(h.r, h.c);
     this.drag = { kind: 'select', pointer: e.pointerId };
+  }
+
+  /** How many rows (columns) of the standard size fit in the window. */
+  visibleRows(): number {
+    return Math.floor((this.scroller.clientHeight - this.HH) / (DEFAULT_ROW_H * this.zoom));
+  }
+
+  visibleCols(): number {
+    return Math.floor((this.scroller.clientWidth - this.HW) / (DEFAULT_COL_W * this.zoom));
   }
 
   private firstVisibleRow(): number {
@@ -1889,29 +3068,50 @@ export class SheetView {
     const d = this.drag;
     if (!d) {
       // cursors and tips
+      const ob = this.objectAt(x, y);
+      if (ob) {
+        const cur: Record<string, string> = { move: 'move', start: 'crosshair', end: 'crosshair', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize' };
+        this.scroller.style.cursor = this.objSel === ob.o.id ? cur[ob.how] : 'pointer';
+        if (this.hoverTip !== (ob.o.descr ?? '')) { this.hoverTip = ob.o.descr ?? ''; this.scroller.title = this.hoverTip; }
+        this.setHovered(null);
+        return;
+      }
       const ch = this.chartAt(x, y);
       if (ch) {
         const cur: Record<string, string> = { move: 'move', label: 'move', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize' };
         this.scroller.style.cursor = this.chartSel === ch.chart.id ? cur[ch.how] : 'pointer';
         if (this.hoverTip) { this.hoverTip = ''; this.scroller.title = ''; }
+        this.setHovered(null);
         return;
       }
+      const brk = this.breakAt(x, y);
+      if (brk) { this.scroller.style.cursor = brk.axis === 'row' ? 'row-resize' : 'col-resize'; return; }
+      if ((this.OW && x < this.OW) || (this.OH && y < this.OH)) { this.scroller.style.cursor = 'pointer'; return; }
       const border = this.borderAt(x, y);
       const h = this.hit(x, y);
-      this.scroller.style.cursor = border ? (border.kind === 'col' ? 'col-resize' : 'row-resize')
+      const bar = this.splitBarAt(x, y);
+      this.setHovered(h.where === 'cell' && this.sheet?.noteAt(h.r, h.c) ? { r: h.r, c: h.c } : null);
+      this.scroller.style.cursor = bar ? (bar === 'row' ? 'row-resize' : 'col-resize') : border ? (border.kind === 'col' ? 'col-resize' : 'row-resize')
         : this.filterButtonAt(x, y) !== null ? 'pointer'
           : !this.editing && h.where === 'cell' && this.onFillHandle(x, y) ? 'crosshair'
             : h.where === 'col' ? 's-resize' : h.where === 'row' ? 'e-resize'
               // a structure: a hand, since a double-click opens it for drawing
-              : h.where === 'cell' && this.sheet?.cell(h.r, h.c)?.structure ? 'pointer' : 'cell';
-      const tip = h.where === 'cell' ? this.tipFor(h.r, h.c) : '';
+              : h.where === 'cell' && this.painter ? BRUSH
+                : h.where === 'cell' && this.sheet?.cell(h.r, h.c)?.structure ? 'pointer' : 'cell';
+      const overDrop = this.overDrop(x, y);
+      if (overDrop) this.scroller.style.cursor = 'pointer';
+      // a note's card says what a tip would (and the drop-down's button what it is)
+      const tip = overDrop ? 'Pick from the list (Alt+Down)' : h.where === 'cell' && !this.sheet?.noteAt(h.r, h.c) ? this.tipFor(h.r, h.c) : '';
       if (tip !== this.hoverTip) { this.hoverTip = tip; this.scroller.title = tip; }
       return;
     }
     if (e.pointerId !== d.pointer) return;
     if (d.kind === 'chart') { this.dragChart(d, x, y); return; }
+    if (d.kind === 'split') { this.splitPreview = { axis: d.axis, at: d.axis === 'row' ? y : x }; this.render(); return; }
+    if (d.kind === 'break') { this.breakPreview = { axis: d.axis, at: d.axis === 'row' ? y : x }; this.render(); return; }
+    if (d.kind === 'object') { this.dragObject(d, x, y, e.shiftKey); return; }
     this.autoScroll(x, y);
-    const h = this.hit(Math.max(HEADER_W + 1, x), Math.max(HEADER_H + 1, y));
+    const h = this.hit(Math.max(this.HW + 1, x), Math.max(this.HH + 1, y));
     switch (d.kind) {
       case 'select': this.extendTo(h.r, h.c, false); break;
       case 'cols': this.select({ r1: 0, c1: Math.min(this.sel.anchor.c, h.c), r2: MAX_ROWS - 1, c2: Math.max(this.sel.anchor.c, h.c) }, this.sel.active, this.sel.anchor, false); break;
@@ -1951,6 +3151,8 @@ export class SheetView {
   }
 
   private sizePreview: { kind: 'col' | 'row'; index: number; size: number } | null = null;
+  /** A split bar being dragged: where it would go. */
+  private splitPreview: { axis: 'row' | 'col'; at: number } | null = null;
 
   private previewSize(kind: 'col' | 'row', index: number, size: number): void {
     this.sizePreview = { kind, index, size };
@@ -1970,6 +3172,42 @@ export class SheetView {
     if (this.scroller.hasPointerCapture(e.pointerId)) this.scroller.releasePointerCapture(e.pointerId);
     const wb = this.wb!;
     const s = wb.sheet;
+    if (d.kind === 'split') {
+      const p = this.splitPreview;
+      this.splitPreview = null;
+      if (p) this.dropSplitBar(p.axis, p.at);
+      this.render();
+      return;
+    }
+    if (d.kind === 'break') {
+      const p = this.breakPreview;
+      this.breakPreview = null;
+      if (p) {
+        // the nearest edge between rows (or columns) to where it was let go
+        const { x, y } = this.viewPoint(e);
+        const g = this.regionAt(x, y);
+        const axis = d.axis === 'row' ? this.rows : this.cols;
+        const at = d.axis === 'row' ? y - g.y + g.oy : x - g.x + g.ox;
+        let i = axis.at(at);
+        if (at - axis.pos(i) > axis.size(i) / 2) i++;
+        const ps = s.pageSetup;
+        if (i > 0 && i !== d.from) {
+          const key = d.axis === 'row' ? 'rowBreaks' : 'colBreaks';
+          // fitting to pages ignores breaks put in by hand, so dragging one turns fitting off (as Excel does)
+          wb.edit('Move page break', () => s.setPageSetup(withSetup(ps, { [key]: toggleBreak(toggleBreak(ps?.[key], d.from, false), i, true), fit: undefined })), this.place());
+          this.host.changed();
+        }
+      }
+      this.render();
+      return;
+    }
+    if (d.kind === 'object') {
+      const p = this.objPreview;
+      this.objPreview = null;
+      if (p && d.moved) this.replaceObject(p, d.how === 'move' ? 'Move' : 'Resize');
+      this.render();
+      return;
+    }
     if (d.kind === 'chart') {
       const p = this.chartPreview;
       this.chartPreview = null;
@@ -2007,6 +3245,8 @@ export class SheetView {
       this.select(d.to, this.sel.active, this.sel.anchor, false);
     } else if (d.kind === 'point') {
       this.input.focus();
+    } else if ((d.kind === 'select' || d.kind === 'rows' || d.kind === 'cols') && this.painter) {
+      this.painter();
     }
     this.render();
   }
@@ -2015,14 +3255,18 @@ export class SheetView {
     const sc = this.scroller;
     const step = 18;
     if (y > sc.clientHeight - 10) sc.scrollTop += step;
-    else if (y < HEADER_H + 4 && sc.scrollTop > 0) sc.scrollTop -= step;
+    else if (y < this.HH + 4 && sc.scrollTop > 0) sc.scrollTop -= step;
     if (x > sc.clientWidth - 10) sc.scrollLeft += step;
-    else if (x < HEADER_W + 4 && sc.scrollLeft > 0) sc.scrollLeft -= step;
+    else if (x < this.HW + 4 && sc.scrollLeft > 0) sc.scrollLeft -= step;
   }
 
   private onDouble(e: MouseEvent): void {
     if (!this.wb) return;
     const { x, y } = this.viewPoint(e);
+    const bar = this.splitBarAt(x, y);
+    if (bar) { this.dropSplitBar(bar, 0); return; }
+    const onObj = this.objectAt(x, y);
+    if (onObj) { this.host.editObject?.(onObj.o.id); return; }
     const onChart = this.chartAt(x, y);
     if (onChart) { this.host.editChart?.(onChart.chart.id); return; }
     const border = this.borderAt(x, y);
@@ -2075,7 +3319,9 @@ export class SheetView {
       const c = s.cells.get(k)!;
       const style = s.styleAt(r, index);
       if (c.structure) w = Math.max(w, this.host.structureBox(c.structure).w * STRUCTURE_SCALE + 2 * PAD);
-      else w = Math.max(w, (style?.chem ? this.piecesWidth(s.shownText(r, index), style) / this.zoom : this.textWidth(s.shownText(r, index), this.font(style, 1))) + 10);
+      const look = this.chemLook(style, s.values.get(k) ?? null);
+      if (c.structure) continue;
+      w = Math.max(w, (look?.chem ? this.piecesWidth(s.shownText(r, index), look) / this.zoom : this.textWidth(s.shownText(r, index), this.font(style, 1))) + 10);
     }
     // property columns: their worked-out values count too
     if (s.colDefs.has(index)) for (let r = 0; r <= s.lastDataRow; r++) {
@@ -2091,6 +3337,13 @@ export class SheetView {
     e.preventDefault();
     if (!this.wb) return;
     const { x, y } = this.viewPoint(e);
+    const onObj = this.objectAt(x, y);
+    if (onObj) {
+      this.commitEdit();
+      this.pickObject(onObj.o.id);
+      this.host.contextMenu(e.clientX, e.clientY, 'object');
+      return;
+    }
     const onChart = this.chartAt(x, y);
     if (onChart) {
       this.commitEdit();
@@ -2108,9 +3361,68 @@ export class SheetView {
   }
 
   private onWheel(e: WheelEvent): void {
-    if (!(e.ctrlKey || e.metaKey)) return;
+    if (!(e.ctrlKey || e.metaKey)) { this.wheelPane(e); return; }
     e.preventDefault();
     this.setZoom(this.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+  }
+
+  /** The wheel over a split window's upper or left pane scrolls that pane. */
+  private wheelPane(e: WheelEvent): void {
+    if (!this.sheet) return;
+    const { SH, SW, x0, y0 } = this.frozen();
+    if (!SH && !SW) return;
+    const { x, y } = this.viewPoint(e);
+    const inTop = !!SH && y >= this.HH && y < y0, inLeft = !!SW && x >= this.HW && x < x0;
+    if (!inTop && !inLeft) return;
+    e.preventDefault();
+    const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+    let dx = e.deltaX * k, dy = e.deltaY * k;
+    if (e.shiftKey && !dx) { dx = dy; dy = 0; }
+    const p = this.panes();
+    if (inTop) p.top = Math.max(0, Math.min(this.rows.total, p.top + dy)); else this.scroller.scrollTop += dy;
+    if (inLeft) p.left = Math.max(0, Math.min(this.cols.total, p.left + dx)); else this.scroller.scrollLeft += dx;
+    this.growExtent();
+    this.render();
+  }
+
+  /** A split bar let go at a point: the split moves to the nearest row or column edge (or goes, at the edge of the grid). */
+  private dropSplitBar(axis: 'row' | 'col', at: number): void {
+    const s = this.sheet!, wb = this.wb!;
+    const cur = s.split ?? { rows: 0, cols: 0 };
+    // the upper pane is as tall as the rows above the split (the left pane as wide as the columns left of it)
+    let n = 0;
+    if (axis === 'row' && at > this.HH + 4) n = Math.max(1, this.rows.at(at - this.HH + this.rows.size(0) / 2));
+    if (axis === 'col' && at > this.HW + 4) n = Math.max(1, this.cols.at(at - this.HW + this.cols.size(0) / 2));
+    // a pane can't push the other off the screen
+    if (axis === 'row' && at > this.scroller.clientHeight - 40) n = 0;
+    if (axis === 'col' && at > this.scroller.clientWidth - 40) n = 0;
+    const next = axis === 'row' ? { rows: n, cols: cur.cols } : { rows: cur.rows, cols: n };
+    wb.edit(next.rows || next.cols ? 'Move split' : 'Remove split', () => s.setSplit(next), this.place());
+    this.metricsKey = '';
+  }
+
+  /** View > Split: split the window above and left of a cell (the top left cell: no split), each pane scrolled to go on from the one before. */
+  splitAt(rows: number, cols: number): void {
+    const s = this.sheet, wb = this.wb;
+    if (!s || !wb) return;
+    const keepTop = this.scroller.scrollTop, keepLeft = this.scroller.scrollLeft;
+    wb.edit(rows || cols ? 'Split' : 'Remove split', () => s.setSplit(rows || cols ? { rows, cols } : null), this.place());
+    this.metricsKey = '';
+    this.layout();
+    // the upper and left panes show what showed there; the others go on from them
+    this.paneScroll.set(s, { top: rows ? keepTop : 0, left: cols ? keepLeft : 0 });
+    if (rows) this.scroller.scrollTop = keepTop + this.rows.pos(rows);
+    if (cols) this.scroller.scrollLeft = keepLeft + this.cols.pos(cols);
+    this.render();
+  }
+
+  /** Before a split window's panes are frozen: scroll back by the split's rows and columns, so the cells below and right of them stay where they were. */
+  keepPlaceForFreeze(): void {
+    const sp = this.sheet?.split;
+    if (!sp) return;
+    this.layout();
+    if (sp.rows) this.scroller.scrollTop = Math.max(0, this.scroller.scrollTop - this.rows.pos(sp.rows));
+    if (sp.cols) this.scroller.scrollLeft = Math.max(0, this.scroller.scrollLeft - this.cols.pos(sp.cols));
   }
 
   setZoom(z: number): void {
@@ -2120,9 +3432,141 @@ export class SheetView {
     this.host.flash(`Zoom ${Math.round(this.zoom * 100)}%`, 900);
   }
 
+  // ---------------------------------------------------------------- notes, drop-downs and input messages
+
+  private setHovered(cell: Cursor | null): void {
+    const was = this.hovered;
+    if (was === cell || (was && cell && was.r === cell.r && was.c === cell.c)) return;
+    this.hovered = cell;
+    this.host.hoverNote?.(cell, cell ? this.screenRect(cell.r, cell.c) : null);
+  }
+
+  /** A cell's box on the screen (for cards and menus beside it), or null when out of sight. */
+  screenRect(r: number, c: number): DOMRect | null {
+    const rect = this.cellRect(r, c);
+    if (!rect) return null;
+    const b = this.scroller.getBoundingClientRect();
+    return new DOMRect(b.left + rect.x, b.top + rect.y, rect.w, rect.h);
+  }
+
+  /** A cell's box within the scrolling area (for boxes laid over the cells there). */
+  layerRect(r: number, c: number): { x: number; y: number; w: number; h: number } | null {
+    const rect = this.cellRect(r, c);
+    return rect ? { x: rect.x + this.scroller.scrollLeft, y: rect.y + this.scroller.scrollTop, w: rect.w, h: rect.h } : null;
+  }
+
+  /** The list rule of the active cell, when it shows a drop-down. */
+  private dropRule(): Validation | undefined {
+    const s = this.sheet;
+    if (!s || s.dashboard || !s.validations.length) return undefined;
+    const v = s.validationAt(this.sel.active.r, this.sel.active.c);
+    return v?.kind === 'list' && !v.noDropDown ? v : undefined;
+  }
+
+  /** The drop-down button beside the active cell (view coordinates), when it has one. */
+  private dropBtn: { x: number; y: number; w: number; h: number } | null = null;
+
+  private overDrop(x: number, y: number): boolean {
+    const b = this.dropBtn;
+    return !!b && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
+  }
+
+  private drawDropButton(): void {
+    this.dropBtn = null;
+    if (!this.dropRule() || this.chartSel !== null) return;
+    const { r, c } = this.sel.active;
+    const rect = this.cellRect(r, c);
+    if (!rect) return;
+    const size = Math.max(12, Math.min(17, rect.h - 1));
+    // just right of the cell, as Excel puts it
+    const x = rect.x + rect.w + 1, y = rect.y + rect.h - size;
+    if (x < this.HW || y < this.HH) return;
+    const ctx = this.ctx;
+    ctx.fillStyle = '#f3f4f6';
+    ctx.strokeStyle = '#9aa3b5';
+    ctx.lineWidth = 1;
+    ctx.fillRect(x, y, size, size);
+    ctx.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+    ctx.fillStyle = '#3a414d';
+    ctx.beginPath();
+    ctx.moveTo(x + size * 0.28, y + size * 0.4); ctx.lineTo(x + size * 0.72, y + size * 0.4); ctx.lineTo(x + size * 0.5, y + size * 0.66);
+    ctx.fill();
+    this.dropBtn = { x, y, w: size, h: size };
+  }
+
+  /** Open the active cell's drop-down (its list, or the column's entries, as Excel's Pick From Drop-down List). */
+  openDropDown(): void {
+    const s = this.sheet;
+    if (!s || this.editing) return;
+    const { r, c } = this.sel.active;
+    const rect = this.screenRect(r, c);
+    if (!rect) return;
+    this.host.dropDown?.(r, c, { x: rect.left, y: rect.bottom });
+  }
+
+  private placePrompt(): void {
+    const box = this.promptBox;
+    const s = this.sheet;
+    const v = s && !s.dashboard && s.validations.length && this.chartSel === null ? s.validationAt(this.sel.active.r, this.sel.active.c) : undefined;
+    const text = v && !v.hidePrompt ? (v.prompt ?? '') : '';
+    const title = v && !v.hidePrompt ? (v.promptTitle ?? '') : '';
+    const rect = text || title ? this.cellRect(this.sel.active.r, this.sel.active.c) : null;
+    if (!rect) { box.hidden = true; return; }
+    const key = `${title}\n${text}`;
+    if (box.dataset.key !== key) {
+      box.dataset.key = key;
+      box.replaceChildren();
+      if (title) { const b = document.createElement('b'); b.textContent = title; box.append(b); }
+      if (text) { const p = document.createElement('div'); p.textContent = text; box.append(p); }
+    }
+    box.hidden = false;
+    // under the cell and a little to its right, as Excel shows it
+    box.style.left = `${rect.x + Math.min(rect.w / 2, 40) + this.scroller.scrollLeft}px`;
+    box.style.top = `${rect.y + rect.h + 6 + this.scroller.scrollTop}px`;
+  }
+
+  /** Red rings round the cells that break their rules (Data > Circle Invalid Data). */
+  private drawCircles(regions: Region[]): void {
+    const s = this.sheet!;
+    if (!this.circleInvalid || !s.validations.length || !regions.length) return;
+    if (!this.circles || this.circles.gen !== s.valuesGen || this.circles.sheet !== s || this.circles.rules !== s.validations) {
+      this.circles = { gen: s.valuesGen, sheet: s, rules: s.validations, cells: invalidCells(s, this.wb!.validationHost(s)) };
+    }
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(this.HW, this.HH, this.scroller.clientWidth, this.scroller.clientHeight);
+    ctx.clip();
+    ctx.strokeStyle = '#e02020';
+    ctx.lineWidth = 1.6;
+    for (const { row, col } of this.circles.cells) {
+      if (s.hiddenRows.has(row) || s.hiddenCols.has(col)) continue;
+      const rect = this.cellRect(row, col);
+      if (!rect) continue;
+      ctx.beginPath();
+      ctx.ellipse(rect.x + rect.w / 2, rect.y + rect.h / 2, rect.w / 2 + 4, rect.h / 2 + 3, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /** How many cells break their rules on the sheet showing. */
+  invalidCount(): number {
+    const s = this.sheet;
+    return s && this.wb ? invalidCells(s, this.wb.validationHost(s)).length : 0;
+  }
+
   /** A tip for a cell: an error's reason, or that a value was typed over a calculated one. */
+  /** Where a cell links to: its own link, or the address in its HYPERLINK formula. */
+  linkOf(r: number, c: number): string | null {
+    const cell = this.sheet?.cell(r, c);
+    return cell?.link ?? linkOfFormula(cell?.input);
+  }
+
   private tipFor(r: number, c: number): string {
     const s = this.sheet!;
+    const link = this.linkOf(r, c);
+    if (link) return linkTip(link, typingPrefs.linkCtrlClick);
     const v = s.values.get(keyOf(r, c));
     if (isError(v)) {
       const f = s.formulas.get(keyOf(r, c));
@@ -2142,62 +3586,6 @@ export class SheetView {
 
   get hasFocus(): boolean {
     return this.el.contains(document.activeElement);
-  }
-
-  // ---------------------------------------------------------------- find
-
-  private buildFindBar(): void {
-    const bar = this.findBar;
-    bar.innerHTML = `<label>Find <input type="search" class="sh-find-text" aria-label="Find in the sheet" /></label>
-      <button type="button" data-act="prev" title="Find the one before (Shift+Enter)">↑</button>
-      <button type="button" data-act="next" title="Find the next (Enter)">↓</button>
-      <span class="sh-find-count muted"></span>
-      <button type="button" data-act="close" title="Close (Esc)">×</button>`;
-    const box = bar.querySelector<HTMLInputElement>('.sh-find-text')!;
-    box.addEventListener('keydown', (e) => {
-      e.stopPropagation();
-      if (e.key === 'Enter') { e.preventDefault(); this.findNext(e.shiftKey ? -1 : 1); }
-      if (e.key === 'Escape') { e.preventDefault(); this.closeFind(); }
-    });
-    box.addEventListener('input', () => this.findNext(0));
-    bar.querySelector('[data-act=next]')!.addEventListener('click', () => this.findNext(1));
-    bar.querySelector('[data-act=prev]')!.addEventListener('click', () => this.findNext(-1));
-    bar.querySelector('[data-act=close]')!.addEventListener('click', () => this.closeFind());
-  }
-
-  openFind(): void {
-    this.findBar.hidden = false;
-    const box = this.findBar.querySelector<HTMLInputElement>('.sh-find-text')!;
-    box.focus();
-    box.select();
-  }
-
-  closeFind(): void {
-    this.findBar.hidden = true;
-    this.focus();
-  }
-
-  /** Go to the next cell (in reading order) whose text or formula has the words looked for. */
-  private findNext(dir: -1 | 0 | 1): void {
-    const s = this.sheet;
-    if (!s) return;
-    const want = this.findBar.querySelector<HTMLInputElement>('.sh-find-text')!.value.trim().toLowerCase();
-    const count = this.findBar.querySelector('.sh-find-count')!;
-    if (!want) { count.textContent = ''; return; }
-    const keys = new Set<number>([...s.cells.keys(), ...s.values.keys()]);
-    const hits = [...keys].filter((k) => {
-      const r = rowOf(k), c = colOf(k);
-      const text = `${s.shownText(r, c)}\u0000${s.cell(r, c)?.input ?? ''}`.toLowerCase();
-      return text.includes(want);
-    }).sort((a, b) => a - b);
-    count.textContent = hits.length ? `${hits.length} found` : 'Not found';
-    if (!hits.length) return;
-    const cur = keyOf(this.sel.active.r, this.sel.active.c);
-    let k: number;
-    if (dir === 0) k = hits.find((x) => x >= cur) ?? hits[0];
-    else if (dir > 0) k = hits.find((x) => x > cur) ?? hits[0];
-    else k = [...hits].reverse().find((x) => x < cur) ?? hits[hits.length - 1];
-    this.selectCell(rowOf(k), colOf(k));
   }
 }
 

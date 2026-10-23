@@ -18,6 +18,15 @@ export interface StylePreset {
 
 const cm = (v: number) => Math.round(v * 28.3465 * 100) / 100;
 
+/** ACS 1996 made bigger or smaller as a whole (for guidelines that give only the text size). */
+const scaled = (k: number) => {
+  const r = (v: number) => Math.round(v * k * 100) / 100;
+  return {
+    ...ACS_1996, bondLength: r(ACS_1996.bondLength), lineWidth: r(ACS_1996.lineWidth), boldWidth: r(ACS_1996.boldWidth), marginWidth: r(ACS_1996.marginWidth),
+    hashSpacing: r(ACS_1996.hashSpacing), labelSize: r(ACS_1996.labelSize), captionSize: r(ACS_1996.captionSize),
+  };
+};
+
 export const STYLE_PRESETS: StylePreset[] = [
   {
     style: { ...ACS_1996 },
@@ -37,6 +46,24 @@ export const STYLE_PRESETS: StylePreset[] = [
       marginWidth: cm(0.042), bondSpacing: 18, chainAngle: 120, labelFont: 'Arial', labelSize: 6, captionFont: 'Arial', captionSize: 6.5, captionFace: 96,
     },
     source: 'Nature Portfolio "Style guide for chemical structures" (nature.com); Nature, Nature Chemistry, Nature Communications and the Nature Reviews journals',
+  },
+  {
+    style: {
+      name: 'Thieme (Synthesis, Synlett)', bondLength: cm(0.357), lineWidth: cm(0.02), boldWidth: cm(0.049), hashSpacing: cm(0.062),
+      marginWidth: cm(0.032), bondSpacing: 18, chainAngle: 120, labelFont: 'Arial', labelSize: 6, captionFont: 'Arial', captionSize: 6, captionFace: 96,
+    },
+    source: 'Thieme "Instructions for Authors" for Synthesis, Synlett and SynOpen (thieme.de), "Graphic files": the settings shown, with font size 6',
+    note: 'The instructions show the numbers but name no font; Arial is used, as for the other journals.',
+  },
+  {
+    style: { ...scaled(7 / 10), name: 'Wiley (Angewandte, Chemistry Europe)' },
+    source: 'Wiley-VCH checklists for accepted manuscripts (Angewandte family, Chemistry Europe): Arial or Helvetica only, about 1.8 mm final text (7 pt), lines at least 0.2 pt',
+    note: 'Wiley publishes its bond settings only inside its ChemDraw template, so bond length and widths are ACS 1996 scaled to the 7 pt text.',
+  },
+  {
+    style: { ...scaled(7 / 10), name: 'Elsevier (Tetrahedron and others)' },
+    source: 'Elsevier "Artwork and media instructions" (elsevier.com): Arial, Courier, Symbol or Times; lettering 7 pt at final size, no smaller than 6 pt',
+    note: 'Elsevier gives no bond settings, so bond length and widths are ACS 1996 scaled to the 7 pt text.',
   },
   {
     style: {

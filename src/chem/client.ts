@@ -79,8 +79,9 @@ export class ChemClient {
     return r.molblock;
   }
 
-  async molToSmiles(molblock: string): Promise<string | null> {
-    const r = await this.request<Extract<ChemResponse, { type: 'molToSmiles' }>>((id) => ({ type: 'molToSmiles', id, molblock }));
+  /** SMILES for a molfile; `loose` writes it as drawn, without checking valences. */
+  async molToSmiles(molblock: string, loose = false): Promise<string | null> {
+    const r = await this.request<Extract<ChemResponse, { type: 'molToSmiles' }>>((id) => ({ type: 'molToSmiles', id, molblock, ...(loose ? { loose } : {}) }));
     return r.smiles;
   }
 
@@ -94,6 +95,12 @@ export class ChemClient {
   async substructure(query: string, mols: string[]): Promise<{ results: (boolean | null)[]; error?: string }> {
     const r = await this.request<Extract<ChemResponse, { type: 'substructure' }>>((id) => ({ type: 'substructure', id, query, mols }));
     return { results: r.results, error: r.error };
+  }
+
+  /** For each molfile, the atoms it shares with `ref` (largest common substructure) as [ref atom, its atom] pairs, or null. */
+  async common(ref: string, mols: string[]): Promise<([number, number][] | null)[]> {
+    const r = await this.request<Extract<ChemResponse, { type: 'common' }>>((id) => ({ type: 'common', id, ref, mols }));
+    return r.results;
   }
 
   /** Pieces of a structure (a molfile) when bonds between molfile atoms are broken. */

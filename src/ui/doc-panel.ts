@@ -8,8 +8,10 @@ import { FloatBox, PINNED_ICON } from './float-box';
 import type { DocFile } from '../document/doc-file';
 import {
   A4, CM, COL_GAP, INCH, LETTER, FLOAT_GAP, defaultStyles, floatOf, modifyStyle, setParaStyle, styleOf,
-  type DocText, type FigureLook, type Float, type WrapKind, type HeaderFooter, type NamedStyle, type NumberPlace, type PageSetup,
+  type DocText, type FigureLook, type Float, type WrapKind, type HeaderFooter, type HfZones, type NamedStyle, type NumberPlace, type PageSetup,
 } from '../document/document';
+import { changeAllSections, changeSection, pageNumText, sectionAt, sectionsOf, type Section, type SectionPatch } from '../document/sections';
+import { paraAt } from '../text/paragraphs';
 
 export interface DocPanelHost {
   file(): DocFile | null;
@@ -304,6 +306,7 @@ export class DocPanel {
     this.figButtons = this.buttons(s, [
       ['Edit Drawing', 'Change it with the drawing tools (or double-click it)', () => { const id = this.host.picked(); if (id !== null) this.host.editFigure(id); }],
       ['Own Size', 'Back to 100%', () => { const id = this.host.picked(); if (id !== null) this.host.setScale(id, 1); }],
+      ['Picture Format…', 'Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions', () => this.host.run('picture-format')],
     ]);
   }
 
@@ -452,20 +455,48 @@ export class DocPanel {
     this.change('Change style', (t) => modifyStyle(t, next));
   }
 
+  /** The section the caret is in (sections have their own page setup, header and footer). */
+  private section(t: DocText): Section {
+    const f = this.host.file();
+    return sectionAt(sectionsOf(t), f ? paraAt(f.ed.text, f.ed.focus) : 0);
+  }
+
+  /** Change the section the caret is in (or, for the page setup, every section when Apply to says so). */
+  private changeSec(kind: string, patch: (s: Section) => SectionPatch, all = false): void {
+    this.change(kind, (t) => (all ? changeAllSections(t, patch) : changeSection(t, this.section(t).index, patch(this.section(t)))));
+  }
+
+  /** Notes saying which section the page setup and the header and footer are for (when there are several). */
+  private secNotes: HTMLElement[] = [];
+
+  private secNote(s: HTMLElement): void {
+    const p = document.createElement('p');
+    p.className = 'muted small dp-note';
+    p.hidden = true;
+    s.append(p);
+    this.secNotes.push(p);
+  }
+
   private buildPage(): void {
     const s = this.sections.page;
-    const page = (patch: Partial<PageSetup>) => this.change('Page setup', (t) => ({ ...t, page: { ...t.page, ...patch } }));
+    this.secNote(s);
+    this.row(s, 'Apply to', this.select('pg-apply', [['section', 'This section'], ['all', 'Whole document']], () => {}), 'With section breaks, each section has its own paper, margins and columns');
+    const all = () => (this.fields.get('pg-apply') as HTMLSelectElement | undefined)?.value === 'all';
+    const page = (patch: Partial<PageSetup>) => this.changeSec('Page setup', (x) => ({ page: { ...x.page, ...patch } }), all());
     this.row(s, 'Paper', this.select('pg-size', [['letter', 'Letter (8.5 × 11 in)'], ['a4', 'A4 (21 × 29.7 cm)'], ['custom', 'Other size']], (v) => {
       const f = this.host.file();
       if (!f) return;
-      const land = f.t.page.w > f.t.page.h;
+      const pg = this.section(f.t).page;
+      const land = pg.w > pg.h;
       const size = v === 'a4' ? A4 : v === 'letter' ? LETTER : null;
       if (size) page(land ? { w: size.h, h: size.w } : { ...size });
     }));
     this.row(s, 'Orientation', this.select('pg-orient', [['portrait', 'Portrait'], ['landscape', 'Landscape']], (v) => {
       const f = this.host.file();
       if (!f) return;
-      const { w, h } = f.t.page;
+      // (each section turned its own way, when applied to them all)
+      if (all()) { this.changeSec('Page setup', (x) => ((v === 'landscape') !== (x.page.w > x.page.h) ? { page: { ...x.page, w: x.page.h, h: x.page.w } } : {}), true); return; }
+      const { w, h } = this.section(f.t).page;
       if ((v === 'landscape') !== (w > h)) page({ w: h, h: w });
     }));
     const len = (key: keyof PageSetup, label: string, title?: string) =>
@@ -486,10 +517,17 @@ export class DocPanel {
 
   private buildHeaderFooter(): void {
     const s = this.sections.hf;
-    const hf = (f: (h: HeaderFooter) => HeaderFooter) => this.change('Header and footer', (t) => ({ ...t, hf: f(t.hf) }));
+    this.secNote(s);
+    const hf = (f: (h: HeaderFooter) => HeaderFooter) => this.changeSec('Header and footer', (x) => ({ hf: f(x.hf) }));
+    this.check(s, 'hf-link', 'Same as previous section', (v) => this.changeSec('Header and footer', (x) => ({ linked: v })),
+      'Word\'s Link to Previous: this section shows the header and footer of the one before. Turn it off to give this section its own');
     this.row(s, 'Page numbers', this.select('hf-numbers', PLACES, (v) => hf((h) => ({ ...h, numbers: v as NumberPlace }))));
     this.row(s, 'Before the number', this.input('hf-prefix', (v) => hf((h) => ({ ...h, prefix: v })), { placeholder: 'S for S1, S2…' }), 'Supporting Information pages are numbered S1, S2…: type S here');
-    this.row(s, 'First page number', this.input('hf-start', (v) => { const n = Math.round(Number(v)); if (Number.isFinite(n)) hf((h) => ({ ...h, start: n })); }));
+    const FORMATS = ['decimal', 'lowerRoman', 'upperRoman', 'lowerLetter', 'upperLetter'] as const;
+    this.row(s, 'Number format', this.select('hf-format', FORMATS.map((v) => [v, [1, 2, 3].map((n) => pageNumText(n, v)).join(', ')]), (v) => this.changeSec('Page numbers', () => ({ format: v as Section['format'] }))),
+      'Front matter is often numbered i, ii, iii, and the text after a section break 1, 2, 3');
+    this.check(s, 'hf-continue', 'Continue from previous section', (v) => this.changeSec('Page numbers', (x) => ({ restart: v ? undefined : x.restart ?? 1 })));
+    this.row(s, 'First page number', this.input('hf-start', (v) => { const n = Math.round(Number(v)); if (Number.isFinite(n)) this.changeSec('Page numbers', () => ({ restart: n })); }));
     this.check(s, 'hf-first', 'Number the first page', (v) => hf((h) => ({ ...h, onFirst: v })), 'Leave off for a title page');
     const zone = (part: 'header' | 'footer', i: number, label: string) =>
       this.row(s, label, this.input(`hf-${part}${i}`, (v) => hf((h) => {
@@ -503,6 +541,38 @@ export class DocPanel {
     zone('footer', 0, 'Footer, left');
     zone('footer', 1, 'Footer, centre');
     zone('footer', 2, 'Footer, right');
+    // a first page and even pages of their own (Word's Different First Page and Different Odd & Even Pages)
+    const blank = (): HfZones => ({ header: ['', '', ''], footer: ['', '', ''] });
+    this.check(s, 'hf-diffFirst', 'Different first page', (v) => hf((h) => ({ ...h, firstPage: v || undefined, first: h.first ?? blank() })),
+      'The first page of the section has its own header and footer (a title page\'s), set below; "Number the first page" puts the number on it');
+    this.check(s, 'hf-oddEven', 'Different odd and even pages', (v) => hf((h) => ({ ...h, oddEven: v || undefined, even: h.even ?? blank() })),
+      'Even pages have their own header and footer, set below, and the page number on the other side (the outside edge of a bound thesis)');
+    const three = (set: 'first' | 'even', part: 'header' | 'footer', label: string) => {
+      const box = document.createElement('span');
+      box.className = 'dp-three';
+      for (let i = 0; i < 3; i++) {
+        const el = this.input(`hf-${set}-${part}${i}`, (v) => hf((h) => {
+          const z = h[set] ?? blank();
+          const parts = [...z[part]] as [string, string, string];
+          parts[i] = v;
+          return { ...h, [set]: { ...z, [part]: parts } };
+        }), { placeholder: ['left', 'centre', 'right'][i] });
+        box.append(el);
+      }
+      this.row(s, label, box, 'Left, centre and right');
+    };
+    three('first', 'header', 'First page header');
+    three('first', 'footer', 'First page footer');
+    three('even', 'header', 'Even page header');
+    three('even', 'footer', 'Even page footer');
+    const note = document.createElement('p');
+    note.className = 'dp-note';
+    note.dataset.key = 'hf-rich';
+    s.append(note);
+    this.buttons(s, [
+      ['Picture…', 'Put a picture (a logo or crest) in the header or footer', () => this.host.run('hf-picture')],
+      ['Plain Text', 'Take the pictures, tables and formatting out of this section\'s headers and footers: back to the text above', () => this.host.run('hf-plain')],
+    ]);
   }
 
   // ---------------------------------------------------------------- showing the values
@@ -555,10 +625,11 @@ export class DocPanel {
       put('fig-frame', lk?.frame ? String(lk.frame) : '');
       put('fig-frame-colour', lk?.frameColor ?? '#000000');
       put('fig-shadow', lk?.shadow ?? 'none');
-      this.figureInfo.textContent = (isBox ? 'A text box: click inside it to type, drag its edge to move it. ' : o?.kind === 'picture' ? 'A picture. ' : 'A drawing: double-click it to change it with the drawing tools. ')
+      this.figureInfo.textContent = (isBox ? 'A text box: click inside it to type, drag its edge to move it. ' : o?.kind === 'picture' ? 'A picture. ' : o?.kind === 'drawing' && o.contents.shapes.some((x) => x.diagram) ? 'A diagram: double-click it to change its text, layout or colours (Edit Drawing opens the drawing tools on it). ' : 'A drawing: double-click it to change it with the drawing tools. ')
         + (sz ? `Shown ${showLength(sz.w, 'in')} × ${showLength(sz.h, 'in')} in${fitted ? ', made smaller to fit between the margins' : ''}.` : '');
-      const [edit, own] = this.figButtons.querySelectorAll('button');
+      const [edit, own, format] = this.figButtons.querySelectorAll('button');
       edit.style.display = o?.kind === 'drawing' ? '' : 'none';
+      format.style.display = o?.kind === 'picture' && !o.chart ? '' : 'none';
       own.style.display = isBox ? 'none' : '';
     }
     // the paragraph
@@ -594,8 +665,19 @@ export class DocPanel {
     put('s-indent', showLength(st.indent, 'in'));
     put('s-first', showLength(st.firstLine, 'in'));
     put('s-keep', st.keepNext);
-    // the page
-    const pg = t.page;
+    // the section the caret is in: its page and its header and footer
+    const secs = sectionsOf(t);
+    const sec = sectionAt(secs, paraAt(ed === f.ed ? ed.text : f.ed.text, f.ed.focus));
+    for (const n of this.secNotes) {
+      n.hidden = secs.length < 2;
+      n.textContent = `Section ${sec.index + 1} of ${secs.length} (the one the caret is in).`;
+    }
+    const showRow = (key: string, on: boolean) => { const row = this.fields.get(key)?.closest('label'); if (row) (row as HTMLElement).style.display = on ? '' : 'none'; };
+    showRow('pg-apply', secs.length > 1);
+    showRow('hf-link', sec.index > 0);
+    showRow('hf-continue', sec.index > 0);
+    showRow('hf-start', sec.index === 0 || sec.restart !== undefined);
+    const pg = sec.page;
     const same = (a: { w: number; h: number }) => (Math.abs(pg.w - a.w) < 0.5 && Math.abs(pg.h - a.h) < 0.5) || (Math.abs(pg.w - a.h) < 0.5 && Math.abs(pg.h - a.w) < 0.5);
     put('pg-size', same(LETTER) ? 'letter' : same(A4) ? 'a4' : 'custom');
     put('pg-orient', pg.w > pg.h ? 'landscape' : 'portrait');
@@ -603,12 +685,30 @@ export class DocPanel {
     put('pg-cols', String(pg.cols ?? 1));
     put('pg-colGap', showLength(pg.colGap ?? COL_GAP, 'in'));
     // header and footer
-    const hf = t.hf;
+    const hf = sec.hf;
+    put('hf-link', sec.linked);
+    put('hf-format', sec.format);
+    put('hf-continue', sec.restart === undefined);
     put('hf-numbers', hf.numbers);
     put('hf-prefix', hf.prefix);
-    put('hf-start', String(hf.start));
+    put('hf-start', String(sec.restart ?? 1));
     put('hf-first', hf.onFirst);
     for (let i = 0; i < 3; i++) { put(`hf-header${i}`, hf.header[i]); put(`hf-footer${i}`, hf.footer[i]); }
+    put('hf-diffFirst', !!hf.firstPage);
+    put('hf-oddEven', !!hf.oddEven);
+    for (const set of ['first', 'even'] as const) for (const part of ['header', 'footer'] as const) {
+      const on = set === 'first' ? !!hf.firstPage : !!hf.oddEven;
+      for (let i = 0; i < 3; i++) put(`hf-${set}-${part}${i}`, hf[set]?.[part][i] ?? '');
+      const row = this.fields.get(`hf-${set}-${part}0`)?.closest('label');
+      if (row) row.style.display = on ? '' : 'none';
+    }
+    const rich = Object.keys(hf.bodies ?? {});
+    const note = this.sections.hf.querySelector<HTMLElement>('[data-key="hf-rich"]');
+    if (note) {
+      const names: Record<string, string> = { header: 'header', footer: 'footer', firstHeader: 'first page header', firstFooter: 'first page footer', evenHeader: 'even page header', evenFooter: 'even page footer' };
+      note.hidden = !rich.length;
+      note.textContent = rich.length ? `The ${rich.map((k) => names[k] ?? k).join(', ')} ${rich.length > 1 ? 'have' : 'has'} pictures, tables or formatting (from Word, or a picture added here): shown and saved as they are, in place of the text above. Plain Text goes back to the text.` : '';
+    }
   }
 }
 

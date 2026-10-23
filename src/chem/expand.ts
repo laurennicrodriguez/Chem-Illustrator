@@ -1,4 +1,4 @@
-// Structure > Expand Label: an abbreviation (OMe, Boc, CO2Et, PPh3 on a metal) drawn out as
+// Chemistry > Expand Label: an abbreviation (OMe, Boc, CO2Et, PPh3 on a metal) drawn out as
 // the atoms and bonds it stands for, joined where the label was. Ligands on a metal use their
 // template (so a chelate's donors both bond to the metal); anything else is laid out by the
 // chemistry engine from SMILES and turned to lie along the bond the label hung from.

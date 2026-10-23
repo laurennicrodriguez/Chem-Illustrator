@@ -162,7 +162,7 @@ export function rangeHyphens(text: string): number[] {
 export interface CharLook { pos: 'base' | 'sub' | 'sup'; italic: boolean }
 
 /** One change a Fix makes to characters start..end: new text, and/or position and italics. */
-export interface FixEdit { start: number; end: number; pos?: 'sub' | 'sup'; italic?: boolean; text?: string }
+export interface FixEdit { start: number; end: number; pos?: 'sub' | 'sup'; italic?: boolean; bold?: boolean; text?: string }
 
 export type IssueKind = 'formula' | 'solvent' | 'unit' | 'range' | 'nucleus';
 
@@ -289,6 +289,38 @@ export function typingFormats(text: string, end: number, look: (i: number) => Ch
   // one change per character
   const seen = new Set<string>();
   return out.filter((e) => { const k = `${e.start}:${e.pos ?? ''}:${e.italic ?? ''}`; if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
+// ------------------------------------------------------------------ compound numbers and stereodescriptors
+
+/** CIP and double-bond descriptors in parentheses in front of a name: (S)-, (R,R)-, (2E,4Z)-, (1R*,2S*)-. */
+const STEREO_PREFIX = /(?:^|[\s([{\[–—])\(((?:\d{0,3}[RSEZ]\*?)(?:,\s?\d{0,3}[RSEZ]\*?)*)\)$/;
+/** A compound number in parentheses: (4), (4a), (12b), (4a,b), (4a–c), (3,4). Not years (2019) or amounts (5%). */
+const NUMBER_IN_BRACKETS = /(?:^|[\s[{–—])\((\d{1,3}[a-z]?(?:\s?[,–]\s?(?:\d{1,3}[a-z]?|[a-z]))*)$/;
+/** A compound number after "compound" or "compounds": compound 4, compounds 4a. */
+const NUMBER_AFTER_WORD = /\b[Cc]ompounds?\s(\d{1,3}[a-z]?)$/;
+
+/**
+ * As a key ends a word: the letters of stereodescriptors in italics as a name goes on after them
+ * ("(S)-" typed: S italic, as IUPAC names print them), and compound numbers in bold ("(4)" or "compound 4"),
+ * each when asked for. `text[end]` is the key just typed.
+ */
+export function nameFormats(text: string, end: number, opts: { stereo: boolean; numbers: boolean }): FixEdit[] {
+  const upto = text.slice(0, end);
+  const key = text[end];
+  const out: FixEdit[] = [];
+  if (opts.stereo && key === '-') {
+    const m = STEREO_PREFIX.exec(upto);
+    if (m) {
+      const at = end - 1 - m[1].length;
+      for (let i = 0; i < m[1].length; i++) if (/[RSEZ]/.test(m[1][i])) out.push({ start: at + i, end: at + i + 1, italic: true });
+    }
+  }
+  if (opts.numbers) {
+    const m = key === ')' ? NUMBER_IN_BRACKETS.exec(upto) : NUMBER_AFTER_WORD.exec(upto);
+    if (m) out.push({ start: end - m[1].length, end, bold: true });
+  }
+  return out;
 }
 
 // ------------------------------------------------------------------ typing replacements

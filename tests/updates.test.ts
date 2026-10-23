@@ -26,4 +26,10 @@ describe('updates', () => {
     expect(s.skipVersion).toBe('0.1.80');
     expect(parseSettings(JSON.stringify({ updateCheck: 'yes', skipVersion: 5 })).updateCheck).toBe(true);
   });
+
+  it('remembers the update channel, Latest unless Stable was chosen', () => {
+    expect(parseSettings(null).updateChannel).toBe('latest');
+    expect(parseSettings(JSON.stringify({ updateChannel: 'stable' })).updateChannel).toBe('stable');
+    expect(parseSettings(JSON.stringify({ updateChannel: 'nightly' })).updateChannel).toBe('latest');
+  });
 });

@@ -7,15 +7,15 @@
 import { paletteRows } from './palette-ui';
 import { SheetView, popupMenu, selectionName } from './sheet-view';
 import { Workbook, Sheet, Structure, CellStyle, CellBlock, Cell, Condition, CompareOp, makeStructure, growToMerges } from '../sheet/workbook';
-import { Range, MAX_ROWS, MAX_COLS, colName, colIndex, cellName, parseRange, keyOf, rowOf, colOf, inRange } from '../sheet/refs';
+import { Range, MAX_ROWS, MAX_COLS, colName, colIndex, cellName, parseRange, parseCellRef, keyOf, rowOf, colOf, inRange } from '../sheet/refs';
+import { showsChem, chemPieces } from '../sheet/cell-text';
 import { fillReagentTable } from '../sheet/reagents';
 import { shiftFormula } from '../sheet/formula';
 import { PROPERTIES, MolProps, propertyValue } from '../sheet/properties';
 import { FORMATS, changeDecimals, describeFormat } from '../sheet/numfmt';
 import { UNITS, unitFormat } from '../sheet/units';
 import { isError, CellError, Value } from '../sheet/values';
-import { FUNCTION_NAMES } from '../sheet/evaluate';
-import { ISOTOPE_FUNCTIONS, listedPeaks, readsAsFormula, type IsotopeSource } from '../sheet/isotopes';
+import { listedPeaks, readsAsFormula, type IsotopeSource } from '../sheet/isotopes';
 import { isotopeTable, ISOTOPE_CHARTS, type IsotopeChartKind } from '../sheet/isotope-table';
 import { COMMON_ADDUCTS } from '../chem/hrms';
 import { parseDelimited, toDelimited } from '../sheet/csv';
@@ -26,13 +26,39 @@ import { askProperties, PropertyChoice } from './property-dialog';
 import { ask } from './ask';
 import { SheetFormatting } from './sheet-format-ui';
 import { SheetCharts } from './sheet-chart-ui';
+import { DASH_CHART_KINDS } from './dashboard-ui';
+import { SheetNotes } from './sheet-notes-ui';
+import { SheetValidation } from './sheet-validation-ui';
+import { SheetData } from './sheet-data-ui';
+import { pasteSpecial, goToSpecial, type PasteSpecialOptions, type SpecialKind } from '../sheet/data-tools';
+import { SheetFormulas } from './sheet-formulas-ui';
+import { SheetAnalysis } from './sheet-analysis-ui';
+import { SheetPivots } from './sheet-pivot-ui';
+import { SheetQueries } from './sheet-query-ui';
+import { SheetCompounds } from './sheet-compound-ui';
+import { CATEGORIES, type Category } from '../sheet/fn-help';
+import { askLink, followLink, type LinkPlace } from './links-ui';
+import { LINK_COLOUR, cellLink, cellOfLink, describeLink } from '../links';
+import { describeValidation, KIND_NAMES } from '../sheet/validation';
 import type { ChartKind } from '../sheet/chart';
 import { DashboardUi } from './dashboard-ui';
+import { printSheet, previewPages, PrintedSheet } from './sheet-print';
+import { SheetObjects } from './sheet-objects-ui';
+import { askAltText } from './accessibility-pane';
+import type { IssuePlace } from '../accessibility';
+import { SheetPage } from './sheet-page-ui';
 import { TILE_NAMES } from '../sheet/dashboard';
 import type { TableDef } from '../sheet/table-styles';
 import type { Contents } from '../model';
 import type { DocStyle } from '../style';
 import type { Tab } from '../workspace';
+import { paintCells } from '../format-painter';
+import { SheetLook, themeColourGrid } from './sheet-look-ui';
+import { SheetOutline } from './sheet-outline-ui';
+import { SheetSparklines } from './sheet-sparkline-ui';
+import { SheetViews, formulaBarPrefs } from './sheet-views-ui';
+import type { SparkKind } from '../sheet/sparklines';
+import { themeOf } from '../sheet/themes';
 
 /** What a paste found on the clipboard, as far as a sheet cares. */
 export interface ClipboardCells {
@@ -51,8 +77,12 @@ export interface SheetModeHost {
   editStructure(contents: Contents | null, title: string, done: (c: Contents | null) => void): void;
   /** A key the sheet doesn't use itself (menu commands, hotkeys). True when it did something. */
   key(e: KeyboardEvent): boolean;
-  /** The workbook changed (for the unsaved mark on the tab). */
-  changed(): void;
+  /** A ribbon command the sheet doesn't run itself (Format Painter, Insert Symbol: the same in every mode). */
+  command?(name: string): boolean;
+  /** The workbook changed (for the unsaved mark on the tab): the one showing, or `book` when given. */
+  changed(book?: Workbook): void;
+  /** Whether the workbook is still open in a tab (for work that finishes after an await). */
+  isOpen(book: Workbook): boolean;
   /** A name or SMILES as a drawing in this style. */
   toStructure(text: string, style: DocStyle): Promise<{ contents: Contents; notes: string[] } | { error: string }>;
   /** Put cells on the clipboard: our own copy, tab-separated text and an HTML table. */
@@ -61,6 +91,12 @@ export interface SheetModeHost {
   copyStructure(contents: Contents, style: DocStyle): Promise<string>;
   /** Read the clipboard for a paste (from the paste event in a browser). */
   readCells(e: ClipboardEvent | null): Promise<ClipboardCells>;
+  /** Ask for the name put on notes and comments (true when one was given). */
+  askName(): Promise<boolean>;
+  /** Ask for a picture file (Insert > Pictures). */
+  pickPicture?(): Promise<{ bytes: Uint8Array; mime: string; name: string } | null>;
+  /** File > Print, for the Print button in Print Preview. */
+  print?(): void;
 }
 
 const OWN_KIND = 'chem-illustrator-cells';
@@ -86,8 +122,37 @@ export class SheetMode {
   readonly charts: SheetCharts;
   /** Dashboard sheets: adding tiles, their menus and settings. */
   readonly dashUi: DashboardUi;
+  /** Notes and comments on cells. */
+  readonly notes: SheetNotes;
+  /** Data validation: the window, drop-downs and alerts. */
+  readonly validation: SheetValidation;
+  /** Find and Replace, Go To Special, Series, Paste Special, Text to Columns, Remove Duplicates, Flash Fill, Sort, Advanced Filter, Freeze Panes and Split. */
+  readonly data: SheetData;
+  /** Pictures, shapes and text boxes over the cells. */
+  readonly objects: SheetObjects;
+  /** The Page Layout tab: page setup, print area, breaks, headers and footers. */
+  readonly page: SheetPage;
+  /** The Formulas tab: Insert Function and the defined names. */
+  readonly formulas: SheetFormulas;
+  readonly analysis: SheetAnalysis;
+  readonly pivots: SheetPivots;
+  /** Data > Get Data: queries and the Query Editor. */
+  readonly queries: SheetQueries;
+  /** Data > Data Types > Compound. */
+  readonly compounds: SheetCompounds;
+  /** Fonts, orientation, indents, cell styles and themes. */
+  readonly look: SheetLook;
+  /** Group, Ungroup, Subtotal and the outline's buttons. */
+  readonly outline: SheetOutline;
+  readonly sparks: SheetSparklines;
+  /** Normal, Page Layout and Page Break Preview; gridlines, headings, the formula bar; Custom Views. */
+  readonly views: SheetViews;
+  /** The sparkline group the Sparkline tab was last brought forward for. */
+  private sparkShown: number | null = null;
   /** The chart the panel and Chart tab showed last (the tab opens when a chart is first picked). */
   private chartShown: number | null = null;
+  /** The PivotTable the ribbon last brought its tab forward for. */
+  private pivotShown: number | null = null;
   /** The dashboard sheet the ribbon was last set up for. */
   private dashShown: Sheet | null = null;
   /** The last cells copied here: pasting the same text back uses these (formulas, structures and formats kept). */
@@ -106,9 +171,17 @@ export class SheetMode {
       structureBox: (s) => this.pictures.box(s),
       structureBitmap: (s, scale) => this.pictures.bitmap(s, Math.abs(scale), scale < 0),
       editStructure: (r, c) => this.drawStructure(r, c),
-      key: (e) => this.host.key(e),
+      key: (e) => this.outlineKey(e) || this.host.key(e),
+      headerFooter: () => void this.page.headerFooter(),
+      f3: (e) => this.f3(e),
       changed: () => this.selectionChanged(),
-      contextMenu: (x, y, where) => (where === 'chart' ? this.charts.contextMenu(x, y) : where === 'tile' ? this.dashUi.contextMenu(x, y) : this.contextMenu(x, y, where)),
+      contextMenu: (x, y, where) => (where === 'chart' ? this.charts.contextMenu(x, y) : where === 'tile' ? this.dashUi.contextMenu(x, y) : where === 'object' ? this.objects.contextMenu(x, y) : this.contextMenu(x, y, where)),
+      editObject: (id) => {
+        const o = this.view.sheet?.objects.find((x) => x.id === id);
+        if (o?.kind === 'picture' || o?.shape === 'line' || o?.shape === 'arrow') void this.objects.format(o);
+        else this.objects.editText(id);
+      },
+      typeInObject: (id, key) => { const o = this.view.sheet?.objects.find((x) => x.id === id); return !!o && this.objects.typeInto(o, key); },
       editChart: () => { this.showRibbonTab('chart'); this.renderPanel(); this.charts.focusPanel(); },
       openTile: (t) => {
         if (t.kind === 'chart') { this.dashUi.bindChart(t.id); this.showRibbonTab('chart'); }
@@ -118,6 +191,11 @@ export class SheetMode {
       filterMenu: (col, at) => this.filterMenu(col, at),
       flash: (m, ms) => this.host.flash(m, ms),
       typing: (text) => this.typing(text),
+      hoverNote: (cell, box) => this.notes.hover(cell, box),
+      drawn: () => this.notes.layout(),
+      dropDown: (r, c, at) => this.validation.dropDown(r, c, at),
+      invalid: (rule, text) => this.validation.alert(rule, text),
+      typed: (r, c, text) => void this.typedStructure(r, c, text),
     });
     chem.onAnswers = () => {
       const wb = this.book;
@@ -136,6 +214,54 @@ export class SheetMode {
       edit: (label, fn) => this.edit(label, fn),
       flash: (m, ms) => this.host.flash(m, ms),
     });
+    this.notes = new SheetNotes({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+      askName: () => this.host.askName(),
+    });
+    this.validation = new SheetValidation({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
+    this.data = new SheetData({
+      view: this.view,
+      edit: (label, fn, after) => this.edit(label, fn, after),
+      flash: (m, ms) => this.host.flash(m, ms),
+      table: () => (this.view.sheet ? this.tableAt() : null),
+      goTo: (text) => this.goTo(text),
+      pasteSpecial: (o) => void this.pasteWith(o),
+    });
+    this.objects = new SheetObjects({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+      pickPicture: () => this.host.pickPicture?.() ?? Promise.resolve(null),
+    });
+    this.page = new SheetPage({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
+    this.formulas = new SheetFormulas({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
+    this.analysis = new SheetAnalysis({
+      view: this.view,
+      edit: (label, fn) => this.edit(label, fn),
+      flash: (m, ms) => this.host.flash(m, ms),
+    });
+    this.pivots = new SheetPivots({ view: this.view, flash: (m, ms) => this.host.flash(m, ms) });
+    this.queries = new SheetQueries({ view: this.view, flash: (m, ms) => this.host.flash(m, ms) });
+    this.compounds = new SheetCompounds({ view: this.view, flash: (m, ms) => this.host.flash(m, ms), edit: (label, fn) => this.edit(label, fn), editSheet: (s, label, fn) => this.editSheet(s, label, fn) });
+    const basic = { view: this.view, edit: (label: string, fn: (s: Sheet) => void) => this.edit(label, fn), flash: (m: string, ms?: number) => this.host.flash(m, ms) };
+    this.look = new SheetLook(basic);
+    this.outline = new SheetOutline({ ...basic, edit: (label, fn, after) => this.edit(label, fn, after), table: () => (this.view.sheet ? this.tableAt() : null) });
+    this.sparks = new SheetSparklines(basic);
+    this.views = new SheetViews({ ...basic, formulaBar: () => { this.showFormulaBar(); this.showRibbonState(); } });
     this.dashUi = new DashboardUi({ view: this.view, charts: this.charts, flash: (m, ms) => this.host.flash(m, ms) });
     this.wireFormulaBar();
     this.wireRibbon();
@@ -196,6 +322,8 @@ export class SheetMode {
       if (!s) return;
       const { r, c } = this.view.sel.active;
       if (s.cell(r, c)?.structure) { bar.blur(); this.host.flash('This cell holds a structure: double-click it to change the drawing.'); return; }
+      // the greyed formula of a spilled cell belongs to its first cell: typing here puts in a new value
+      if (bar.classList.contains('spilled')) { bar.value = ''; bar.classList.remove('spilled'); }
       this.view.beginFromBar();
     });
     bar.addEventListener('input', () => { this.view.setTyping(bar.value); this.fitBar(); });
@@ -223,7 +351,7 @@ export class SheetMode {
       e.preventDefault();
       this.goTo(nb.value.trim());
     });
-    document.querySelector('#sh-fx')!.addEventListener('click', (e) => this.functionMenu(e as MouseEvent));
+    document.querySelector('#sh-fx')!.addEventListener('click', () => this.formulas.insertFunction());
   }
 
   /** The name box: go to a cell, a block or a sheet ("B5", "A1:C9", "Sheet2!A1", "Sheet2"). */
@@ -234,13 +362,15 @@ export class SheetMode {
     let sheetName = m ? (m[1] ?? m[2]).replace(/''/g, "'") : null;
     let ref = m ? m[3] : text;
     if (!m && wb.sheetNamed(text)) { sheetName = text; ref = 'A1'; }
+    if (!m && !parseRange(text.toUpperCase()) && this.formulas.goToName(text)) return;
     if (sheetName !== null) {
       const i = wb.sheets.findIndex((s) => s.name.toLowerCase() === sheetName!.toLowerCase());
       if (i < 0) { this.host.flash(`There is no sheet called "${sheetName}".`); return; }
       this.view.goSheet(i);
     }
     const r = parseRange(ref.toUpperCase());
-    if (!r) { this.host.flash(`"${text}" isn't a cell or a block of cells (for example B5 or A1:C9).`); this.showActive(); return; }
+    if (!r && !m && this.formulas.nameSelection(text)) { this.showActive(); return; }
+    if (!r) { this.host.flash(`"${text}" isn't a cell, a block of cells (for example B5 or A1:C9) or a name.`); this.showActive(); return; }
     this.view.select(r, { r: r.r1, c: r.c1 });
     this.view.focus();
   }
@@ -260,53 +390,63 @@ export class SheetMode {
     }
   }
 
+  /** F3 pastes a name, Shift+F3 opens Insert Function, Ctrl+F3 the Name Manager, Ctrl+Shift+F3 Create from Selection. */
+  /** Shift+Alt+Right groups the selected rows or columns, Shift+Alt+Left ungroups them (Excel's keys). */
+  private outlineKey(e: KeyboardEvent): boolean {
+    if (!e.shiftKey || !e.altKey || e.ctrlKey || e.metaKey || (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft')) return false;
+    e.preventDefault();
+    if (e.key === 'ArrowRight') this.outline.group();
+    else this.outline.ungroup();
+    return true;
+  }
+
+  /** Show or hide the formula bar (View > Formula Bar; dashboards have none). */
+  showFormulaBar(): void {
+    document.querySelector<HTMLElement>('#formula-bar')!.hidden = !!this.view.sheet?.dashboard || !formulaBarPrefs.shown;
+    this.view.refresh();
+  }
+
+  private f3(e: KeyboardEvent): void {
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (ctrl && e.shiftKey) this.formulas.createFromSelection();
+    else if (ctrl) this.formulas.nameManager();
+    else if (e.shiftKey) this.formulas.insertFunction();
+    else {
+      const rc = this.view.screenRect(this.view.sel.active.r, this.view.sel.active.c);
+      this.formulas.useInFormulaMenu(rc?.left ?? 200, (rc?.bottom ?? 200) + 2);
+    }
+  }
+
   /** The name box and formula bar show the active cell. */
   private showActive(): void {
     const s = this.view.sheet;
     if (!s) { this.nameBox.value = ''; this.bar.value = ''; return; }
     const sel = this.view.sel;
-    this.nameBox.value = sel.range.r1 === sel.range.r2 && sel.range.c1 === sel.range.c2 ? cellName(sel.active.r, sel.active.c) : selectionName(sel.range);
+    this.nameBox.value = this.formulas.nameFor(s, sel.range)
+      ?? (sel.range.r1 === sel.range.r2 && sel.range.c1 === sel.range.c2 ? cellName(sel.active.r, sel.active.c) : selectionName(sel.range));
     const { r, c } = sel.active;
     const cell = s.cell(r, c);
-    if (cell?.structure) {
+    const spill = cell?.input ? null : s.spillAt(r, c);
+    this.bar.classList.toggle('spilled', !!spill && !spill.blocked);
+    if (spill && !spill.blocked) {
+      // a cell an array spilled into shows the formula it came from, greyed: it is typed in its first cell
+      this.bar.value = s.cell(spill.row, spill.col)?.input ?? '';
+      this.bar.placeholder = '';
+      this.bar.readOnly = false;
+      this.bar.title = `Spilled from ${cellName(spill.row, spill.col)}: change the formula there.`;
+    } else if (cell?.structure) {
       const v = s.values.get(keyOf(r, c));
       this.bar.value = typeof v === 'string' && v ? v : '';
       this.bar.placeholder = 'A drawn structure (its SMILES shows here)';
       this.bar.readOnly = true;
+      this.bar.title = '';
     } else {
       this.bar.value = s.effectiveInput(r, c) ?? '';
       this.bar.placeholder = '';
       this.bar.readOnly = false;
+      this.bar.title = '';
     }
     this.fitBar();
-  }
-
-  /** fx: a list of the functions, chemistry first; picking one starts it in the cell. */
-  private functionMenu(e: MouseEvent): void {
-    const chemNames = Object.keys(PROPERTIES);
-    const isoNames = Object.keys(ISOTOPE_FUNCTIONS);
-    const rest = FUNCTION_NAMES.filter((n) => !chemNames.includes(n) && !isoNames.includes(n));
-    const put = (name: string) => {
-      const s = this.view.sheet;
-      if (!s) return;
-      if (this.view.editing) {
-        const inp = this.view.input;
-        const p = inp.selectionStart ?? inp.value.length;
-        inp.value = inp.value.slice(0, p) + `${name}(` + inp.value.slice(p);
-        this.view.setTyping(inp.value);
-        inp.focus();
-        inp.setSelectionRange(p + name.length + 1, p + name.length + 1);
-      } else this.view.editCell(`=${name}(`);
-    };
-    const items: ([string, () => void] | null)[] = [
-      ...chemNames.map((n) => [`${n} — ${PROPERTIES[n].label}`, () => put(n)] as [string, () => void]),
-      ...isoNames.map((n) => [`${n} — ${ISOTOPE_FUNCTIONS[n].label}`, () => put(n)] as [string, () => void]),
-      null,
-      ...rest.map((n) => [n, () => put(n)] as [string, () => void]),
-    ];
-    const b = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const m = popupMenu(b.left, b.bottom + 2, items);
-    m.classList.add('fx-menu');
   }
 
   // ---------------------------------------------------------------- the ribbon
@@ -339,6 +479,18 @@ export class SheetMode {
       sel.blur();
       this.view.focus();
     });
+    const font = rb.querySelector<HTMLInputElement>('#sh-font')!;
+    font.addEventListener('change', () => { this.look.setFont(font.value); });
+    font.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); this.look.setFont(font.value); this.view.focus(); }
+      if (e.key === 'Escape') { e.preventDefault(); this.showRibbonState(); this.view.focus(); }
+    });
+    for (const box of rb.querySelectorAll<HTMLInputElement>('[data-spark-opt]')) {
+      box.addEventListener('change', () => {
+        this.sparks.setOption(box.dataset.sparkOpt as Parameters<SheetSparklines['setOption']>[0], box.checked);
+        this.view.focus();
+      });
+    }
     // the ribbon's buttons keep the grid's focus, so keys go on working
     rb.addEventListener('pointerdown', (e) => {
       if ((e.target as HTMLElement).closest('button')) e.preventDefault();
@@ -393,25 +545,64 @@ export class SheetMode {
       case 'text-colour': this.colourMenu(b.left, b.bottom + 2, 'color'); return;
       case 'fill-colour': this.colourMenu(b.left, b.bottom + 2, 'fill'); return;
       case 'borders': this.bordersMenu(b.left, b.bottom + 2); return;
+      case 'use-in-formula': this.formulas.useInFormulaMenu(b.left, b.bottom + 2); return;
+      case 'fn-cat': {
+        const cat = btn.dataset.cat as Category;
+        if (CATEGORIES.includes(cat)) this.formulas.categoryMenu(cat, b.left, b.bottom + 2);
+        return;
+      }
       case 'insert': this.insertMenu(b.left, b.bottom + 2); return;
       case 'delete': this.deleteMenu(b.left, b.bottom + 2); return;
       case 'conditional-formatting': this.formatting.conditionalMenu(b.left, b.bottom + 2); return;
       case 'format-as-table': this.formatting.tableMenu(b.left, b.bottom + 2); return;
       case 'chart-type': this.charts.typeMenu(b.left, b.bottom + 2); return;
+      case 'insert-shapes': this.objects.shapesMenu(b.left, b.bottom + 2); return;
+      case 'page-margins': this.page.marginsMenu(b.left, b.bottom + 2); return;
+      case 'page-orientation': this.page.orientationMenu(b.left, b.bottom + 2); return;
+      case 'page-size': this.page.sizeMenu(b.left, b.bottom + 2); return;
+      case 'print-area': this.page.printAreaMenu(b.left, b.bottom + 2); return;
+      case 'page-breaks': this.page.breaksMenu(b.left, b.bottom + 2); return;
+      case 'fit-wide': this.page.fitMenu(b.left, b.bottom + 2, 'wide'); return;
+      case 'fit-tall': this.page.fitMenu(b.left, b.bottom + 2, 'tall'); return;
       case 'chart-fit': this.charts.fitMenu(b.left, b.bottom + 2); return;
       case 'chart-legend': this.charts.legendMenu(b.left, b.bottom + 2); return;
       case 'chart-palette': this.charts.paletteMenu(b.left, b.bottom + 2); return;
       case 'chart-errors': this.charts.errorsMenu(b.left, b.bottom + 2); return;
+      case 'freeze-panes-menu': this.data.freezeMenu(b.left, b.bottom + 2); return;
+      case 'find-select': this.findSelectMenu(b.left, b.bottom + 2); return;
+      case 'fill-menu': this.fillMenu(b.left, b.bottom + 2); return;
+      case 'paste-menu': this.pasteMenu(b.left, b.bottom + 2); return;
+      case 'what-if': this.analysis.whatIfMenu(b.left, b.bottom + 2); return;
+      case 'get-data': this.queries.getDataMenu(b.left, b.bottom + 2); return;
+      case 'data-types': this.compounds.menu(b.left, b.bottom + 2); return;
+      case 'insert-data': this.compounds.insertMenu(b.left, b.bottom + 2); return;
+      case 'orientation': this.look.orientationMenu(b.left, b.bottom + 2); return;
+      case 'cell-styles': this.look.cellStylesMenu(b.left, b.bottom + 2); return;
+      case 'themes': this.look.themesMenu(b.left, b.bottom + 2); return;
+      case 'theme-colours': this.look.coloursMenu(b.left, b.bottom + 2); return;
+      case 'theme-fonts': this.look.fontsMenu(b.left, b.bottom + 2); return;
+      case 'group-menu': this.outline.groupMenu(b.left, b.bottom + 2); return;
+      case 'ungroup-menu': this.outline.ungroupMenu(b.left, b.bottom + 2); return;
+      case 'spark-edit': this.sparks.editMenu(b.left, b.bottom + 2); return;
+      case 'spark-style': this.sparks.styleMenu(b.left, b.bottom + 2); return;
+      case 'spark-colour': this.sparks.colourMenu(b.left, b.bottom + 2); return;
+      case 'spark-marker-colour': this.sparks.markerColourMenu(b.left, b.bottom + 2); return;
+      case 'spark-axis': this.sparks.axisMenu(b.left, b.bottom + 2); return;
+      case 'spark-empty': this.sparks.emptyMenu(b.left, b.bottom + 2); return;
+      case 'spark-clear': this.sparks.clearMenu(b.left, b.bottom + 2); return;
+      case 'pivot-layout': this.pivots.layoutMenu(b.left, b.bottom + 2); return;
+      case 'pivot-subtotals': this.pivots.subtotalsMenu(b.left, b.bottom + 2); return;
+      case 'pivot-grand': this.pivots.grandMenu(b.left, b.bottom + 2); return;
       case 'table-style': {
         const t = this.tableHere();
         if (t) this.formatting.tableMenu(b.left, b.bottom + 2, (style) => this.formatting.setTable(t, { style }, 'Table style'));
         return;
       }
     }
-    this.run(name);
+    if (!this.run(name)) this.host.command?.(name);
   }
 
-  /** Sheet commands (from the ribbon, the Sheet menu and keys). False when the name isn't one. */
+  /** Sheet commands (from the ribbon, the menus and keys). False when the name isn't one. */
   run(name: string): boolean {
     const v = this.view;
     if (!this.book || !v.sheet) return false;
@@ -431,7 +622,8 @@ export class SheetMode {
         break;
       }
       case 'wrap': this.style('Wrap text', { wrap: !a.wrap || undefined }); break;
-      case 'format-chem': this.style('Formula style', { chem: !a.chem || undefined }); break;
+      // on (as text is anyway, where it has formulas) or off for these cells
+      case 'format-chem': this.style('Formula style', { chem: this.chemShown() ? false : true }); break;
       case 'merge-cells': this.mergeCells(); break;
       case 'format-general': this.style('Number format', { numFmt: undefined }); break;
       case 'format-number': this.style('Number format', { numFmt: FORMATS.number }); break;
@@ -442,7 +634,26 @@ export class SheetMode {
       case 'fill-down': this.fillDown(); break;
       case 'fill-right': this.fillRight(); break;
       case 'autosum': this.autoSum(); break;
-      case 'find': v.openFind(); break;
+      case 'find': this.data.findReplace(false); break;
+      case 'replace': this.data.findReplace(true); break;
+      case 'find-next': this.data.findNext(); break;
+      case 'go-to': this.data.goTo(); break;
+      case 'go-to-special': this.data.goToSpecial(); break;
+      case 'fill-series': this.data.series(); break;
+      case 'flash-fill': this.data.flashFill(); break;
+      case 'paste-special': this.data.pasteSpecial(); break;
+      case 'paste-values': void this.paste(null, 'values'); break;
+      case 'paste-transpose': void this.pasteWith({ what: 'all', transpose: true }); break;
+      case 'text-to-columns': this.data.textToColumns(); break;
+      case 'remove-duplicates': this.data.removeDuplicates(); break;
+      case 'custom-sort': this.data.sortDialog(); break;
+      case 'advanced-filter': this.data.advancedFilter(); break;
+      case 'clear-filter': this.data.clearFilter(); break;
+      case 'freeze-panes': this.data.freeze('cell'); break;
+      case 'freeze-top-row': this.data.freeze('row'); break;
+      case 'freeze-first-col': this.data.freeze('col'); break;
+      case 'unfreeze-panes': this.data.freeze('off'); break;
+      case 'split-window': this.data.toggleSplit(); break;
       case 'insert-cells': this.insertCells(); break;
       case 'delete-cells': this.deleteCells(); break;
       case 'hide-rows': this.hide('row', true); break;
@@ -466,8 +677,11 @@ export class SheetMode {
       case 'table-convert': { const t = this.tableHere(); if (t) this.formatting.convertToRange(t); break; }
       case 'table-colours-reset': { const t = this.tableHere(); if (t) this.formatting.setTable(t, { custom: undefined }, 'Table colours'); break; }
       case 'chart-scatter': case 'chart-line': case 'chart-column': case 'chart-bar': case 'chart-area': case 'chart-pie':
-        if (v.sheet.dashboard) void this.dashUi.addTile('chart', name.slice(6) as ChartKind);
-        else this.charts.insert(name.slice(6) as ChartKind);
+      case 'chart-combo': case 'chart-histogram': case 'chart-box': case 'chart-bubble': case 'chart-radar':
+        if (v.sheet.dashboard) {
+          if (DASH_CHART_KINDS.includes(name.slice(6) as ChartKind)) void this.dashUi.addTile('chart', name.slice(6) as ChartKind);
+          else this.host.flash('Dashboard tiles take scatter, line, column, bar, area and pie charts: make this one on a sheet.', 5000);
+        } else this.charts.insert(name.slice(6) as ChartKind);
         break;
       case 'dash-add-chart': void this.dashUi.addTile('chart'); break;
       case 'dash-add-kpi': void this.dashUi.addTile('kpi'); break;
@@ -486,21 +700,210 @@ export class SheetMode {
       case 'chart-copy': void this.charts.copyPicture(); break;
       case 'chart-save': void this.charts.savePicture(); break;
       case 'chart-delete': this.charts.deleteChart(); break;
-      case 'copy': if (this.charts.chart) void this.charts.copyPicture(); else void this.copy(); break;
-      case 'cut': void this.copy(true); break;
+      case 'copy': if (this.charts.chart) void this.charts.copyPicture(); else if (v.selectedObject) this.host.flash('Use Duplicate on the right-click menu to copy a picture or shape.'); else void this.copy(); break;
+      // a chart or picture isn't cut (a paste can't bring it back): cells under it aren't either
+      case 'cut': if (this.charts.chart || v.selectedObject) this.host.flash('Cut works on cells. Use Copy for a picture of this, or Delete to remove it.'); else void this.copy(true); break;
       case 'paste': void this.paste(null); break;
       case 'clear-contents': v.clearSelection(); break;
       case 'clear-all': this.edit('Clear', (s) => s.clear(v.sel.range, 'all')); break;
       case 'clear-formats': this.edit('Clear formats', (s) => s.clear(v.sel.range, 'formats')); break;
+      case 'new-note': void this.notes.newNote(); break;
+      case 'new-comment': void this.notes.newComment(); break;
+      case 'edit-note': this.notes.edit(); break;
+      case 'delete-note': case 'delete-comment': this.notes.remove(); break;
+      case 'insert-link': void this.editLink(); break;
+      case 'remove-link': this.removeLinks(); break;
+      case 'open-link': { const l = v.linkOf(v.sel.active.r, v.sel.active.c); if (l) void followLink(l); else this.host.flash('The cell has no link.'); break; }
+      case 'show-note': this.notes.toggleShown(); break;
+      case 'show-all-notes': this.notes.toggleShowAll(); this.showRibbonState(); break;
+      case 'convert-notes': this.notes.convertNotes(); break;
+      case 'prev-comment': case 'next-comment': this.notes.step(name === 'next-comment'); break;
+      case 'data-validation': this.validation.dialog(); break;
+      case 'insert-function': this.formulas.insertFunction(); break;
+      case 'name-manager': this.formulas.nameManager(); break;
+      case 'define-name': void this.formulas.defineName(); break;
+      case 'names-from-selection': this.formulas.createFromSelection(); break;
+      case 'circle-invalid': this.validation.toggleCircles(); this.showRibbonState(); break;
+      case 'pick-from-list': v.openDropDown(); break;
+      case 'insert-picture-sheet': void this.objects.insertPicture(); break;
+      case 'insert-text-box': this.objects.insertTextBox(); break;
+      case 'format-object': void this.objects.format(); break;
+      case 'print-titles': void this.page.printTitles(); break;
+      case 'page-setup': void this.page.pageSetupWindow(); break;
+      case 'header-footer': void this.page.headerFooter(); break;
+      case 'page-scale': void this.page.scaleWindow(); break;
+      case 'print-gridlines': this.page.toggle('gridlines'); break;
+      case 'print-headings': this.page.toggle('headings'); break;
+      case 'show-page-breaks': v.showPageBreaks = !v.showPageBreaks; v.refresh(); this.showRibbonState(); break;
+      case 'insert-page-break': this.page.insertBreak(); break;
+      case 'set-print-area': this.page.setPrintArea(false); break;
+      case 'clear-print-area': this.page.set('Clear print area', { printArea: undefined }); break;
+      case 'print-preview': this.printPreview(); break;
+      case 'data-analysis': this.analysis.dataAnalysis(); break;
+      case 'indent-more': case 'indent-less': this.look.indent(name === 'indent-more' ? 1 : -1); break;
+      case 'subtotal': this.outline.subtotal(); break;
+      case 'group': this.outline.group(); break;
+      case 'ungroup': this.outline.ungroup(); break;
+      case 'auto-outline': this.outline.autoOutline(); break;
+      case 'clear-outline': this.outline.clear(); break;
+      case 'show-detail': case 'hide-detail': this.outline.detail(name === 'show-detail'); break;
+      case 'outline-settings': this.outline.settings(); break;
+      case 'view-normal': this.views.layout('normal'); break;
+      case 'view-page-layout': this.views.layout('pageLayout'); break;
+      case 'view-break-preview': this.views.layout('pageBreakPreview'); break;
+      case 'custom-views': this.views.customViews(); break;
+      case 'view-gridlines': this.views.toggle('gridlines'); break;
+      case 'view-headings': this.views.toggle('headings'); break;
+      case 'view-formula-bar': this.views.toggleFormulaBar(); break;
+      case 'spark-line': case 'spark-column': case 'spark-winloss': this.sparks.insert(name.slice(6) as SparkKind); break;
+      case 'spark-type-line': case 'spark-type-column': case 'spark-type-winloss': this.sparks.setKind(name.slice(11) as SparkKind); break;
+      case 'goal-seek': this.analysis.goalSeekWindow(); break;
+      case 'data-table': this.analysis.dataTableWindow(); break;
+      case 'solver': this.analysis.solverWindow(); break;
+      case 'insert-pivot': this.pivots.insertWindow(); break;
+      case 'insert-pivot-chart': this.pivots.pivotChart(); break;
+      case 'pivot-fields': this.pivots.fieldsWindow(); break;
+      case 'pivot-refresh': this.pivots.refresh(); break;
+      case 'refresh-all': void this.refreshAll(); break;
+      case 'from-text': void this.queries.fromText(); break;
+      case 'from-json': void this.queries.fromJson(); break;
+      case 'from-web': void this.queries.fromWeb(); break;
+      case 'from-workbook': void this.queries.fromWorkbook(); break;
+      case 'queries-pane': this.queries.queriesPane(); break;
+      case 'compound': void this.compounds.convert(true); break;
+      case 'compound-refresh': void this.compounds.refreshCards(); break;
+      case 'compound-text': this.compounds.toText(); break;
+      case 'pivot-source': this.pivots.changeSource(); break;
+      case 'pivot-clear': this.pivots.clear(); break;
+      case 'pivot-select': this.pivots.selectReport(); break;
+      case 'pivot-details': this.pivots.showDetails(); break;
+      case 'alt-text': void this.altText(); break;
       default: return false;
     }
     return true;
   }
 
+  /** Refresh All: every query reads its source again, then every PivotTable (which may read a query's table). */
+  async refreshAll(): Promise<void> {
+    const wb = this.book;
+    if (!wb) return;
+    if (!wb.queries.length) { this.pivots.refreshAll(); return; }
+    this.host.flash(`Refreshing ${wb.queries.length} quer${wb.queries.length > 1 ? 'ies' : 'y'}…`, 60000);
+    const problems = await this.queries.refreshQueries();
+    const piv = this.pivots.refreshAll(true);
+    problems.push(...piv.problems);
+    const done = [`${wb.queries.length} quer${wb.queries.length > 1 ? 'ies' : 'y'}`, ...(piv.count ? [`${piv.count} PivotTable${piv.count > 1 ? 's' : ''}`] : [])].join(' and ');
+    this.host.flash(problems.length ? problems.join(' ') : `Refreshed ${done}.`, problems.length ? 9000 : 3000);
+  }
+
+  /** Alt Text… for the chart or picture picked. */
+  async altText(): Promise<boolean> {
+    const v = this.view;
+    const chart = v.selectedChart;
+    if (chart) {
+      const got = await askAltText(chart.title?.trim() ? `"${chart.title.trim()}"` : 'chart', chart.alt);
+      const cur = v.sheet?.charts.find((c) => c.id === chart.id);
+      if (got === null || !cur) return false;
+      v.replaceChart({ ...cur, alt: got || undefined }, 'Alt text');
+      return true;
+    }
+    const o = v.objSel !== null ? v.sheet?.objects.find((x) => x.id === v.objSel) : undefined;
+    if (o) {
+      const got = await askAltText(o.kind === 'picture' ? 'picture' : 'shape', o.descr);
+      const cur = v.sheet?.objects.find((x) => x.id === o.id);
+      if (got === null || !cur) return false;
+      v.replaceObject({ ...cur, descr: got || undefined }, 'Alt text');
+      return true;
+    }
+    this.host.flash('Click a chart or picture first, then Alt Text.');
+    return false;
+  }
+
+  /** Go to what an accessibility issue is about: a cell, chart, picture or sheet. */
+  goToIssue(p: IssuePlace): void {
+    const v = this.view;
+    if (!this.book || !('sheet' in p)) return;
+    v.goSheet(p.sheet);
+    const s = this.book.sheets[p.sheet];
+    if (p.kind === 'cell') v.selectCell(p.row, p.col);
+    else if (p.kind === 'sheet-chart') {
+      const c = s.charts.find((x) => x.id === p.id);
+      if (c) { v.selectCell(c.at.row, c.at.col); v.pickChart(c.id); }
+    } else if (p.kind === 'sheet-object') {
+      const o = s.objects.find((x) => x.id === p.id);
+      if (o) { v.selectCell(o.at.row, o.at.col); v.pickObject(o.id); }
+    }
+  }
+
   /** Change the look of the selected cells. */
   private style(label: string, patch: Partial<CellStyle>): void {
     const v = this.view;
-    this.edit(label, (s) => s.patchStyle(growToMerges(s, v.sel.range), patch));
+    this.edit(label, (s) => { for (const a of v.areas()) s.patchStyle(growToMerges(s, a), patch); });
+  }
+
+  // ---------------------------------------------------------------- links
+
+  /** Insert > Link (Ctrl+K): link the selected cells to a web page, DOI, file, e-mail address or cell. */
+  private async editLink(): Promise<void> {
+    const v = this.view, wb = this.book, s = v.sheet;
+    if (!wb || !s) return;
+    v.commitEdit();
+    const { r, c } = v.sel.active;
+    const cell = s.cell(r, c);
+    const formula = !!cell?.input?.startsWith('=');
+    const shown = formula ? null : s.shownText(r, c);
+    const places: LinkPlace[] = wb.sheets.filter((x) => !x.dashboard).map((x) => ({ link: `#${x.name}`, label: x.name }));
+    const old = cell?.link ? cellOfLink(cell.link) : null;
+    const got = await askLink({
+      text: shown, link: cell?.link && old ? `#${old.sheet ?? s.name}` : cell?.link, places, placeTitle: 'Cell in this workbook',
+      placeTyped: { label: 'Cell', value: old?.cell ?? 'A1', make: (sheet, ref) => { const at = ref.trim().replace(/\$/g, '').toUpperCase(); return parseCellRef(at) ? cellLink(sheet.slice(1), at) : null; } },
+    });
+    v.focus();
+    if (!got || this.view.sheet !== s) return;
+    if ('remove' in got) { this.removeLinks(); return; }
+    const range = growToMerges(s, v.sel.range);
+    this.edit(cell?.link ? 'Edit Link' : 'Insert Link', (sh) => {
+      for (let row = range.r1; row <= Math.min(range.r2, range.r1 + 999); row++) {
+        for (let col = range.c1; col <= Math.min(range.c2, range.c1 + 99); col++) {
+          sh.setLink(row, col, got.link);
+          // the text shown: what was typed in the window (the active cell), or the address in an empty cell
+          if (row === r && col === c && got.text !== undefined && got.text !== shown) sh.setInput(row, col, got.text || describeLink(got.link));
+          else if (!sh.cell(row, col)?.input && !sh.cell(row, col)?.structure) sh.setInput(row, col, describeLink(got.link));
+        }
+      }
+      // Excel's Hyperlink look: blue and underlined
+      sh.patchStyle(range, { color: LINK_COLOUR, underline: true });
+    });
+  }
+
+  /** Remove Link (Excel's Clear Hyperlinks): the selected cells keep their text, without the blue and the underline. */
+  private removeLinks(): void {
+    const v = this.view, s = v.sheet;
+    if (!s) return;
+    const range = growToMerges(s, v.sel.range);
+    const keys = s.keysIn(range).filter((k) => s.cells.get(k)?.link);
+    if (!keys.length) { this.host.flash('No links in the selected cells.'); return; }
+    this.edit('Remove Link', (sh) => {
+      for (const k of keys) {
+        const c = sh.cells.get(k)!;
+        const st = c.style && c.style.color?.toLowerCase() === LINK_COLOUR ? { ...c.style, color: undefined, underline: undefined } : c.style;
+        sh.setCell(rowOf(k), colOf(k), { ...c, link: undefined, style: st });
+      }
+    });
+  }
+
+  /** Go to a cell a link points to (#Sheet1!B4); false when there is no such sheet or cell. */
+  goToPlace(link: string): boolean {
+    const wb = this.book, v = this.view;
+    const at = cellOfLink(link);
+    if (!wb || !at) return false;
+    const i = at.sheet === null ? wb.active : wb.sheets.findIndex((x) => x.name.toLowerCase() === at.sheet!.toLowerCase());
+    const ref = parseCellRef(at.cell);
+    if (i < 0 || !ref) return false;
+    v.goSheet(i);
+    v.selectCell(ref.row, ref.col);
+    v.focus();
+    return true;
   }
 
   /** One undoable change to the sheet showing, remembering the selection for undo. */
@@ -512,6 +915,35 @@ export class SheetMode {
     wb.edit(label, () => fn(s), this.view.place(), after ? () => ({ sheet: s, sel: after() }) : undefined);
     this.view.refresh();
     this.schedulePanel();
+  }
+
+  /**
+   * One undoable change to a given sheet, for work that awaited (names read, look-ups): the sheet
+   * may no longer be the one showing, and is then changed where it is. False when its workbook
+   * was closed or the sheet deleted meanwhile.
+   */
+  private editSheet(s: Sheet, label: string, fn: (s: Sheet) => void, sel?: Range): boolean {
+    const wb = s.wb;
+    if (!this.host.isOpen(wb) || !wb.sheets.includes(s)) return false;
+    if (wb === this.book && s === this.view.sheet) { this.edit(label, fn); return true; }
+    wb.edit(label, () => fn(s), sel ? { sheet: s, sel } : undefined);
+    if (wb === this.book) { this.view.refresh(); this.schedulePanel(); } else this.host.changed(wb);
+    return true;
+  }
+
+  /** Format Painter: the formats of the cells selected (null with no sheet). */
+  pickFormats(): CellBlock | null {
+    const s = this.view.sheet;
+    if (!s) return null;
+    this.view.commitEdit();
+    return s.copy(this.view.sel.range);
+  }
+
+  /** Format Painter: give the cells just clicked or dragged over the formats picked up. */
+  paintFormats(block: CellBlock): void {
+    let target = this.view.sel.range;
+    this.edit('Format Painter', (sh) => { target = paintCells(sh, block, target); }, () => target);
+    this.view.select(target, { r: target.r1, c: target.c1 });
   }
 
   private decimals(delta: 1 | -1): void {
@@ -575,7 +1007,7 @@ export class SheetMode {
     input.dataset.systemPicker = '';
     input.addEventListener('change', () => pick(input.value));
     more.append('More colours ', input);
-    m.append(grid, paletteRows(undefined, pick, () => m.remove()), none, more);
+    m.append(themeColourGrid(this.look.theme, pick), grid, paletteRows(undefined, pick, () => m.remove()), none, more);
     document.body.append(m);
     m.style.left = `${Math.min(x, innerWidth - m.offsetWidth - 4)}px`;
     m.style.top = `${y}px`;
@@ -601,6 +1033,52 @@ export class SheetMode {
       ['All borders', set('all', 'All borders')],
       null,
       ['No border', set('none', 'No border')],
+    ]);
+  }
+
+  /** Home > Find & Select ▾, as Excel's. */
+  private findSelectMenu(x: number, y: number): void {
+    const special = (kind: SpecialKind) => () => {
+      const v = this.view;
+      const got = goToSpecial(v.sheet!, v.sel.range, v.sel.active, { kind });
+      if (got) v.selectAreas(got);
+      else this.host.flash('No cells were found.');
+    };
+    popupMenu(x, y, [
+      ['Find… (Ctrl+F)', () => this.run('find')],
+      ['Replace… (Ctrl+H)', () => this.run('replace')],
+      ['Go To… (Ctrl+G)', () => this.run('go-to')],
+      ['Go To Special…', () => this.run('go-to-special')],
+      null,
+      ['Formulas', special('formulas')],
+      ['Notes and Comments', special('notes')],
+      ['Constants', special('constants')],
+      ['Blanks', special('blanks')],
+      ['Conditional Formatting', special('condformats')],
+      ['Data Validation', special('validation')],
+    ]);
+  }
+
+  /** Home > Fill ▾ */
+  private fillMenu(x: number, y: number): void {
+    popupMenu(x, y, [
+      ['Down (Ctrl+D)', () => this.run('fill-down')],
+      ['Right (Ctrl+R)', () => this.run('fill-right')],
+      ['Series…', () => this.run('fill-series')],
+      ['Flash Fill (Ctrl+E)', () => this.run('flash-fill')],
+    ]);
+  }
+
+  /** Home > Paste ▾ */
+  private pasteMenu(x: number, y: number): void {
+    popupMenu(x, y, [
+      ['Paste', () => void this.paste(null)],
+      ['Paste Values', () => void this.paste(null, 'values')],
+      ['Paste Formulas', () => void this.pasteWith({ what: 'formulas' })],
+      ['Paste Formatting', () => void this.paste(null, 'formats')],
+      ['Transpose', () => void this.pasteWith({ what: 'all', transpose: true })],
+      null,
+      ['Paste Special… (Ctrl+Alt+V)', () => this.run('paste-special')],
     ]);
   }
 
@@ -828,7 +1306,8 @@ export class SheetMode {
     if (s.frozen.rows) { this.edit('Unfreeze', (sh) => sh.setFrozen(0, sh.frozen.cols)); return; }
     const t = this.tableAt();
     const rows = t?.header !== null && t?.header !== undefined ? t.header + 1 : Math.max(1, v.sel.active.r);
-    this.edit('Freeze header row', (sh) => sh.setFrozen(rows, sh.frozen.cols));
+    v.keepPlaceForFreeze();
+    this.edit('Freeze header row', (sh) => { sh.setSplit(null); sh.setFrozen(rows, sh.frozen.cols); });
     this.host.flash(`Rows 1–${rows} stay in view as you scroll.`);
   }
 
@@ -994,14 +1473,16 @@ export class SheetMode {
       }
       if (!got.length) { this.host.flash(`None of these could be read as names or SMILES: ${missed.slice(0, 4).join(', ')}${missed.length > 4 ? '…' : ''}`, 9000); return; }
       const col = R.c1 + 1;
-      this.edit('Structures from names', (sh) => {
+      // into the sheet the names were read from, even when another tab or sheet shows by now
+      const wrote = this.editSheet(s, 'Structures from names', (sh) => {
         sh.insertCols(col, 1);
         for (const g of got) sh.setStructure(g.r, col, g.contents);
         sh.setColWidth(col, 150);
         const head = R.r1 > 0 && !texts.some((t) => t.r === R.r1 - 1) ? R.r1 - 1 : -1;
         const above = head >= 0 ? sh.values.get(keyOf(head, R.c1)) : undefined;
         if (head >= 0 && typeof above === 'string' && !sh.cell(head, col)) sh.setInput(head, col, 'Structure');
-      });
+      }, R);
+      if (!wrote) return;
       this.host.flash(`Drew ${got.length} structure${got.length > 1 ? 's' : ''} in column ${colName(col)}.${missed.length ? ` Not read: ${missed.slice(0, 4).join(', ')}${missed.length > 4 ? '…' : ''}` : ''}`, missed.length ? 9000 : 4000);
       return;
     }
@@ -1013,8 +1494,26 @@ export class SheetMode {
     if (!text) return;
     const res = await this.host.toStructure(text, style);
     if ('error' in res) { this.host.flash(res.error, 9000); return; }
-    this.edit('Structure from name', (sh) => sh.setStructure(r, c, res.contents));
+    if (!this.editSheet(s, 'Structure from name', (sh) => sh.setStructure(r, c, res.contents), { r1: r, c1: c, r2: r, c2: c })) return;
     if (res.notes.length) this.host.flash('Note from the name reader: ' + res.notes.join(' '), 9000);
+  }
+
+  /**
+   * A SMILES or name typed into a column headed "Structure" (a reagent table's) is drawn there,
+   * in place of the text. Text that can't be read stays as it was typed.
+   */
+  private async typedStructure(r: number, c: number, text: string): Promise<void> {
+    const s = this.view.sheet, wb = this.book;
+    if (!s || !wb || r === 0 || /\s/.test(text) && !/[a-z]{3}/i.test(text)) return;
+    const head = s.values.get(keyOf(0, c));
+    if (typeof head !== 'string' || !/^structures?$/i.test(head.trim())) return;
+    const res = await this.host.toStructure(text, wb.drawingStyle);
+    // still the same text in the same cell (nothing typed over it meanwhile)
+    if ('error' in res || this.book !== wb || s.values.get(keyOf(r, c)) !== text || s.cell(r, c)?.structure) return;
+    // not through edit(): that would end typing begun in the next cell meanwhile
+    wb.edit('Structure from typing', () => s.setStructure(r, c, res.contents), this.view.place());
+    this.view.refresh();
+    this.host.changed();
   }
 
   /** Edit > Paste SMILES: a SMILES string, molfile or name drawn as a structure in the active cell. */
@@ -1044,7 +1543,7 @@ export class SheetMode {
   }
 
   /**
-   * Sheet > Isotope Pattern…: a table of an ion's isotope peaks (calculated, with columns for the
+   * Insert > Isotope Pattern…: a table of an ion's isotope peaks (calculated, with columns for the
    * peaks found and their error in ppm) and a chart of them as a mass spectrum.
    */
   private async isotopePattern(): Promise<void> {
@@ -1137,7 +1636,7 @@ export class SheetMode {
     return out;
   }
 
-  /** Sheet > Insert Property Column…: pick properties to work out from a column of structures. */
+  /** Chemistry > Insert Property Column…: pick properties to work out from a column of structures. */
   private async propertyColumns(choice?: { col: number; props: PropertyChoice[] }): Promise<void> {
     const v = this.view;
     const s = v.sheet!;
@@ -1212,6 +1711,14 @@ export class SheetMode {
     this.host.flash('Reagent table: type the limiting reagent\'s mmol in E2, then each reagent\'s structure (draw it, or type SMILES) and equiv. MW, mmol, mass and volume work themselves out; type over any of them to replace it.', 10000);
   }
 
+  /** Is the active cell shown as chemistry (by its look, or because its text has a formula)? */
+  private chemShown(): boolean {
+    const s = this.view.sheet;
+    if (!s) return false;
+    const { r, c } = this.view.sel.active;
+    return showsChem(s.styleAt(r, c)?.chem, s.values.get(keyOf(r, c)));
+  }
+
   /** Put back the calculated values where they were typed over. */
   private resetCalculated(): void {
     const v = this.view;
@@ -1280,23 +1787,7 @@ export class SheetMode {
   }
 
   /** The cells as an HTML table, so Word and Excel keep bold, colours and alignment. */
-  /** File > Print: the sheet's cells (or just those selected) as a table, structures as pictures. Null when there is nothing. */
-  printTable(selected: boolean): string | null {
-    const v = this.view, s = v.sheet;
-    if (!s) return null;
-    v.commitEdit();
-    const R = selected ? s.clip(growToMerges(s, v.sel.range)) : s.usedRange();
-    return R ? this.htmlTable(s, R, true) : null;
-  }
-
   private htmlTable(s: Sheet, R: Range, pictures = false): string {
-    const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const picture = (r: number, c: number): string | null => {
-      const st = pictures ? s.cell(r, c)?.structure : undefined;
-      if (!st) return null;
-      const b = this.pictures.box(st), bmp = this.pictures.bitmap(st, 4, true);
-      return bmp ? `<img src="${bmp.toDataURL('image/png')}" style="width:${b.w}pt;height:${b.h}pt" alt="">` : null;
-    };
     const lines: string[] = ['<table border="0" cellspacing="0" cellpadding="0" style="border-collapse:collapse">'];
     for (let r = R.r1; r <= R.r2; r++) {
       if (s.hiddenRows.has(r)) continue;
@@ -1305,30 +1796,83 @@ export class SheetMode {
         if (s.hiddenCols.has(c)) continue;
         const m = s.mergeAt(r, c);
         if (m && (m.r1 !== r || m.c1 !== c)) continue;
-        const st = s.styleAt(r, c);
-        const css: string[] = [];
-        if (st?.bold) css.push('font-weight:700');
-        if (st?.italic) css.push('font-style:italic');
-        if (st?.underline) css.push('text-decoration:underline');
-        if (st?.color) css.push(`color:${st.color}`);
-        if (st?.fill) css.push(`background:${st.fill}`);
-        if (st?.align) css.push(`text-align:${st.align}`);
-        for (const side of ['top', 'right', 'bottom', 'left'] as const) {
-          const b = st?.borders?.[side];
-          if (b) css.push(`border-${side}:${b.style === 'thick' ? '2.25pt' : b.style === 'medium' ? '1.5pt' : '.5pt'} ${b.style === 'double' ? 'double' : b.style === 'dashed' ? 'dashed' : b.style === 'dotted' ? 'dotted' : 'solid'} ${b.color ?? '#000'}`);
-        }
-        const v = s.values.get(keyOf(r, c));
-        const num = typeof v === 'number';
-        // numbers sit on the right unless set otherwise, as on screen
-        if (num && !st?.align) css.push('text-align:right');
         const span = m ? `${m.c2 > m.c1 ? ` colspan="${m.c2 - m.c1 + 1}"` : ''}${m.r2 > m.r1 ? ` rowspan="${m.r2 - m.r1 + 1}"` : ''}` : '';
-        // Excel reads a number with x:num and keeps its full value
-        tds.push(`<td${span}${num ? ` x:num="${v}"` : ''}${css.length ? ` style="${css.join(';')}"` : ''}>${picture(r, c) ?? esc(this.cellText(s, r, c)).replace(/\n/g, '<br>')}</td>`);
+        const cell = this.cellHtml(s, r, c, pictures);
+        tds.push(`<td${span}${cell.attrs}>${cell.body}</td>`);
       }
       lines.push(`<tr>${tds.join('')}</tr>`);
     }
     lines.push('</table>');
     return lines.join('');
+  }
+
+  /** One cell for an HTML table: its look as the <td>'s attributes, and what it shows (a structure as a picture, for printing). */
+  private cellHtml(s: Sheet, r: number, c: number, pictures: boolean, fit?: { w: number; h: number }): { attrs: string; body: string } {
+    const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const picture = (): string | null => {
+      const st = pictures ? s.cell(r, c)?.structure : undefined;
+      if (!st) return null;
+      const b = this.pictures.box(st), bmp = this.pictures.bitmap(st, 4, true);
+      if (!bmp) return null;
+      // printed pages: shrunk to fit the cell, as the grid shows it (points to pixels: 4/3)
+      const k = fit ? Math.min(1, (fit.w - 4) / (b.w * 4 / 3), (fit.h - 4) / (b.h * 4 / 3)) : 1;
+      return `<img src="${bmp.toDataURL('image/png')}" style="width:${b.w * k}pt;height:${b.h * k}pt" alt="">`;
+    };
+    const st = s.styleAt(r, c);
+    const css: string[] = [];
+    if (st?.bold) css.push('font-weight:700');
+    if (st?.italic) css.push('font-style:italic');
+    if (st?.underline) css.push('text-decoration:underline');
+    if (st?.color) css.push(`color:${st.color}`);
+    if (st?.fill) css.push(`background:${st.fill}`);
+    if (st?.align) css.push(`text-align:${st.align}`);
+    for (const side of ['top', 'right', 'bottom', 'left'] as const) {
+      const b = st?.borders?.[side];
+      if (b) css.push(`border-${side}:${b.style === 'thick' ? '2.25pt' : b.style === 'medium' ? '1.5pt' : '.5pt'} ${b.style === 'double' ? 'double' : b.style === 'dashed' ? 'dashed' : b.style === 'dotted' ? 'dotted' : 'solid'} ${b.color ?? '#000'}`);
+    }
+    const v = s.values.get(keyOf(r, c));
+    const num = typeof v === 'number';
+    // numbers sit on the right unless set otherwise, as on screen
+    if (num && !st?.align) css.push('text-align:right');
+    if (fit) {
+      if (st?.valign === 'top' || st?.valign === 'middle') css.push(`vertical-align:${st.valign}`);
+      if (st?.wrap) css.push('white-space:pre-wrap'); else css.push('white-space:pre;overflow:hidden');
+      if (st?.size) css.push(`font-size:${st.size}pt`);
+      if (st?.font) css.push(`font-family:'${st.font}', Calibri, Carlito, Arial, sans-serif`);
+    }
+    // Excel reads a number with x:num and keeps its full value
+    const text = this.cellText(s, r, c);
+    // printed pages: formulas with their numbers lowered and charges raised, as on screen
+    const chem = fit && typeof v === 'string' && showsChem(st?.chem, v)
+      ? chemPieces(text).map((p) => { const t = esc(p.text); const x = p.pos === 'sub' ? `<sub>${t}</sub>` : p.pos === 'sup' ? `<sup>${t}</sup>` : t; return p.italic ? `<i>${x}</i>` : x; }).join('')
+      : null;
+    return { attrs: `${num ? ` x:num="${v}"` : ''}${css.length ? ` style="${css.join(';')}"` : ''}`, body: picture() ?? chem ?? esc(text).replace(/\n/g, '<br>') };
+  }
+
+  /** Page Layout > Print Preview: the pages as they will print. */
+  printPreview(): void {
+    const name = this.tab?.name ?? 'Sheet';
+    const got = this.printedSheet({ selection: false, ignoreArea: false, file: name });
+    if (!got) { this.host.flash('There is nothing in this sheet to print.'); return; }
+    previewPages(got, `${this.view.sheet!.name}`, () => this.host.print?.());
+  }
+
+  /** File > Print and Print Preview: the sheet's pages, as its page setup lays them out. */
+  printedSheet(opts: { selection: boolean; ignoreArea: boolean; file: string }): PrintedSheet | null {
+    const v = this.view, s = v.sheet, wb = this.book;
+    if (!s || !wb) return null;
+    v.commitEdit();
+    const sel = opts.selection ? s.clip(growToMerges(s, v.sel.range)) : null;
+    if (opts.selection && !sel) return null;
+    return printSheet(wb, s, {
+      rowHeight: (r) => v.rowHeight(r),
+      cellHtml: (sh, r, c) => {
+        const m = sh.mergeAt(r, c);
+        const w = m ? Array.from({ length: m.c2 - m.c1 + 1 }, (_, i) => v.colWidth(m.c1 + i)).reduce((a, b) => a + b, 0) : v.colWidth(c);
+        const h = m ? Array.from({ length: m.r2 - m.r1 + 1 }, (_, i) => v.rowHeight(m.r1 + i)).reduce((a, b) => a + b, 0) : v.rowHeight(r);
+        return this.cellHtml(sh, r, c, true, { w, h });
+      },
+    }, { selection: sel ?? undefined, ignoreArea: opts.ignoreArea, file: opts.file });
   }
 
   /** Split view's Insert: a drawing into the selected cell, as pasting one would. */
@@ -1346,21 +1890,15 @@ export class SheetMode {
     this.view.focus();
   }
 
-  /** Paste at the selection: cells copied here, a drawing (into the active cell), or text from Excel and elsewhere. */
-  async paste(e: ClipboardEvent | null, what: 'all' | 'values' | 'formats' = 'all'): Promise<void> {
-    const v = this.view;
-    const s = v.sheet;
-    const wb = this.book;
-    if (!s || !wb) return;
-    v.commitEdit();
+  /** Cells on the clipboard: those copied here (with where they came from), our own copy from another window, or null. */
+  private async readBlock(e: ClipboardEvent | null): Promise<{ got: ClipboardCells; block: CellBlock | null; fromClip: boolean } | null> {
     let got: ClipboardCells;
     try {
       got = await this.host.readCells(e);
     } catch (err) {
       this.host.flash('Could not read the clipboard: ' + String(err));
-      return;
+      return null;
     }
-    const { r, c } = v.sel.active;
     let block: CellBlock | null = null;
     let fromClip = false;
     if (this.clip && got.text !== undefined && normalizeEol(got.text) === normalizeEol(this.clip.text)) {
@@ -1374,6 +1912,43 @@ export class SheetMode {
         block = null;
       }
     }
+    if (!block && !got.drawing && got.text !== undefined && got.text !== '') {
+      const rows = parseDelimited(got.text, got.text.includes('\t') ? '\t' : 'auto');
+      const width = Math.max(...rows.map((x) => x.length));
+      block = { rows: rows.length, cols: width, cells: rows.map((x) => x.map((t) => (t === '' ? undefined : { input: t } as Cell))), origin: null };
+    }
+    return { got, block, fromClip };
+  }
+
+  /** Paste Special: some part of the copied cells, combined, skipping blanks or turned (see data-tools). */
+  async pasteWith(o: PasteSpecialOptions): Promise<void> {
+    const v = this.view;
+    const s = v.sheet;
+    if (!s || !this.book) return;
+    v.commitEdit();
+    const read = await this.readBlock(null);
+    if (!read) return;
+    const { block, fromClip } = read;
+    if (!block) { this.host.flash('Copy some cells first: Paste Special pastes cells.'); return; }
+    if (fromClip && this.clip!.cut) { this.host.flash('Paste Special works on copied cells: copy them (Ctrl+C) rather than cut them.', 6000); return; }
+    const at = { row: v.sel.range.r1, col: v.sel.range.c1 };
+    const src = fromClip ? { sheet: this.clip!.sheet, range: this.clip!.range } : null;
+    let target: Range = { r1: at.row, c1: at.col, r2: at.row, c2: at.col };
+    this.edit(o.transpose ? 'Paste Transposed' : 'Paste Special', (sh) => { target = pasteSpecial(sh, at, block, o, src); }, () => target);
+    v.select(target, { r: target.r1, c: target.c1 });
+  }
+
+  /** Paste at the selection: cells copied here, a drawing (into the active cell), or text from Excel and elsewhere. */
+  async paste(e: ClipboardEvent | null, what: 'all' | 'values' | 'formats' = 'all'): Promise<void> {
+    const v = this.view;
+    const s = v.sheet;
+    const wb = this.book;
+    if (!s || !wb) return;
+    v.commitEdit();
+    const read = await this.readBlock(e);
+    if (!read) return;
+    const { got, fromClip, block } = read;
+    const { r, c } = v.sel.active;
     if (!block && got.drawing) {
       if (isBlankDrawing(got.drawing)) { this.host.flash('There is nothing to paste.'); return; }
       const m = s.mergeAt(r, c);
@@ -1382,11 +1957,6 @@ export class SheetMode {
       this.edit('Paste structure', (sh) => sh.setStructure(rr, cc, got.drawing!));
       this.host.flash(`Pasted the structure into ${cellName(rr, cc)}. Double-click it to change it.`);
       return;
-    }
-    if (!block && got.text !== undefined && got.text !== '') {
-      const rows = parseDelimited(got.text, got.text.includes('\t') ? '\t' : 'auto');
-      const width = Math.max(...rows.map((x) => x.length));
-      block = { rows: rows.length, cols: width, cells: rows.map((x) => x.map((t) => (t === '' ? undefined : { input: t } as Cell))), origin: null };
     }
     if (!block) { this.host.flash(got.picture ? 'Pictures can\'t go in a cell yet: paste structures, or text from Excel.' : 'There is nothing to paste.'); return; }
     // a block pasted on a larger selection that holds it a whole number of times is repeated (as in Excel)
@@ -1435,6 +2005,13 @@ export class SheetMode {
 
   // ---------------------------------------------------------------- undo
 
+  /** The name of the step Undo (or Redo) would take back: null with none, '' when it has no name. */
+  history(redo = false): string | null {
+    const wb = this.book;
+    if (!wb || !(redo ? wb.canRedo() : wb.canUndo())) return null;
+    return redo ? wb.redoLabel : wb.undoLabel;
+  }
+
   undo(): void {
     const wb = this.book;
     if (!wb) return;
@@ -1478,6 +2055,7 @@ export class SheetMode {
       ['Copy', () => void this.copy()],
       ['Paste', () => void this.paste(null)],
       ['Paste Values', () => void this.paste(null, 'values')],
+      ['Paste Special…', () => this.run('paste-special')],
       null,
     ];
     if (where === 'row') {
@@ -1490,11 +2068,36 @@ export class SheetMode {
         ['Column width…', () => void this.askSize('col')], ['Fit width to contents', () => { for (let c = R.c1; c <= Math.min(R.c2, s.lastCol + 1); c++) v.autoFit('col', c); }]);
       if (s.colDefs.has(R.c1)) items.push(['Change the column\'s formula…', () => void this.editColumnFormula(R.c1)], ['Stop calculating this column (keep the values)', () => this.freezeColumn(R.c1)]);
     } else {
+      // in a PivotTable, its own commands first, as Excel's menu has them
+      const pivot = this.pivots.contextItems(x, y);
+      if (pivot) items.push(...pivot, null);
+      const q = this.queries.here();
+      if (q) items.push(['Refresh', () => void this.queries.refresh(q).then((p) => this.host.flash(p ?? `Refreshed ${q.name}.`, p ? 8000 : 2500))], ['Edit Query…', () => this.queries.editor(q, null, false)], null);
+      if (s.cell(v.sel.active.r, v.sel.active.c)?.compound) {
+        items.push(['Data Type ▸', () => popupMenu(x, y, [
+          ['Insert Data ▸', () => this.compounds.insertMenu(x, y)],
+          ['Refresh', () => void this.compounds.refreshCards()],
+          ['Convert to Text', () => this.compounds.toText()],
+        ])], null);
+      }
       items.push(['Insert…', () => this.insertCells()], ['Delete…', () => this.deleteCells()], ['Clear contents', () => v.clearSelection()]);
+      // notes and comments, as Excel's right-click menu has them
+      const note = s.noteAt(v.sel.active.r, v.sel.active.c);
+      items.push(null);
+      if (!note) items.push(['New Comment', () => void this.notes.newComment()], ['New Note', () => void this.notes.newNote()]);
+      else if (note.kind === 'comment') items.push(['Show Comment', () => this.notes.edit()], ['Delete Comment', () => this.notes.remove()]);
+      else items.push(['Edit Note', () => this.notes.edit()], ['Delete Note', () => this.notes.remove()], [note.shown ? 'Hide Note' : 'Show Note', () => this.notes.toggleShown()]);
+      items.push(['Pick From Drop-down List…', () => v.openDropDown()]);
+      // links, as Excel's right-click menu has them
+      const link = v.linkOf(v.sel.active.r, v.sel.active.c);
+      items.push(null);
+      if (link) items.push(['Edit Link…', () => void this.run('insert-link')], ['Open Link', () => void followLink(link)], ['Copy Link', () => void navigator.clipboard?.writeText(link).catch(() => {})], ['Remove Link', () => this.run('remove-link')]);
+      else items.push(['Link…', () => void this.run('insert-link')]);
     }
     items.push(null,
       ['Sort smallest to largest', () => void this.sort(false)],
       ['Sort largest to smallest', () => void this.sort(true)],
+      ['Custom Sort…', () => this.run('custom-sort')],
       [s.filter ? 'Filter off' : 'Filter', () => this.toggleFilter()],
       null,
       [structure ? 'Change structure…' : 'Draw structure…', () => this.drawStructure(v.sel.active.r, v.sel.active.c)],
@@ -1504,6 +2107,7 @@ export class SheetMode {
       ['Reset to calculated', () => this.resetCalculated(), overrides],
       null,
       ['Conditional Formatting ▸', () => this.formatting.conditionalMenu(x, y)],
+      ['Data Validation…', () => this.validation.dialog()],
     );
     const table = this.tableHere();
     if (table) {
@@ -1568,6 +2172,8 @@ export class SheetMode {
 
   private selectionChanged(): void {
     this.showActive();
+    this.analysis.selectionChanged();
+    this.pivots.selectionChanged();
     this.schedulePanel();
   }
 
@@ -1587,8 +2193,10 @@ export class SheetMode {
     const tab = (n: string) => this.ribbon.querySelector<HTMLButtonElement>(`[data-sh-tab=${n}]`)!;
     const selected = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab][aria-selected=true]')?.dataset.shTab;
     const on = !!s.dashboard;
-    document.querySelector<HTMLElement>('#formula-bar')!.hidden = on;
+    document.querySelector<HTMLElement>('#formula-bar')!.hidden = on || !formulaBarPrefs.shown;
     tab('home').hidden = on;
+    tab('formulas').hidden = on;
+    tab('data').hidden = on;
     tab('dashboard').hidden = !on;
     if (!on) {
       if (selected === 'dashboard') this.showRibbonTab('home');
@@ -1596,10 +2204,11 @@ export class SheetMode {
       return false;
     }
     tab('table').hidden = true;
+    tab('pivot').hidden = true;
     const t = this.view.dash.pickedTile;
     const chart = t?.kind === 'chart';
     tab('chart').hidden = !chart;
-    if (this.dashShown !== s || selected === 'home' || selected === 'table' || (selected === 'chart' && !chart)) this.showRibbonTab('dashboard');
+    if (this.dashShown !== s || selected === 'home' || selected === 'formulas' || selected === 'data' || selected === 'pivot' || selected === 'table' || (selected === 'chart' && !chart)) this.showRibbonTab('dashboard');
     if (chart && this.chartShown !== t.id) this.showRibbonTab('chart');
     this.chartShown = chart ? t.id : null;
     this.dashShown = s;
@@ -1613,7 +2222,8 @@ export class SheetMode {
     if (this.dashRibbon(s)) return;
     const { r, c } = this.view.sel.active;
     const st = s.styleAt(r, c) ?? {};
-    const press = (name: string, on: boolean) => this.ribbon.querySelector(`[data-sh="${name}"]`)?.setAttribute('aria-pressed', String(on));
+    // (some buttons are on two tabs, as in Excel: Filter on Home and on Data)
+    const press = (name: string, on: boolean) => { for (const b of this.ribbon.querySelectorAll(`[data-sh="${name}"]`)) b.setAttribute('aria-pressed', String(on)); };
     press('cell-bold', !!st.bold);
     press('cell-italic', !!st.italic);
     press('cell-underline', !!st.underline);
@@ -1621,10 +2231,57 @@ export class SheetMode {
     press('align-center', st.align === 'center');
     press('align-right', st.align === 'right');
     press('wrap', !!st.wrap);
-    press('format-chem', !!st.chem);
+    press('format-chem', this.chemShown());
     press('filter', !!s.filter);
     press('freeze-header', s.frozen.rows > 0);
+    press('split-window', !!s.split && !s.frozen.rows && !s.frozen.cols);
+    for (const m of document.querySelectorAll('[role="menuitemcheckbox"][data-cmd="split-window"]')) m.setAttribute('aria-checked', String(!!s.split));
     press('merge-cells', !!s.mergeAt(r, c));
+    press('show-all-notes', this.notes.showAll);
+    press('circle-invalid', this.view.circleInvalid);
+    press('show-page-breaks', this.view.showPageBreaks);
+    press('print-gridlines', !!s.pageSetup?.gridlines);
+    press('print-headings', !!s.pageSetup?.headings);
+    const layout = s.viewOpts?.layout ?? 'normal';
+    press('view-normal', layout === 'normal');
+    press('view-page-layout', layout === 'pageLayout');
+    press('view-break-preview', layout === 'pageBreakPreview');
+    press('view-gridlines', s.viewOpts?.gridlines !== false);
+    press('view-headings', s.viewOpts?.headings !== false);
+    press('view-formula-bar', formulaBarPrefs.shown);
+    const fontBox = this.ribbon.querySelector<HTMLInputElement>('#sh-font');
+    if (fontBox && document.activeElement !== fontBox) {
+      const minor = themeOf(this.book?.theme).minor;
+      fontBox.value = st.font ?? minor;
+      fontBox.placeholder = minor;
+    }
+    // the Sparkline tab shows while the active cell has a sparkline
+    const spark = this.sparks.here();
+    const stab = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab=sparkline]');
+    if (stab) {
+      if (!spark && stab.getAttribute('aria-selected') === 'true') this.showRibbonTab('insert');
+      stab.hidden = !spark;
+      if (spark && spark.group.id !== this.sparkShown) this.showRibbonTab('sparkline');
+      this.sparkShown = spark?.group.id ?? null;
+      if (spark) {
+        const g = spark.group;
+        for (const k of ['line', 'column', 'winloss'] as const) press(`spark-type-${k}`, g.kind === k);
+        for (const box of this.ribbon.querySelectorAll<HTMLInputElement>('[data-spark-opt]')) {
+          const opt = box.dataset.sparkOpt as 'high' | 'low' | 'negative' | 'first' | 'last' | 'markers';
+          box.checked = !!g[opt];
+          box.disabled = opt === 'markers' && g.kind !== 'line';
+        }
+      }
+    }
+    const note = s.noteAt(r, c);
+    press('show-note', !!note?.shown);
+    for (const [name, on] of [['edit-note', note?.kind === 'note'], ['show-note', note?.kind === 'note'], ['delete-note', !!note]] as const) {
+      const b = this.ribbon.querySelector<HTMLButtonElement>(`[data-sh="${name}"]`);
+      if (b) b.disabled = !on;
+    }
+    for (const m of document.querySelectorAll('[role="menuitemcheckbox"][data-cmd="show-all-notes"]')) m.setAttribute('aria-checked', String(this.notes.showAll));
+    for (const m of document.querySelectorAll('[role="menuitemcheckbox"][data-cmd="circle-invalid"]')) m.setAttribute('aria-checked', String(this.view.circleInvalid));
+    for (const m of document.querySelectorAll('[role="menuitemcheckbox"][data-cmd="show-page-breaks"]')) m.setAttribute('aria-checked', String(this.view.showPageBreaks));
     const fmt = this.ribbon.querySelector<HTMLSelectElement>('#sh-numfmt')!;
     const code = st.numFmt ?? 'General';
     let opt = [...fmt.options].find((o) => o.value === code);
@@ -1650,6 +2307,15 @@ export class SheetMode {
     ctab.hidden = !chart;
     if (chart && chart.id !== this.chartShown) this.showRibbonTab('chart');
     this.chartShown = chart?.id ?? null;
+    // PivotTable Analyze shows while the active cell is in a PivotTable
+    const pt = chart ? undefined : this.pivots.here();
+    const ptab = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab=pivot]');
+    if (ptab) {
+      if (!pt && ptab.getAttribute('aria-selected') === 'true') this.showRibbonTab('home');
+      ptab.hidden = !pt;
+      if (pt && pt.id !== this.pivotShown) this.showRibbonTab('pivot');
+      this.pivotShown = pt?.id ?? null;
+    }
     // Table Design shows while the active cell is in a table
     const t = chart ? undefined : s.tableAt(r, c);
     const tab = this.ribbon.querySelector<HTMLButtonElement>('[data-sh-tab=table]')!;
@@ -1695,6 +2361,16 @@ export class SheetMode {
       return;
     }
     delete p.dataset.chart;
+    const obj = this.view.selectedObject;
+    if (obj) {
+      const key = JSON.stringify({ ...obj, src: undefined });
+      if (p.dataset.object === key) return;
+      p.dataset.object = key;
+      this.panelTitle.textContent = obj.kind === 'picture' ? 'Picture' : obj.kind === 'text' ? 'Text Box' : 'Shape';
+      p.replaceChildren(...this.objects.panel(obj));
+      return;
+    }
+    delete p.dataset.object;
     const { r, c } = this.view.sel.active;
     this.panelTitle.textContent = cellName(r, c);
     const cell = s.cell(r, c);
@@ -1712,6 +2388,14 @@ export class SheetMode {
       return b;
     };
     const rowOfButtons = (...bs: HTMLElement[]) => { const d = document.createElement('div'); d.className = 'cp-buttons'; d.append(...bs); return d; };
+    if (cell?.compound) parts.push(...this.compounds.card(cell.compound, r, c));
+    const loadedBy = this.queries.here();
+    if (loadedBy) {
+      parts.push(para(`Loaded by the query ${loadedBy.name}.`, 'cp-note'), rowOfButtons(
+        button('Refresh', () => void this.queries.refresh(loadedBy).then((p) => this.host.flash(p ?? `Refreshed ${loadedBy.name}.`, p ? 8000 : 2500)), 'Read its source again and run its steps'),
+        button('Edit Query…', () => this.queries.editor(loadedBy, null, false), 'Open the Query Editor on it'),
+      ));
+    }
     if (cell?.structure) {
       parts.push(para('A drawn structure.'), rowOfButtons(
         button('Change…', () => this.drawStructure(r, c), 'Open the drawing tools on it (or double-click the cell)'),
@@ -1741,6 +2425,17 @@ export class SheetMode {
       parts.push(para(`${e.code === '#BUSY!' ? 'Being worked out…' : `${e.code}: ${problem ?? e.detail}`}`, e.code === '#BUSY!' ? 'muted' : 'cp-error'));
     } else if (v !== undefined && v !== null && (cell?.input?.startsWith('=') || def)) {
       parts.push(para(`Value: ${plainText(v)}`, 'cp-value'));
+    }
+    // a note or comment, and a data validation rule: a line each, only where there is one
+    const note = s.noteAt(r, c);
+    if (note) {
+      const replies = note.replies?.length ? ` (${note.replies.length} ${note.replies.length === 1 ? 'reply' : 'replies'})` : '';
+      const line = para(`${note.kind === 'comment' ? 'Comment' : 'Note'}${note.author ? ` by ${note.author}` : ''}${replies}${note.done ? ', resolved' : ''}: ${note.text}`, 'cp-note-line');
+      parts.push(line, rowOfButtons(button(note.kind === 'comment' ? 'Open' : 'Edit', () => this.notes.edit(), 'Show its card beside the cell'), button('Delete', () => this.notes.remove())));
+    }
+    const rule = s.validationAt(r, c);
+    if (rule) {
+      parts.push(para(`${KIND_NAMES[rule.kind]} rule: takes ${describeValidation(rule)}.`, 'muted small'), rowOfButtons(button('Data Validation…', () => this.validation.dialog())));
     }
     // the number format: always editable here (Ctrl+1)
     const st = s.styleAt(r, c);

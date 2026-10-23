@@ -1,7 +1,7 @@
 // Text above and below a reaction arrow (reagents and conditions): which captions are there now,
 // where a new line goes, setting it from plain text, and fitting the arrow to it. The helper "+"
 // boxes on the drawing and the Above/Below fields in the side panel both work through these;
-// the gaps, size, alignment and fitting come from the scheme settings (Scheme > Scheme Settings).
+// the gaps, size, alignment and fitting come from the scheme settings (Chemistry > Reactions and Schemes > Scheme Settings).
 
 import type { Arrow, Caption, Doc, Justify, TextRun } from '../model';
 import type { Rect, Vec } from '../geom';

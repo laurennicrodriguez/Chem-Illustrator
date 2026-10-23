@@ -29,7 +29,7 @@
         "style-src": "'self' 'unsafe-inline'",
         "img-src": "'self' data: blob:",
         "font-src": "'self' data:",
-        "connect-src": "'self' ipc: http://ipc.localhost https://api.crossref.org https://pubchem.ncbi.nlm.nih.gov"
+        "connect-src": "'self' ipc: http://ipc.localhost https://api.crossref.org https://pubchem.ncbi.nlm.nih.gov https://api.datamuse.com"
       },
       "dangerousDisableAssetCspModification": [
         "style-src"
@@ -57,6 +57,11 @@
     "linux": {
       "deb": {
         "section": "science"
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/hooks.nsh"
       }
     }
   },

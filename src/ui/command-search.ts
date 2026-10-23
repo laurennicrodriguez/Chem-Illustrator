@@ -13,8 +13,15 @@ export interface CommandItem {
   key?: string;
   /** Ticked menu options show their tick. */
   checked?: boolean | null;
+  /** The command's picture (an SVG drawn for this app), shown beside its name. */
+  icon?: string;
   run(): void;
 }
+
+/** Commands people reach for most, which win a tie with a rarer command of the same words. */
+const COMMON = new Set(['cmd:new', 'cmd:open', 'cmd:save', 'cmd:save-as', 'cmd:print', 'cmd:undo', 'cmd:redo', 'cmd:cut', 'cmd:copy', 'cmd:paste',
+  'cmd:select-all', 'cmd:find', 'cmd:clean-up', 'cmd:name-to-structure', 'cmd:export-picture', 'cmd:export-pdf', 'cmd:insert-picture',
+  'cmd:insert-table', 'cmd:check-structure', 'cmd:new-slide', 'cmd:hotkeys', 'cmd:preferences']);
 
 const words = (s: string) => s.toLowerCase().replace(/[…'’]/g, '').split(/[^a-z0-9α-ω+#]+/).filter(Boolean);
 
@@ -23,7 +30,7 @@ const words = (s: string) => s.toLowerCase().replace(/[…'’]/g, '').split(/[^
  * be inside its name, or start a word of where it lives or its tool tip. Names that start with
  * what was typed come first. Null when it doesn't match.
  */
-export function matchScore(item: Pick<CommandItem, 'label' | 'place' | 'more'>, query: string): number | null {
+export function matchScore(item: Pick<CommandItem, 'label' | 'place' | 'more'> & { id?: string }, query: string): number | null {
   const q = words(query);
   if (!q.length) return 0;
   const name = words(item.label), joined = item.label.toLowerCase();
@@ -36,7 +43,11 @@ export function matchScore(item: Pick<CommandItem, 'label' | 'place' | 'more'>, 
     else if (other.some((n) => n.startsWith(w))) score += 1;
     else return null;
   }
-  if (joined.startsWith(query.trim().toLowerCase())) score += 4;
+  const typed = query.trim().toLowerCase().replace(/[…'’]/g, '');
+  if (joined.replace(/[…'’]/g, '') === typed) score += 10;
+  else if (joined.startsWith(typed)) score += 4;
+  // the everyday commands before the rarer ones that share a word ("Copy" before "Copy as InChI")
+  if (COMMON.has(item.id ?? '')) score += 2;
   // shorter names are the more likely meaning ("Save" before "Save Workspace As")
   return score - name.length * 0.1;
 }
@@ -95,6 +106,8 @@ export class CommandSearch {
     this.input.addEventListener('input', () => { this.at = 0; this.draw(); });
     d.addEventListener('keydown', (e) => {
       e.stopPropagation();
+      // one Esc closes, even with words typed (a search box would otherwise only clear them)
+      if (e.key === 'Escape') { e.preventDefault(); d.close(); return; }
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         if (this.shown.length) this.at = (this.at + (e.key === 'ArrowDown' ? 1 : -1) + this.shown.length) % this.shown.length;
@@ -124,13 +137,17 @@ export class CommandSearch {
       const li = document.createElement('li');
       li.setAttribute('role', 'option');
       li.dataset.i = String(i);
+      const icon = document.createElement('span');
+      icon.className = 'cs-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      if (c.icon) icon.innerHTML = c.icon;
       const name = document.createElement('span');
       name.className = 'cs-name';
       name.textContent = (c.checked === true ? '✓ ' : '') + c.label;
       const place = document.createElement('span');
       place.className = 'cs-place muted';
       place.textContent = c.place;
-      li.append(name, place);
+      li.append(icon, name, place);
       if (c.key) {
         const k = document.createElement('kbd');
         k.textContent = c.key;

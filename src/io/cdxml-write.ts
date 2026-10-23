@@ -7,9 +7,9 @@
 // the same form ChemDraw uses, so ChemDraw opens both.
 
 import { Doc, Atom, Bond, Caption, Arrow, Shape, TextRun, Entity, Kind, StepRoles, enhancedText, CHIRAL_FLAGS, flagTextSize, type HighlightStyle } from '../model';
-import { interpretArrow, isReactionArrow, isStep, plainMeasure, schemeItems, type Item } from '../chem/reaction';
+import { interpretArrow, isReactionArrow, linkRows, isStep, plainMeasure, schemeItems, type Item } from '../chem/reaction';
 import { SYMBOLS } from '../chem/elements';
-import { labelBonds, labelSpec, layoutLabel, labelDir, labelGraph, tokenize, isGenericLabel, Measure, MiniGraph, kekulize } from '../chem/labels';
+import { labelBonds, labelSpec, layoutLabel, labelDir, labelGraph, tokenize, isGenericLabel, Measure, MiniGraph, kekulize, labelLook } from '../chem/labels';
 import { Vec, DEG, arcCenter, norm, sub, Rect } from '../geom';
 import { bezPoints } from '../objects';
 import { kids, descendants } from './xml';
@@ -20,16 +20,16 @@ import { runsForChemDraw, TEXT_TAG } from '../text/chemdraw-text';
 import { ATTACH_TAG, IGNORE_TAG, attachTag } from '../editor/attached';
 import { atomStereoText, bondStereoText, StereoPlacer, PlacedLabel } from '../chem/stereo';
 import { fromDataUrl } from '../render/images';
-import { OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, INSIDE_TAG, GROUP_TAG, GEO_TAG, MORPH_TAG, PIN_TAG, CURVE_ARROW_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG, SPOKES_TAG } from './cdxml';
+import { ALT_TAG, CHART_TAG, MATH_TAG, PICTURE_FX_TAG, OWN_PICTURE, OWN_CROP, CIRCLE_TAG, FILL_TAG, FRAME_TAG, INSIDE_TAG, GROUP_TAG, GEO_TAG, MORPH_TAG, PIN_TAG, CURVE_ARROW_TAG, TURN_TAG, GEO_BOX_ATTR, HIGHLIGHT_TAG, HIGHLIGHT_LOOK_TAG, SPOKES_TAG } from './cdxml';
 import { frameTag } from '../editor/frames';
-import { geoDef, moveSteps, textArea, type GeoStep } from '../design/geo';
+import { geoDef, moveSteps, outlineParts, textArea, type GeoStep } from '../design/geo';
 import { FADE, tint } from '../colours';
 import { fillInk, mix, ringShadowSize, shadowLook } from '../render/fills';
 import { shapeShadow } from '../render/highlight-fx';
 import { parseColor } from '../render/vector';
 import { layoutTable, cellAlign, isCovered, spanOf, NOTE_SCALE } from '../table';
 import { TABLE_TAG, TABLE_PART_TAG, tableBorders, type TableTag } from './cdxml-table';
-import { bondLayer, crossingBonds } from '../chem/crossing';
+import { bondLayer, crossingBondsCached } from '../chem/crossing';
 import { repeatGroups, repeatCount, repeatLabelPlace } from '../chem/polymer';
 import { ellipseAxes, isCircleRing, ringCircle, ringsThroughBond } from '../chem/aromatic';
 
@@ -126,6 +126,8 @@ class CdxmlWriter {
   private bondEls = new Map<number, Element>();
   /** Neighbours of each atom as read from the file. */
   private origNeighbors = new Map<number, Set<number>>();
+  /** Atoms found unchanged since the file was read (see untouched). */
+  private untouchedAtoms = new Map<number, boolean>();
   private changed = false;
   /** Older copies of arrows that ChemDraw keeps for old versions, by the arrow they belong to. */
   private legacy: Map<string, Element[]> | null = null;
@@ -161,8 +163,10 @@ class CdxmlWriter {
     for (const r of doc.arrows.values()) this.writeArrow(r);
     for (const s of doc.shapes.values()) this.writeShape(s);
     this.writeRingCircles();
+    this.raiseSymbols();
     this.writeRepeatGroups();
     this.writeSteps();
+    this.writeGroups();
     if (src) this.cleanUp();
 
     // the file name stored inside; an untouched file is not rewritten just for a rename
@@ -170,10 +174,12 @@ class CdxmlWriter {
       this.root.setAttribute('Name', this.opts.name);
       this.changed = true;
     }
-    if (src && !this.changed) return src.text;
     const b = doc.bounds();
+    // a page set here (File > Page Setup), or grown to hold the drawing, is written to the file's page
+    if (src && doc.page && this.pageNeeds(b)) this.changed = true;
+    if (src && !this.changed) return src.text;
     if (b) this.root.setAttribute('BoundingBox', box(b));
-    if (!src) this.sizePage(b);
+    if (!src || doc.page) this.sizePage(b);
     // characters XML 1.0 can't hold (from text pasted out of Word or a PDF) would make the file
     // unreadable: Word's line break (U+000B) becomes a line break, and the rest are dropped
     const out = new XMLSerializer().serializeToString(this.root).replace(/\u000B/g, '\n').replace(/[\u0000-\u0008\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '');
@@ -183,10 +189,11 @@ class CdxmlWriter {
   // ------------------------------------------------------------------ document set-up
 
   private openSource(): void {
-    const text = this.doc.source!.text;
+    const src = this.doc.source!, text = src.text;
     const start = text.search(/<CDXML[\s>]/);
     this.prolog = start > 0 ? text.slice(0, start) : NEW_PROLOG;
-    this.x = new DOMParser().parseFromString(text.replace(/<!DOCTYPE[^>]*>/i, ''), 'application/xml');
+    src.xml ??= new DOMParser().parseFromString(text.replace(/<!DOCTYPE[^>]*>/i, ''), 'application/xml');
+    this.x = src.xml.cloneNode(true) as XMLDocument;
     this.root = this.x.documentElement;
     this.all = descendants(this.root);
     this.page = this.child(this.root, 'page') ?? this.root.appendChild(this.el('page', { id: this.id() }));
@@ -227,12 +234,28 @@ class CdxmlWriter {
     this.changed = true;
   }
 
-  /** Grow a new document's page to hold the drawing (ChemDraw's US Letter page is 540 × 720 pt). */
-  private sizePage(b: Rect | null): void {
-    const W = 540, H = 720;
+  /** The page's attributes for the drawing's page (ChemDraw's US Letter page is 540 × 720 pt), grown to hold the drawing. */
+  private pageAttrs(b: Rect | null): Record<string, string> {
+    const W = this.doc.page?.w ?? 540, H = this.doc.page?.h ?? 720;
     const wp = Math.max(1, Math.ceil(((b?.x2 ?? 0) + 36) / W)), hp = Math.max(1, Math.ceil(((b?.y2 ?? 0) + 36) / H));
-    this.page.setAttribute('id', this.id());
-    for (const [k, v] of Object.entries({ BoundingBox: `0 0 ${f2(W * wp)} ${f2(H * hp)}`, HeaderPosition: '36', FooterPosition: '36', PrintTrimMarks: 'yes', HeightPages: String(hp), WidthPages: String(wp) })) this.page.setAttribute(k, v);
+    return { BoundingBox: `0 0 ${f2(W * wp)} ${f2(H * hp)}`, HeaderPosition: '36', FooterPosition: '36', PrintTrimMarks: 'yes', HeightPages: String(hp), WidthPages: String(wp) };
+  }
+
+  /** Whether the file's page differs from the drawing's: another paper size, or the drawing has gone past it. */
+  private pageNeeds(b: Rect | null): boolean {
+    const p = this.doc.page;
+    if (!p) return false;
+    const bb = (this.page.getAttribute('BoundingBox') ?? '').trim().split(/\s+/).map(Number);
+    if (bb.length !== 4 || !bb.every(isFinite)) return true;
+    const wp = Math.max(1, Number(this.page.getAttribute('WidthPages')) || 1), hp = Math.max(1, Number(this.page.getAttribute('HeightPages')) || 1);
+    if (Math.abs((bb[2] - bb[0]) / wp - p.w) > 0.5 || Math.abs((bb[3] - bb[1]) / hp - p.h) > 0.5) return true;
+    return !!b && (b.x2 > bb[2] || b.y2 > bb[3]);
+  }
+
+  /** Size the page to the drawing's page, grown to hold the drawing. */
+  private sizePage(b: Rect | null): void {
+    if (!this.page.getAttribute('id')) this.page.setAttribute('id', this.id());
+    for (const [k, v] of Object.entries(this.pageAttrs(b))) this.page.setAttribute(k, v);
   }
 
   // ------------------------------------------------------------------ small helpers
@@ -393,12 +416,34 @@ class CdxmlWriter {
     return false;
   }
 
+  /**
+   * An atom that is as it was read, with the same bonds to the same atoms, none of them changed
+   * either: its element needs nothing (most of a big drawing, when saved after a small edit).
+   */
+  private untouched(a: Atom): boolean {
+    let u = this.untouchedAtoms.get(a.id);
+    if (u !== undefined) return u;
+    const loaded = this.doc.source?.loaded;
+    const adj = this.doc.adj.get(a.id) ?? [];
+    u = !!loaded?.has(a) && adj.length === (this.origNeighbors.get(a.id)?.size ?? 0);
+    for (let i = 0; u && i < adj.length; i++) {
+      const b = this.doc.bonds.get(adj[i])!;
+      u = loaded!.has(b) && loaded!.has(this.doc.atoms.get(b.a1 === a.id ? b.a2 : b.a1)!);
+    }
+    this.untouchedAtoms.set(a.id, u);
+    return u;
+  }
+
   private connectivityChanged(a: Atom): boolean {
     const was = this.origNeighbors.get(a.id) ?? new Set<number>();
     const now = this.doc.neighbors(a.id);
     if (now.length !== was.size) return true;
     for (const n of now) if (!was.has(n.id)) return true;
-    for (const bid of this.doc.adj.get(a.id) ?? []) if (!this.orig('b', bid)) return true;
+    for (const bid of this.doc.adj.get(a.id) ?? []) {
+      const ob = this.orig<Bond>('b', bid);
+      // a bond that is new, or of another order, changes the hydrogens the label shows
+      if (!ob || ob.order !== this.doc.bonds.get(bid)?.order) return true;
+    }
     return false;
   }
 
@@ -417,6 +462,10 @@ class CdxmlWriter {
     if (e.parentElement !== target) {
       target.insertBefore(e, this.child(target, 'b'));
       wrote = true;
+    }
+    if (this.untouched(a) && !a.showStereo && !a.stereoLabel) {
+      if (wrote) this.changed = true;
+      return wrote;
     }
     const conn = this.connectivityChanged(a);
     const others = !sameExcept(a, o, ['x', 'y']);
@@ -446,6 +495,10 @@ class CdxmlWriter {
     this.bondEls.set(b.id, e);
     let wrote = false;
     if (e.parentElement !== target) { target.appendChild(e); wrote = true; }
+    if (this.doc.source?.loaded?.has(b) && !b.showStereo && !b.stereoLabel && this.untouched(this.doc.atoms.get(b.a1)!) && this.untouched(this.doc.atoms.get(b.a2)!)) {
+      if (wrote) this.changed = true;
+      return wrote;
+    }
     if (!sameExcept(b, o, [])) {
       this.patchBond(e, b);
       wrote = true;
@@ -561,8 +614,9 @@ class CdxmlWriter {
 
   /** A contracted label keeps the SMILES of its group in a hidden tag (ChemDraw sees the inner fragment). */
   private atomGroup(n: Element, a: Atom): void {
-    for (const c of kids(n)) if (c.nodeName === 'objecttag' && c.getAttribute('Name') === GROUP_TAG) n.removeChild(c);
+    for (const c of kids(n)) if (c.nodeName === 'objecttag' && (c.getAttribute('Name') === GROUP_TAG || c.getAttribute('Name') === ALT_TAG)) n.removeChild(c);
     if (a.group && a.label) n.appendChild(this.el('objecttag', { TagType: 'String', Name: GROUP_TAG, Value: a.group, Visible: 'no' }));
+    if (a.alt) n.appendChild(this.el('objecttag', { TagType: 'String', Name: ALT_TAG, Value: a.alt, Visible: 'no' }));
     this.highlightTag(n, a.highlight, a.hl);
   }
 
@@ -687,8 +741,7 @@ class CdxmlWriter {
     const size = this.doc.style.labelSize * (a.s ?? 1);
     const t = this.el('t', {});
     const color = this.colorAttr(a.color);
-    const digits = a.supDigits ? /\d+$/.exec(text) : null;
-    const runs: TextRun[] = digits ? [{ text: text.slice(0, digits.index), formula: true }, { text: digits[0], sup: true }] : [{ text, formula: true }];
+    const runs = labelRuns(text, a.label !== null ? labelLook(a) : { supDigits: false });
     for (const r of runs) {
       const s = this.el('s', { font: keepFont ?? this.fontId(this.doc.style.labelFont || 'Arial'), size: f2(size).replace(/\.00$/, ''), color: color ?? '0', face: (faceOf(r) ?? 0) | keepBits });
       s.textContent = r.text;
@@ -762,7 +815,7 @@ class CdxmlWriter {
     const doc = this.doc;
     const spec = labelSpec(a.z, a.label, a.charge, a.isotope, doc.valenceSum(a.id), doc.degree(a.id), !a.hideCharge, !!a.showCarbon);
     if (!spec) return;
-    if (a.supDigits) spec.supDigits = true;
+    Object.assign(spec, labelLook(a));
     const dirs = labelBonds(doc, a);
     const size = doc.style.labelSize * (a.s ?? 1);
     const layout = layoutLabel(spec, dirs, size, this.measure, a.just);
@@ -801,7 +854,7 @@ class CdxmlWriter {
   private writeCrossings(): void {
     const partners = new Map<number, Bond[]>();
     for (const b of this.doc.bonds.values()) {
-      const cs = crossingBonds(this.doc, b);
+      const cs = crossingBondsCached(this.doc, b);
       if (cs.length) partners.set(b.id, cs);
     }
     const want = (b: Bond) => (partners.get(b.id) ?? []).map((o) => this.bondEls.get(o.id)?.getAttribute('id') ?? '').filter(Boolean).sort().join(' ');
@@ -924,6 +977,19 @@ class CdxmlWriter {
       }
     }
     for (const g of have) { g.parentNode?.removeChild(g); this.changed = true; }
+  }
+
+  /** ChemDraw paints a fragment's graphics in file order, so a charge sign set inside a ring goes after the ring's circle. */
+  private raiseSymbols(): void {
+    for (const f of new Set(this.fragOfAtom.values())) {
+      const gs = kids(f).filter((g) => g.nodeName === 'graphic');
+      const last = gs.map((g) => ['Oval', 'Orbital'].includes(g.getAttribute('GraphicType') ?? '')).lastIndexOf(true);
+      const low = gs.slice(0, last).filter((g) => g.getAttribute('GraphicType') === 'Symbol');
+      if (!low.length) continue;
+      const after = gs[last].nextSibling;
+      for (const g of low) f.insertBefore(g, after);
+      this.changed = true;
+    }
   }
 
   private buildBond(b: Bond): Element {
@@ -1242,7 +1308,10 @@ class CdxmlWriter {
     }
     if (s.filled) {
       const fc = fillInk(s);
-      curves(out.body, 'fill', s.fill === 'faded' ? tint(fc, FADE) : fc);
+      const ink = s.fill === 'faded' ? tint(fc, FADE) : fc;
+      // an icon's holes (each part is filled on its own in ChemDraw) are painted over in white
+      if (def.icon && s.kind === 'geo') for (const p of outlineParts(out.body)) curves(p.steps, 'fill', p.depth % 2 ? '#ffffff' : ink);
+      else curves(out.body, 'fill', ink);
     }
     if (width > 0) {
       curves(out.body, 'line', s.color ?? '#000000');
@@ -1339,12 +1408,15 @@ class CdxmlWriter {
     if (t.size !== undefined) tag.size = t.size;
     const spans: [number, number, number][] = [];
     const aligns: [number, number, string][] = [];
+    const figs: [number, number, number, number][] = [];
     t.rows.forEach((row, r) => row.forEach((cell, c) => {
       if ((cell.span ?? 1) > 1) spans.push([r, c, cell.span!]);
       if (cell.align) aligns.push([r, c, cell.align]);
+      if (cell.fig) figs.push([r, c, cell.fig.w, cell.fig.h]);
     }));
     if (spans.length) tag.spans = spans;
     if (aligns.length) tag.cellAlign = aligns;
+    if (figs.length) tag.figs = figs;
     table.appendChild(this.el('objecttag', { TagType: 'String', Name: TABLE_TAG, Value: JSON.stringify(tag), Visible: 'no' }));
     if (!hasParts) return table;
     // the title and footnotes go with the table in a group, so they move together in ChemDraw too
@@ -1421,6 +1493,11 @@ class CdxmlWriter {
         // not a picture this program made; nothing to write
       }
     } else png = ['PNG', 'JPEG', 'GIF', 'BMP', 'EnhancedMetafile', 'WindowsMetafile'].some((k) => e.hasAttribute(k));
+    for (const c of kids(e)) if (c.nodeName === 'objecttag' && [CHART_TAG, MATH_TAG, PICTURE_FX_TAG, ALT_TAG].includes(c.getAttribute('Name') ?? '')) e.removeChild(c);
+    if (s.alt) e.appendChild(this.el('objecttag', { TagType: 'String', Name: ALT_TAG, Value: s.alt, Visible: 'no' }));
+    if (s.fx) e.appendChild(this.el('objecttag', { TagType: 'String', Name: PICTURE_FX_TAG, Value: JSON.stringify(s.fx), Visible: 'no' }));
+    if (s.chart) e.appendChild(this.el('objecttag', { TagType: 'String', Name: CHART_TAG, Value: JSON.stringify(s.chart), Visible: 'no' }));
+    if (s.math) e.appendChild(this.el('objecttag', { TagType: 'String', Name: MATH_TAG, Value: JSON.stringify(s.math), Visible: 'no' }));
     if (this.opts.own) {
       if (s.src && !png) this.set(e, OWN_PICTURE, s.src);
       const c = s.crop;
@@ -1475,10 +1552,8 @@ class CdxmlWriter {
       case 'symbol': {
         set('GraphicType', 'Symbol');
         set('SymbolType', s.symbol ?? 'CirclePlus');
-        // circled charges are stored as their width along the bottom edge
         // a lone pair is its two dots; a radical's dot is the dot and a point 4.5 pt further out from
-        // its atom (ChemDraw sizes the dot from that distance); circled charges are stored as their
-        // width along the bottom edge
+        // its atom (ChemDraw sizes the dot from that distance)
         if (s.symbol === 'Electron') {
           const near = this.radicalOwner(s) ?? this.doc.atomsNear({ x: s.x1, y: s.y1 }, this.doc.style.bondLength)[0];
           const d = near ? Math.hypot(s.x1 - near.x, s.y1 - near.y) : 0;
@@ -1498,7 +1573,12 @@ class CdxmlWriter {
           sp.textContent = word;
           t.appendChild(sp);
           g.appendChild(t);
-        } else set('BoundingBox', s.symbol === 'LonePair' ? box(s) : `${f2(s.x2)} ${f2(s.y2)} ${f2(s.x1)} ${f2(s.y2)}`);
+        } else if (s.symbol === 'LonePair') set('BoundingBox', box(s));
+        else {
+          // a charge sign as ChemDraw stores it: the sign's centre, then a point its width below
+          const c = { x: (s.x1 + s.x2) / 2, y: (s.y1 + s.y2) / 2 };
+          set('BoundingBox', `${f2(c.x)} ${f2(c.y)} ${f2(c.x)} ${f2(c.y + Math.abs(s.x2 - s.x1))}`);
+        }
         break;
       }
       case 'bracket': {
@@ -1537,7 +1617,7 @@ class CdxmlWriter {
   private writeSteps(): void {
     const doc = this.doc, src = doc.source;
     const stepOf = new Map<Element, Element>();
-    if (src) {
+    if (src && this.all.some((e) => e.nodeName === 'step')) {
       const byId = new Map<string, Element>();
       for (const e of this.all) { const id = e.getAttribute('id'); if (id && !byId.has(id)) byId.set(id, e); }
       for (const st of this.all) {
@@ -1552,6 +1632,17 @@ class CdxmlWriter {
     }
     const rewriting = !src || this.changed;
     let items: Item[] | null = null;
+    /** Every reaction arrow's roles as worked out, a row's first arrow going on from the row above. */
+    let linked: Map<number, StepRoles> | null = null;
+    const worked = (r: Arrow): StepRoles => {
+      if (!linked) {
+        items ??= schemeItems(doc, plainMeasure(doc));
+        const all = [...doc.arrows.values()].filter(isReactionArrow).map((a) => ({ arrow: a, roles: a.step ?? interpretArrow(a, items!, doc.style.bondLength) }));
+        linkRows(all, items);
+        linked = new Map(all.map((x) => [x.arrow.id, x.roles]));
+      }
+      return linked.get(r.id) ?? interpretArrow(r, items!, doc.style.bondLength);
+    };
     const steps: { arrow: Element; roles: StepRoles }[] = [];
     for (const r of doc.arrows.values()) {
       const e = this.source('r', r.id, ['arrow']) ?? this.findArrow(r.id);
@@ -1561,8 +1652,7 @@ class CdxmlWriter {
       // a step from the file whose roles weren't changed stays exactly as ChemDraw wrote it
       if (old && o && r.step && deepEqual(r.step, o.step)) { this.fixStepArrow(old, e); continue; }
       if (!r.step && !rewriting && !old) continue;
-      items ??= schemeItems(doc, plainMeasure(doc));
-      const roles = r.step ?? interpretArrow(r, items, doc.style.bondLength);
+      const roles = worked(r);
       if (!isStep(roles) && !r.step) {
         if (old) { old.parentNode?.removeChild(old); this.changed = true; }
         continue;
@@ -1654,12 +1744,76 @@ class CdxmlWriter {
   // ------------------------------------------------------------------ tidy references
 
   /** Drop references to objects that no longer exist (reaction steps, charge symbols, empty groups). */
+  /**
+   * Groups (Format > Group) as ChemDraw's group elements on the page: each group's structures,
+   * captions, arrows and shapes inside one group element. A file's own group is kept while it
+   * holds just its members; things taken out of a group go back onto the page.
+   */
+  private writeGroups(): void {
+    const doc = this.doc;
+    // (every element by its id, only when something isn't found where it was read)
+    let byId: Map<string, Element> | null = null;
+    const ided = () => {
+      if (!byId) {
+        byId = new Map();
+        for (const e of descendants(this.root)) { const id = e.getAttribute('id'); if (id && !byId.has(id)) byId.set(id, e); }
+      }
+      return byId;
+    };
+    const elementOf = (kind: Kind, id: number): Element | null => {
+      if (kind === 'a') return this.fragOfAtom.get(id) ?? null;
+      const names = kind === 'c' ? ['t'] : kind === 'r' ? ['arrow', 'graphic'] : ['graphic', 'embeddedobject', 'table', 'group'];
+      return this.source(kind, id, names) ?? (kind === 'r' ? this.findArrow(id) : null) ?? ided().get(String(id)) ?? null;
+    };
+    const plain = (g: Element | null): g is Element => !!g && g.nodeName === 'group'
+      && !kids(g).some((k) => k.nodeName === 'table' || (k.nodeName === 'objecttag' && k.getAttribute('Name') === GEO_TAG));
+    // the element that sits on the page (or in a group) for a thing: a structure's fragment, a symbol's too
+    const topOf = (e: Element): Element => {
+      let t = e;
+      while (t.parentElement && t.parentElement !== this.page && !plain(t.parentElement)) t = t.parentElement;
+      return t;
+    };
+    const wanted = new Map<Element, number | undefined>();
+    const note = (kind: Kind, id: number, grp: number | undefined) => {
+      const e = elementOf(kind, id);
+      if (!e) return;
+      const t = topOf(e);
+      if (!wanted.has(t) || grp !== undefined) wanted.set(t, grp);
+    };
+    for (const a of doc.atoms.values()) note('a', a.id, a.grp);
+    for (const c of doc.captions.values()) note('c', c.id, c.grp);
+    for (const r of doc.arrows.values()) note('r', r.id, r.grp);
+    for (const s of doc.shapes.values()) note('s', s.id, s.grp);
+    const members = new Map<number, Element[]>();
+    for (const [e, g] of wanted) {
+      if (g === undefined) {
+        // out of any group it was in
+        if (plain(e.parentElement)) { this.page.appendChild(e); this.changed = true; }
+        continue;
+      }
+      let list = members.get(g);
+      if (!list) members.set(g, (list = []));
+      list.push(e);
+    }
+    for (const list of members.values()) {
+      const parent = list[0].parentElement;
+      const kept = plain(parent) && list.every((e) => e.parentElement === parent)
+        && kids(parent).filter((k) => k.nodeName !== 'objecttag').every((k) => list.includes(k));
+      if (kept) continue;
+      const g = this.el('group', { id: this.id() });
+      list[0].parentNode!.insertBefore(g, list[0]);
+      for (const e of list) g.appendChild(e);
+      this.changed = true;
+    }
+  }
+
   private cleanUp(): void {
     if (!this.changed) return;
     const all = descendants(this.root);
     const named = (name: string) => all.filter((e) => e.nodeName === name);
+    const refs = named('step').length + named('represent').length + named('crossingbond').length;
     const ids = new Set<string>();
-    for (const e of all) { const id = e.getAttribute('id'); if (id) ids.add(id); }
+    if (refs) for (const e of all) { const id = e.getAttribute('id'); if (id) ids.add(id); }
     for (const st of named('step')) {
       for (const at of Array.from(st.attributes)) {
         if (!at.name.startsWith('ReactionStep')) continue;
@@ -1716,6 +1870,23 @@ function orderAttr(order: number): string | null {
   return order === 1 ? null : String(order);
 }
 
+/**
+ * A label's text as runs: formula style (ChemDraw lowers the counts itself), with R numbers
+ * raised when the label shows them so and characters raised, lowered or kept on the line by hand.
+ */
+export function labelRuns(text: string, look: { supDigits: boolean; marks?: string }): TextRun[] {
+  const digits = look.supDigits ? /\d+$/.exec(text) : null;
+  const out: TextRun[] = [];
+  [...text].forEach((ch, i) => {
+    const m = look.marks?.[i];
+    const r: TextRun = m === '^' ? { text: ch, sup: true } : m === '_' ? { text: ch, sub: true } : m === '=' ? { text: ch } : digits && i >= digits.index ? { text: ch, sup: true } : { text: ch, formula: true };
+    const last = out[out.length - 1];
+    if (last && !!last.sup === !!r.sup && !!last.sub === !!r.sub && !!last.formula === !!r.formula) last.text += ch;
+    else out.push(r);
+  });
+  return out.length ? out : [{ text, formula: true }];
+}
+
 function faceOf(r: TextRun): number | null {
   return faceFromStyle(r);
 }
@@ -1745,8 +1916,9 @@ function shift(e: Element, dx: number, dy: number): void {
 
 /** Are two entities equal, ignoring the listed fields? */
 function sameExcept(a: object, b: object, skip: string[]): boolean {
-  const ka = Object.keys(a).filter((k) => !skip.includes(k) && (a as any)[k] !== undefined);
-  const kb = Object.keys(b).filter((k) => !skip.includes(k) && (b as any)[k] !== undefined);
+  // (which group a thing is in is written by writeGroups, as the file's group elements)
+  const ka = Object.keys(a).filter((k) => k !== 'grp' && !skip.includes(k) && (a as any)[k] !== undefined);
+  const kb = Object.keys(b).filter((k) => k !== 'grp' && !skip.includes(k) && (b as any)[k] !== undefined);
   if (ka.length !== kb.length) return false;
   for (const k of ka) if (!deepEqual((a as any)[k], (b as any)[k])) return false;
   return true;

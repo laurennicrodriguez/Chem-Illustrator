@@ -2,17 +2,28 @@
 // toolbar, the drawing area (with the slide list and notes in Slides mode, or the grid in Sheet
 // mode), and the panels on the right.
 
+import { readDocumentFile, writeDocumentFile } from './io/doc-files';
+import { newDocDesign, setNewDocDesign } from './document/themes';
+import { fieldEnv } from './document/fields';
+import type { QuickPart } from './document/quick-parts';
+import { SLIDE_TABLE_STYLES, DEFAULT_SLIDE_TABLE_STYLE } from './deck/table-styles';
+import { commandIcon } from './ui/command-icons';
 import './app.css';
 import type { MethylStyle } from './chem/hydrogens';
 import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
-import { Toolboxes, lockIcon, sideFolded, commandButton, customizeToolbox, defaultToolboxes, menuCommands, type Pickable, type ToolboxDef, type ToolboxId, type ToolboxState } from './ui/toolboxes';
+import { Toolboxes, lockIcon, sideFolded, commandButton, defaultToolboxes, menuCommands, boxIds, boxGrid, boxTitle, flyGrid, isEditable, isOwnBox, overflowOf, type Pickable, type ToolboxDef, type ToolboxState } from './ui/toolboxes';
+import { gridItems, inBlock, shownGrid, wrapped, type Grid, type Shown } from './ui/toolbox-grid';
+import { ToolboxEditor } from './ui/toolbox-editor';
+import { RibbonEditor } from './ui/ribbon-editor';
+import { readRibbons, applyRibbon, type RibbonInfo, type RibbonsPrefs } from './ui/ribbon-custom';
 import { editPalettes, getPalettes, onPalettes, setPalettes, useDrawingColours, usePaletteMenus } from './ui/palette-ui';
-import { Doc, Atom, Caption, Shape, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle } from './model';
+import { Doc, Atom, Caption, Shape, type TextRun, outsideValence, Contents, CHIRAL_FLAGS, PICTURE_STYLES, type PictureLook, type Attachment, type HighlightStyle, type ShapeMath, PAPER, keepOnPage } from './model';
 import { Renderer, measureText, forgetTextWidths } from './render/renderer';
 import { Editor, TOOLS, type HighlightToggle, type Selection } from './editor/editor';
 import { BUILT_IN_LOOKS, type HighlightLookPreset } from './ui/highlight-looks';
 import { selectionBox, POINTS, type Align } from './editor/arrange';
+import { selectedGroups } from './editor/groups';
 import { readCdxml, ReadStats } from './io/cdxml';
 import { ChemClient } from './chem/client';
 import type { FragmentResult } from './worker/chem-worker';
@@ -25,30 +36,49 @@ import { analysisHtml, electronsHtml, analysisRuns, withRepeats, polymerHtml, de
 import { attachedAtoms, attachWhereItIs, defaultGap, nearestStructure, placeAttached, structureSig } from './editor/attached';
 import { repeatGroups, lipDirection } from './chem/polymer';
 import { rGroupsOf, substituted, rowNumbers, parseRows, rGroupCells, type RowMass } from './chem/rgroup';
-import type { Vec } from './geom';
+import type { Rect, Vec } from './geom';
 import { isCurved } from './objects';
 import { captionPlaces, fragmentRuns } from './chem/fragments';
 import { toMolfile, addMolfile } from './chem/molfile';
+import { bestFit, fitMove, fitMatters } from './chem/orient';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { copyDrawing, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, Pasted,
-  nativeFirst, writeNativeFormats, looksLikeCdxml, cfHtml, fromCfHtml, CELLS_FORMAT, OWN_FORMAT, CDX_FORMAT } from './io/clipboard';
+import { copyDrawing, copyImage, forgetCopy, looksLikeChemistry, extractDrawing, insertDrawing, isEmpty, nativeClipboard, readClipboardText, readNativeClipboard, readPasteEvent, readWebClipboard, clipboardFormats, fitPasted, typicalBondLength, Pasted,
+  nativeFirst, writeNativeFormats, looksLikeCdxml, cfHtml, fromCfHtml, CELLS_FORMAT, OWN_FORMAT, CDX_FORMAT, setWordObjects, embeddedPicture, packFormats } from './io/clipboard';
 import { cdxToCdxml } from './io/cdx';
 import { writeCdxml } from './io/cdxml-write';
-import { WORKSPACE } from './io/workspace-file';
-import { openFileDialog, openBytesDialog, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, KEYMAP_FILE, MOL, PDF, PICTURE, SVG, PICTURE_EXTENSIONS } from './io/files';
+import { WORKSPACE, folderOf } from './io/workspace-file';
+import { askLink, followLink, setLinkHost, type LinkPlace } from './ui/links-ui';
+import { SHOW_JUMPS, cellOfLink, linkSpans, normalizeLink, removeLink, setLink, slideOfLink } from './links';
+import { openFileDialog, openBytesDialog, openAnyBytesDialog, stampOf, readRef, saveFileDialog, writeFile, showError, baseName, readPath, withExtension, setEmbeddedWriter, KEYMAP_FILE, SETTINGS_FILE, MOL, PDF, PICTURE, SVG, TIFF, EMF, EPS, PPTX, DOCX, PICTURE_EXTENSIONS, type FileType } from './io/files';
+import { readPptx } from './io/pptx-read';
+import { pickReuseSlides } from './ui/reuse-slides';
+import { writeTiff } from './render/tiff';
+import { itemsToEps } from './render/eps';
 import { Workspace, Tab } from './workspace';
-import { Deck, LayoutId, LAYOUTS, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize } from './deck/deck';
-import { drawSlidePage, recordSlide, paintSlide, SURROUND } from './deck/slide-view';
+import { Deck, LayoutId, WIDE, STANDARD, Image as SlideImage, sizeName, SlideSize, slideBackground, slideColours, type SlideSource, contentArea, deckLayouts, type SizeFit } from './deck/deck';
+import { shapeMathPicture, shapeMathScale, shapeMathSize } from './deck/equation';
+import { askEquation } from './ui/equation-dialog';
+import { solid } from './deck/background';
+import { formatBackground } from './ui/background-dialog';
+import { pictureFormat } from './ui/picture-dialog';
+import { fxPng } from './render/picture-fx';
+import { drawSlidePage, recordSlide, paintSlide, drawDrawing, SURROUND } from './deck/slide-view';
 import { writePdf, jpegInfo, PdfPage, PdfImage } from './io/pdf';
 import { SlideList } from './ui/slide-list';
 import { DesignLibrary, GEO_DRAG_TYPE, pickDesignSize, sizeLabel } from './ui/design-panel';
 import { ShapeMenu } from './ui/shape-menu';
+import { loadIcons, whenIconsLoaded } from './design/icons';
 import { SlideTextRibbon } from './ui/slide-text-ribbon';
 import { CaptionEditor } from './ui/caption-editor';
 import { LayersPanel } from './ui/layers-panel';
 import { Scrollbars } from './ui/scrollbars';
-import { Presenter } from './ui/present';
+import { Presenter, type ShowOptions } from './ui/present';
+import { editHeaderFooter } from './ui/header-footer-dialog';
+import { setUpShow, editCustomShows } from './ui/show-setup-dialog';
+import { defaultShow, showOrder } from './deck/show-setup';
+import { recordingToWav, NARRATION_NAME } from './deck/narration';
+import { clockText } from './deck/show-link';
 import { PresenterView } from './ui/presenter-view';
 import { editMaster } from './ui/master-dialog';
 import { editDrawingStyle } from './ui/style-dialog';
@@ -64,37 +94,59 @@ import { AnimationUI } from './ui/animation-ui';
 import { SlideComments } from './ui/slide-comments';
 import { writePptx, type PptxOptions } from './io/pptx-write';
 import { EFFECTS, animName, newAnim, highlightParts } from './deck/animation';
-import { SLIDE_TEMPLATES, applyTemplate } from './deck/templates';import { pickTemplate } from './ui/template-gallery';
+import { SLIDE_TEMPLATES, applyTemplate, type SlideTemplate } from './deck/templates';
+import { editLayouts } from './ui/layout-editor';
+import { pickSlideSize } from './ui/slide-size-dialog';import { pickTemplate } from './ui/template-gallery';
 import { showContextMenu, topMenuEntry, type MenuItem } from './ui/context-menu';
+import { defaultHandout, handoutLayout, handoutPageSvg, notesPageSize, notesPageSvg, type HandoutSetup } from './deck/notes-pages';
+import { OutlineView } from './ui/outline-view';
+import { NotesPageView, editHandoutMaster, editNotesMaster } from './ui/notes-page-view';
+import { GuideTip, SlideRulers, drawGuides, gridAndGuides } from './ui/slide-guides';
+import { defaultView, guideNear, rulerText, snapMove, type RulerPrefs, type SlideView } from './deck/guides';
+import { effectPatch, effectsMenu, showStyleGallery, styleColours, stylePatch } from './ui/shape-styles';
 import { CommandSearch, uniqueCommands, type CommandItem } from './ui/command-search';
 import { fillTemplate, templateSize } from './design/templates';
 import { askCycle } from './ui/cycle-dialog';
 import { askEnergy } from './ui/energy-dialog';
+import { askDiagram } from './ui/diagram-dialog';
+import { putDiagram, type DiagramData } from './design/diagrams';
+import type { EnergyData } from './design/energy';
+import { editChart, chartPoints } from './ui/chart-editor';
+import { editMedia } from './ui/media-dialog';
+import { refreshZooms, summaryParts, zoomGrid, zoomShape } from './deck/zoom';
+import { inkShape } from './ui/show-ink';
+import { AUDIO_TYPES, VIDEO_TYPES, mediaMime, probeAudio, probeVideo, speakerPng } from './deck/media';
+import { newChartBox, sizedBox } from './sheet/chart-box';
+import { chartBoxPng } from './render/chart-box-paint';
 import { itemsToSvg } from './render/svg';
-import { PAPERS, defaultPaper, orient, placeIn, inside, handoutCells, noteLines, placeSvg, pageSvg } from './print-layout';
+import { itemsToEmf, type EmfBox } from './render/emf';
+import type { Item } from './render/vector';
+import { PAPERS, defaultPaper, orient, placeIn, inside, placeSvg, pageSvg } from './print-layout';
 import { printPages } from './ui/print';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc, webpToPng } from './render/images';
 import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, ringDir } from './chem/chemgeom';
-import { Toolbar, ToolbarItem, PaletteDef } from './ui/toolbar';
+import { Toolbar, ToolbarItem, PaletteDef, type ToolDef } from './ui/toolbar';
 import { StylePanel, tidyStyle } from './ui/style-panel';
 import { installCombos } from './ui/combo';
-import { installFontList, registerBundledFonts, bundledFaces } from './fonts';
+import { installFontList, registerBundledFonts, bundledFaces, pdfFonts } from './fonts';
 import { applyRibbonIcons } from './ui/ribbon-icons';
 import { TEMPLATES, Template, templateById, ownTemplates, setOwnTemplates, templateFromAtoms } from './chem/templates';
 import { centreEnd } from './chem/hapto';
 import { countElectrons } from './chem/electrons';
-import { addNicknames, removeNickname, isBuiltInNickname } from './chem/labels';
+import { addNicknames, removeNickname, isBuiltInNickname, builtInNicknames, labelPrefs, tokenize as tokenizeLabel } from './chem/labels';
 import { selectedGroup } from './chem/group-smiles';
 import { templateIcon } from './ui/template-icons';
 import { StructureChecks } from './chem/warnings';
 import { idText, labelClashes, parseIdStart, type IdStyle } from './chem/compound-numbers';
 import { schemeItems, isReactionArrow } from './chem/reaction';
 import { labelsOf, schemePrefs, setSchemePrefs, SPACING, type SchemePrefs } from './chem/scheme-layout';
-import { plainText } from './richtext';
+import { plainText, savableChar } from './richtext';
+import { htmlToRich } from './text/html';
 import { LiveStereo } from './chem/live-stereo';
 import { setStereoShown, shownDescriptor, axialStyle } from './chem/stereo';
 import { keymap, registerToolNames, displayChord, actionName, chordOf, parseAction, KeyContext, KeyOverrides } from './editor/keymap';
-import { loadSettings, saveSettings, settingsLocation, Settings } from './settings';
+import { loadSettings, saveSettings, settingsLocation, exportText, importSettings, Settings } from './settings';
+import { showDialog } from './ui/dialog-host';
 import { HotkeysDialog } from './ui/hotkeys-dialog';
 import { TypingDialog } from './ui/typing-dialog';
 import { ModeColoursDialog, ModeColours, DEFAULT_MODE_COLOURS, applyModeColours } from './ui/mode-colours';
@@ -102,8 +154,13 @@ import { typingPrefs, setTypingPrefs, onTypingPrefs } from './text/typing';
 import { NicknameChooser } from './ui/nickname-chooser';
 import { ask } from './ui/ask';
 import { UpdateUI } from './ui/update-ui';
-import { canUpdate, appVersion, portableInfo } from './updates';
-import { GUIDE_URL, computerName } from './feedback';
+import { canUpdate, appVersion, portableInfo, STAGE, STAGE_NOTE, UPDATE_CHANNELS, type UpdateChannel } from './updates';
+import { computerName } from './feedback';
+import { GuideWindow, guideSpot } from './ui/guide-window';
+import { SettingsWindow } from './ui/settings-window';
+import { fileTypesPage, FILE_TYPES } from './ui/file-types-page';
+import { watchRibbons, fitRibbons, setRibbonCollapsed, ribbonCollapsed } from './ui/ribbon-fit';
+import { placeTitleBar, titleBarPlace } from './ui/title-bar';
 import { FeedbackDialog } from './ui/feedback-dialog';
 import { addRecent, removeRecent, recentLabel } from './recent';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
@@ -114,6 +171,8 @@ import { PeriodicTable } from './ui/periodic-table';
 import { SheetMode, ClipboardCells } from './ui/sheet-mode';
 import { DocumentMode, DocPaste } from './ui/doc-mode';
 import { docBoxPrefs, parseDocPins } from './ui/doc-panel';
+import { docRulerPrefs } from './ui/ruler';
+import { formulaBarPrefs } from './ui/sheet-views-ui';
 import { setScreenMeasure, figures } from './document/doc-file';
 import { readDocx, writeDocx, type DocxDeps, type DocxReadDeps } from './io/docx';
 import { FIGURE_MARGIN } from './document/figures';
@@ -127,10 +186,22 @@ import { LabelTooltip } from './ui/label-tooltip';
 import { starAtoms } from './chem/label-tip';
 import { structurePlace } from './sheet/layout';
 import { readSheetFile, writeSheetFile, SheetFileDeps } from './io/sheet-files';
+import { fromEmbedSource, type Embedded } from './io/ole-object';
+import { objectPicture, type ObjectPicture } from './render/object-picture';
 import { ACS_1996, DocStyle } from './style';
 import { emptyTable, tableFromCells } from './table';
 import type { TableData } from './model';
+import { checkDrawing, checkDocument, checkWorkbook, repeatedTitles, structureAlt, setStructureAlt, type Issue, type IssuePlace } from './accessibility';
+import { AccessibilityPane, askAltText } from './ui/accessibility-pane';
+import { SlideComparePane } from './ui/slide-compare';
+import { pickFileTemplate } from './ui/file-templates';
 import type { PastedRows } from './io/table-clip';
+import { Keeper } from './keep/keeper';
+import { DEFAULT_KEEP, type KeepPrefs } from './keep/prefs';
+import { Brush, paintObjects, pickObjectLook, type ObjectLook, type TextLook } from './format-painter';
+import { SymbolWindow } from './ui/symbol-window';
+import { addRecent as addRecentSymbol } from './text/symbols';
+import type { CellBlock } from './sheet/workbook';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -160,6 +231,8 @@ live.onChange = (atoms, bonds) => {
   }
   editor.requestScene();
   scheduleAnalysis();
+  // the style panel shows R/S and E/Z of what is selected
+  stylePanel.refresh();
 };
 function updateStereo(): void {
   if (chem.ready) void live.update();
@@ -172,6 +245,9 @@ let splitWidth = 0.38;
 /** Your own drawing styles, and the style each kind of new tab starts with (settings.json). */
 let ownStyles: DocStyle[] = [];
 let modeStyles: Partial<Record<StyleMode, string>> = {};
+/** The style each mode's new tabs take when you haven't chosen one: slides are seen from the back of a room, so their structures are twice ACS size. */
+const MODE_STYLE_DEFAULTS: Partial<Record<StyleMode, string>> = { slides: 'Slides (ACS 1996 × 2)' };
+const modeStyleFor = (mode: StyleMode): string | undefined => modeStyles[mode] ?? MODE_STYLE_DEFAULTS[mode];
 /** View > Dark Page: on or off, which palette, and your own palettes. */
 const dark = { on: false, palette: 'Graphite', own: [] as DarkPalette[] };
 /** Beside slides: the deck whose drawing is being worked on (the drawing's tab shows; the slide is a picture). */
@@ -191,7 +267,13 @@ function resize(): boolean {
 }
 // resizing a canvas blanks it: when the window or a panel beside the drawing changes size,
 // paint again at once, before the browser shows the blank canvas (a flicker)
-new ResizeObserver(() => { if (resize()) editor.frame(); }).observe(host);
+// a slide, page or drawing still fitted to the window is fitted again, so a smaller window never cuts it off
+new ResizeObserver(() => {
+  const refit = editor.stillFitted;
+  if (!resize()) return;
+  if (refit) editor.fit();
+  editor.frame();
+}).observe(host);
 
 // ---------------------------------------------------------------- toolbar
 
@@ -238,6 +320,9 @@ const BRACKETS: PaletteDef = {
     { name: 'bracket-square', title: 'Square brackets [ ]' },
     { name: 'bracket-round', title: 'Parentheses ( )' },
     { name: 'bracket-curly', title: 'Braces { }' },
+    { name: 'bracket-ts', title: 'Transition-state brackets: square brackets with ‡ at the upper right' },
+    { name: 'bracket-left', title: 'Single bracket [ (left half only)' },
+    { name: 'bracket-right', title: 'Single bracket ] (right half only)' },
   ],
 };
 
@@ -251,6 +336,7 @@ const SYMBOLS: PaletteDef = {
     { name: 'sym-minus', title: 'Circled minus: click an atom to give it a − charge shown in a circle; drag round the atom to aim it' },
     { name: 'sym-delta-plus', title: 'Partial positive charge (δ+): click an atom' },
     { name: 'sym-delta-minus', title: 'Partial negative charge (δ−): click an atom' },
+    { name: 'sym-ddagger', title: 'Double dagger (‡) for a transition state: click where it goes' },
   ],
 };
 
@@ -285,7 +371,6 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'bond-single', title: 'Single bond. Click a bond: single, double, triple' },
     { name: 'bond-double', title: 'Double bond. Click again to move the second line' },
     { name: 'bond-triple', title: 'Triple bond' },
-    { name: 'bond-quadruple', title: 'Quadruple bond (metal–metal)' },
     { name: 'bond-wedge', title: 'Wedge. Click again to reverse' },
     { name: 'bond-hashWedge', title: 'Hashed wedge. Click again to reverse' },
     { name: 'bond-hash', title: 'Hashed bond' },
@@ -296,6 +381,15 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     { name: 'bond-dative', title: 'Dative bond: draw from the donor atom to the acceptor. Click again to reverse' },
     { name: 'bond-hapto', title: 'Hapto (η) bond: drag from a metal into a ring or onto a π-bond to bond it to the middle (η⁵-Cp, η⁶-arene, η²-alkene); click inside a ring or on a bond for a new metal there. Click a hapto bond to draw it to each atom' },
     { name: 'chain', title: 'Chain: drag to draw a zig-zag chain, or click to type how many atoms (Alt+click: the same number again)' },
+  ],
+  // the everyday tools next, where they show without scrolling
+  [
+    { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption' },
+    ARROWS,
+    SYMBOLS,
+    BRACKETS,
+    SHAPES,
+    { name: 'fragment', title: 'Mass fragmentation: drag a line across bonds (or click a bond) to break them and label each piece with its formula and mass' },
   ],
   [
     { name: 'ring-3', title: 'Cyclopropane' },
@@ -324,15 +418,12 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     templatePalette('ligands', 'tpl-ligands', 'Ligands', 6, 64),
     OWN_PALETTE,
   ],
-  [
-    { name: 'text', title: 'Text: click an atom to label it, or empty space for a caption' },
-    { name: 'element', title: 'Periodic table: pick an element, then click atoms to change them' },
-    { name: 'fragment', title: 'Mass fragmentation: drag a line across bonds (or click a bond) to break them and label each piece with its formula and mass' },
-    ARROWS,
-    SYMBOLS,
-    SHAPES,
-    BRACKETS,
-  ],
+];
+
+/** Tools kept off the bar, still reached by their keys, Search and the menus (Chemistry > Periodic Table). */
+const OFF_BAR: ToolbarItem[] = [
+  { name: 'bond-quadruple', title: 'Quadruple bond (metal–metal)' },
+  { name: 'element', title: 'Periodic table: pick an element, then click atoms to change them' },
 ];
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
@@ -344,12 +435,23 @@ function keysOf(ctx: KeyContext, action: string): string[] {
 
 // Tool names for the Hotkeys window: the tool tip up to its first full stop or colon.
 const toolNames: Record<string, string> = {};
-for (const group of TOOL_GROUPS) {
+for (const group of [...TOOL_GROUPS, OFF_BAR]) {
   for (const item of group) {
     for (const t of 'palette' in item ? item.items : [item]) toolNames[t.name] = t.title.replace(/\s*\(.*?\)/g, '').split(/[.:] /)[0];
   }
 }
 registerToolNames(toolNames);
+
+/** Each fly-out palette by name, and the palette each tool in one comes in (for its picture). */
+const PALETTES = new Map<string, PaletteDef>();
+const TOOL_PALETTE = new Map<string, PaletteDef>();
+for (const group of TOOL_GROUPS) for (const item of group) {
+  if (!('palette' in item)) continue;
+  PALETTES.set(item.palette, item);
+  for (const t of item.items) TOOL_PALETTE.set(t.name, item);
+}
+/** What the Drawing Tools toolbox comes with: the tool bar's groups, a divider between each. */
+const MAIN_ITEMS: string[] = TOOL_GROUPS.flatMap((g, i) => [...(i ? ['sep'] : []), ...g.map((it) => ('palette' in it ? `pal:${it.palette}` : `tool:${it.name}`))]);
 
 const periodicTable = new PeriodicTable((z) => editor.pickElement(z), () => editor.element);
 const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => {
@@ -358,7 +460,7 @@ const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => 
 }, (name) => {
   const keys = keysOf('space', `tool ${name}`);
   return keys.length ? ` (${keys.join(', ')})` : '';
-});
+}, (name, size) => TOOL_PALETTE.get(name)?.icon?.(name, size));
 
 const HINTS: Record<string, string> = {
   connector: 'Drag from one shape\'s blue dot to another\'s: the connector sticks to both and follows them when they move.',
@@ -386,6 +488,11 @@ const shapeMenu = new ShapeMenu();
 let layers: LayersPanel | null = null;
 let animUi: AnimationUI | null = null;
 let slideCmts: SlideComments | null = null;
+/** View > Ruler and Gridlines (kept in the settings); the rulers' units and where they count from. */
+const slideLook = { ruler: false, grid: false };
+const rulerPrefs: RulerPrefs = { units: 'in', from: 'centre' };
+/** A guide being dragged: which, and the guides as they are while it moves. */
+let guideDrag: { which: { axis: 'x' | 'y'; i: number }; view: SlideView } | null = null;
 /** View > Alignment Guides: moved things snap into line with other things and the page, on or off for each kind of tab. */
 const guidesOn: Record<'drawing' | 'slides' | 'design', boolean> = { drawing: false, slides: true, design: true };
 const guideMode = (): keyof typeof guidesOn | null => {
@@ -449,7 +556,7 @@ async function dropFiles(files: File[], at: { x: number; y: number }): Promise<v
   const inside = at.x >= r.left && at.x <= r.right && at.y >= r.top && at.y <= r.bottom;
   for (const f of files) {
     const bytes = new Uint8Array(await f.arrayBuffer());
-    const mime = /\.(cdxml|cdx|pptx|xlsx|docx|csv|tsv|txt|sdf?)$/i.test(f.name) ? null : pictureMime(f.name, bytes);
+    const mime = /\.(cdxml|cdx|pptx|xlsx|xlsm|xls|ods|docx|csv|tsv|txt|sdf?)$/i.test(f.name) ? null : pictureMime(f.name, bytes);
     if (mime && sheetActive()) flash('Pictures can\'t go in a cell yet. Drop sheet files (.xlsx, .csv, .sdf) to open them.');
     else if (mime && docActive()) docMode.dropPicture(bytes, mime);
     else if (mime) placePicture(bytes, mime, inside ? renderer.toDoc(at.x - r.left, at.y - r.top) : null);
@@ -518,9 +625,15 @@ async function pasteFrom(read: () => Pasted | Promise<Pasted>): Promise<void> {
     // on slides, structures can take the slide master's bond length; elsewhere they keep their size
     const deck = deckNow();
     fitPasted(got.doc, doc.style, deck?.master.fitPasted ? deck.master.drawing.bondLength : undefined);
+    // a scheme too big for the slide's content area is made smaller to fit it, below the title
+    const area = slideContentArea(), b = got.doc.bounds(), L = typicalBondLength(got.doc);
+    if (area && b && L) {
+      const k = Math.min(1, (0.95 * (area.x2 - area.x1)) / Math.max(1, b.x2 - b.x1), (0.95 * (area.y2 - area.y1)) / Math.max(1, b.y2 - b.y1));
+      if (k < 0.999) fitPasted(got.doc, doc.style, L * k);
+    }
     editor.sel = insertDrawing(doc, got.doc, pasteCentre());
     editor.changed();
-  } else if (got.kind === 'text') await pasteChemistry(got.text);
+  } else if (got.kind === 'text') await pasteText(got.text, got.html);
   else if (got.kind === 'picture') placePicture(got.bytes, got.mime, null);
   else if (got.kind === 'table') pasteTable(got.rows);
   else flash('There is nothing to paste.');
@@ -550,33 +663,48 @@ function placeTable(t: TableData, label: string, top?: Vec): number {
   return id;
 }
 
+/** The table style last picked for a slide table (PowerPoint's default, Medium Style 2 – Accent 1, at first). */
+let lastTableStyle = DEFAULT_SLIDE_TABLE_STYLE;
+
 /** Insert > Table: an empty table of the rows and columns asked for, ready to type into. */
 async function insertTable(): Promise<void> {
   finishTyping();
+  // on slides the look is a choice: a journal's ACS rules, or a PowerPoint style
+  const onSlide = !!deckNow();
   const got = await ask('Insert Table', [
     { name: 'rows', label: 'Rows', value: '4', type: 'number' },
     { name: 'cols', label: 'Columns', value: '3', type: 'number' },
-  ], { ok: 'Insert', note: 'An ACS-style table: a rule above and below the heading row and under the last row. The Style panel changes the lines, headings, rows and columns.' });
+    ...(onSlide ? [{ name: 'style', label: 'Style', value: lastTableStyle, options: [{ value: '', label: 'ACS rules' }, ...SLIDE_TABLE_STYLES.map((st) => ({ value: st.id, label: st.name }))] }] : []),
+  ], { ok: 'Insert', note: onSlide ? 'The Style panel changes the style, its options, the cells\' colours and which cells are merged.' : 'An ACS-style table: a rule above and below the heading row and under the last row. The Style panel changes the lines, headings, rows and columns.' });
   if (!got) return;
   const rows = Math.max(1, Math.min(500, Math.round(Number(got.rows) || 4)));
   const cols = Math.max(1, Math.min(60, Math.round(Number(got.cols) || 3)));
-  const id = placeTable(emptyTable(rows, cols, doc.style.captionSize), 'Insert table');
+  if (onSlide) lastTableStyle = got.style ?? '';
+  // columns centred (the Style panel lines up each column its own way)
+  const t0 = { ...emptyTable(rows, cols, doc.style.captionSize), align: Array(cols).fill('center') };
+  const id = placeTable(onSlide && got.style ? { ...t0, style: got.style } : t0, 'Insert table');
   editor.editTable(id, { r: 0, c: 0 });
 }
 
-/** Where pasted things go: the middle of the slide in Slides mode, else the middle of the window. */
-function pasteCentre(): { x: number; y: number } {
+/** The part of the slide showing that pasted things go in (below the title), in Slides mode. */
+function slideContentArea(): Rect | null {
   const deck = deckNow();
-  return deck ? { x: deck.size.w / 2, y: deck.size.h / 2 } : renderer.toDoc(renderer.width / 2, renderer.height / 2);
+  return deck ? contentArea(deck.current?.layout ?? 'blank', deck.size, deck.master) : null;
 }
 
-/** Paste a SMILES string or a molfile as a structure. */
-async function pasteChemistry(text: string): Promise<void> {
-  if (!chem.ready) { flash('The chemistry engine is still loading.'); return; }
+/** Where pasted things go: the middle of the slide's content area in Slides mode, else the middle of the window. */
+function pasteCentre(): { x: number; y: number } {
+  const a = slideContentArea();
+  return a ? { x: (a.x1 + a.x2) / 2, y: (a.y1 + a.y2) / 2 } : renderer.toDoc(renderer.width / 2, renderer.height / 2);
+}
+
+/** Paste a SMILES string or a molfile as a structure. With `quiet`, text that isn't one is left (false) without a message. */
+async function pasteChemistry(text: string, quiet = false): Promise<boolean> {
+  if (!chem.ready) { flash('The chemistry engine is still loading.'); return true; }
   const c = pasteCentre();
   let mb: string | null = text.includes('M  END') ? text : null;
   if (!mb && !/\s/.test(text)) mb = await chem.smilesToMol(text);
-  if (!mb) { flash('Paste a SMILES string or a molfile.'); return; }
+  if (!mb) { if (!quiet) flash('Paste a SMILES string or a molfile.'); return false; }
   try {
     let ids: number[] = [];
     doc.edit('Paste', () => { ids = addMolfile(doc, mb!, c.x, c.y); });
@@ -584,6 +712,37 @@ async function pasteChemistry(text: string): Promise<void> {
   } catch (err) {
     flash(String(err));
   }
+  return true;
+}
+
+/**
+ * Pasted text on a drawing, slide or design: a SMILES string or a molfile becomes a structure;
+ * other text (a Document's, Word's, a web page's) a text box in the middle, with its bold,
+ * italics, sub- and superscripts and colours from the HTML that came with it.
+ */
+async function pasteText(text: string, html?: string): Promise<void> {
+  if (looksLikeChemistry(text) && await pasteChemistry(text, true)) return;
+  const rich = html ? htmlToRich(html) : null;
+  // (the drawing's caption font and size, as typed text gets)
+  const runs = (rich?.runs ?? [{ text } as TextRun]).map(({ size: _s, font: _f, obj: _o, ...r }: TextRun) => r).filter((r) => r.text);
+  if (!runs.length) { flash('There is nothing to paste.'); return; }
+  const paras = rich && rich.paras.length > 1 ? rich.paras : undefined;
+  finishTyping();
+  renderer.useStyle(doc);
+  const c = pasteCentre();
+  // long text wraps: to the slide's content area, or about 25 bond lengths on a drawing
+  const area = slideContentArea();
+  const most = area ? area.x2 - area.x1 : doc.style.bondLength * 25;
+  const frame = (wrap?: number) => renderer.captionFrame({ id: -1, x: 0, y: 0, runs, justify: 'left', ...(paras ? { paras } : {}), ...(wrap ? { wrap } : {}) } as Caption);
+  let b = frame();
+  const wrap = b.x2 - b.x1 > most ? most : undefined;
+  if (wrap) b = frame(wrap);
+  let id = 0;
+  doc.edit('Paste text', () => {
+    id = doc.addCaption({ x: c.x - (b.x1 + b.x2) / 2, y: c.y - (b.y1 + b.y2) / 2, runs, justify: 'left', ...(paras ? { paras } : {}), ...(wrap ? { wrap } : {}) }).id;
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set([id]), arrows: new Set(), shapes: new Set() };
+  editor.changed();
 }
 
 /** Insert ▸ Catalytic Cycle…: a ready-made cycle to edit, or the selected structures put round one. */
@@ -593,15 +752,364 @@ async function insertCycle(): Promise<void> {
   if (got) editor.insertCycle(got.spec, got.look, pasteCentre(), deckNow()?.size);
 }
 
+/** The Energy Diagram window's preview: the diagram as it will be drawn, fitted to the canvas. */
+function paintEnergyPreview(d: EnergyData, canvas: HTMLCanvasElement): void {
+  const { doc: tmp, box } = editor.energyPreview(d);
+  const w = canvas.clientWidth || 360, h = canvas.clientHeight || 200, dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const bw = box.x2 - box.x1, bh = box.y2 - box.y1, pad = 8;
+  const k = Math.min((w - 2 * pad) / bw, (h - 2 * pad) / bh);
+  ctx.setTransform(k * dpr, 0, 0, k * dpr, (w / 2 - (box.x1 + bw / 2) * k) * dpr, (h / 2 - (box.y1 + bh / 2) * k) * dpr);
+  drawDrawing(ctx, tmp);
+}
+
 /** Insert ▸ Energy Diagram…, or the selected diagram's numbers to change (`id`, its frame). */
 async function energyDiagram(id: number | null): Promise<void> {
   finishTyping();
   const L = doc.style.bondLength;
   const now = id !== null ? doc.shapes.get(id)?.energy ?? null : null;
-  const got = await askEnergy(now, { w: Math.round(18 * L), h: Math.round(12 * L) });
+  const got = await askEnergy(now, { w: Math.round(18 * L), h: Math.round(12 * L) }, paintEnergyPreview);
   if (got) editor.putEnergyDiagram(got, pasteCentre(), now ? id! : undefined, deckNow()?.size);
 }
 editor.onEnergy = (id) => void energyDiagram(id);
+
+/** A diagram drawn as an SVG picture, for the diagram window's preview and its layout buttons. */
+function diagramSvg(d: DiagramData): string {
+  const x = new Doc();
+  x.edit('Diagram', () => putDiagram(x, POINTS, d, { x: 0, y: 0 }));
+  const pic = recordPicture(x, 2);
+  return pic ? pictureSvg(pic) : '';
+}
+
+/** Insert ▸ Diagram…, or the selected diagram's text and look to change (`id`, its frame). */
+async function smartDiagram(id: number | null): Promise<void> {
+  finishTyping();
+  const now = id !== null ? doc.shapes.get(id)?.diagram ?? null : null;
+  const got = await askDiagram(now, { preview: diagramSvg, scale: deckNow() ? 1 : 0.7 });
+  if (got) editor.putDiagramAt(got, pasteCentre(), now ? id! : undefined, deckNow()?.size);
+}
+editor.onDiagram = (id) => void smartDiagram(id);
+
+/** A document's diagram: a new one, or the one in a figure (its drawing) to change. Null when cancelled. */
+async function documentDiagram(contents: Contents | null): Promise<Contents | null> {
+  const d = structureDoc(contents ?? { atoms: [], bonds: [], captions: [], arrows: [], shapes: [] }, docStyle());
+  const frame = [...d.shapes.values()].find((s) => s.diagram);
+  const got = await askDiagram(frame?.diagram ?? null, { preview: diagramSvg, scale: 0.75 });
+  if (!got) return null;
+  d.edit(frame ? 'Change Diagram' : 'Diagram', () => putDiagram(d, POINTS, got, frame ? { x: Math.min(frame.x1, frame.x2), y: Math.min(frame.y1, frame.y2) } : { x: 0, y: 0 }, frame?.id));
+  return d.contents();
+}
+
+/** Insert > Chart: a chart with its own data (sample data to type over), in the middle of the slide or window. */
+async function insertChart(): Promise<void> {
+  finishTyping();
+  const deck = deckNow();
+  // on a slide: most of the slide, with text the size PowerPoint gives a chart's (about 13 pt)
+  const slides = !!deck && ws.active.mode === 'slides';
+  const fit = deck ? Math.min(slides ? 2 : 1, (deck.size.w * 0.7) / 360, (deck.size.h * 0.7) / 216) : 1;
+  const box = newChartBox('column', 360 * fit, 216 * fit);
+  if (slides) box.chart.fontSize = 18;
+  const got = await editChart(box, true, flash);
+  if (!got || got === 'delete') return;
+  const { w, h } = chartPoints(got.chart);
+  const c = pasteCentre();
+  let made: Shape | null = null;
+  doc.edit('Insert chart', () => {
+    made = doc.addShape({ kind: 'picture', x1: c.x - w / 2, y1: c.y - h / 2, x2: c.x + w / 2, y2: c.y + h / 2, src: chartBoxPng(got, w, h), px: { w: got.chart.w, h: got.chart.h }, chart: got });
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([made!.id]) };
+  editor.changed();
+}
+
+/** Double-clicking a chart on a slide or drawing: its data and settings. */
+async function editChartShape(id: number): Promise<void> {
+  finishTyping();
+  const s = doc.shapes.get(id);
+  if (!s?.chart) return;
+  const x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2);
+  const got = await editChart(sizedBox(s.chart, Math.abs(s.x2 - s.x1), Math.abs(s.y2 - s.y1)), false, flash);
+  if (!got || !doc.shapes.get(id)?.chart) return;
+  if (got === 'delete') { doc.edit('Delete chart', () => doc.removeShape(id)); editor.changed(); return; }
+  const { w, h } = chartPoints(got.chart);
+  doc.edit('Change chart', () => doc.updateShape(id, { chart: got, src: chartBoxPng(got, w, h), px: { w: got.chart.w, h: got.chart.h }, x1: x, y1: y, x2: x + w, y2: y + h, crop: undefined }));
+  editor.changed();
+}
+editor.onChart = (id) => void editChartShape(id);
+
+/** A video or sound's Playback window (double-click it, or Playback… in the panel). */
+async function editMediaShape(id: number): Promise<void> {
+  finishTyping();
+  const s = doc.shapes.get(id);
+  if (!s?.video) return;
+  const got = await editMedia(s.video);
+  if (!got || !doc.shapes.get(id)?.video) return;
+  doc.edit(s.video.audio ? 'Audio playback' : 'Video playback', () => doc.updateShape(id, { video: got }));
+  editor.changed();
+}
+editor.onMedia = (id) => void editMediaShape(id);
+
+/** Insert > Video or Audio: a file put on the slide, starting when clicked and playing once, as in PowerPoint. */
+async function insertMedia(audio: boolean): Promise<void> {
+  const exts = Object.keys(audio ? AUDIO_TYPES : VIDEO_TYPES);
+  let f;
+  try {
+    f = await openBytesDialog(audio ? 'Sounds' : 'Videos', [], exts);
+  } catch (e) {
+    await showError('Could not open the file: ' + String(e));
+    return;
+  }
+  if (!f) return;
+  const type = mediaMime(f.name);
+  if (!type) { flash(`${f.name} isn't a ${audio ? 'sound' : 'video'} file this takes (${exts.join(', ')}).`); return; }
+  if (f.bytes.length > 200 * 1024 * 1024) flash('This is a big file: it is kept inside the slide file, which grows by as much.', 8000);
+  const src = dataUrl(f.bytes, type.mime);
+  let px = { w: 128, h: 128 }, poster = '', length = 0;
+  if (type.audio) {
+    poster = speakerPng();
+    length = await probeAudio(src);
+  } else {
+    flash('Reading the video…');
+    const got = await probeVideo(src);
+    if (!got) { flash(`This computer can't play ${f.name}. MP4 (H.264) videos play everywhere, PowerPoint too.`, 8000); }
+    if (got) { px = { w: got.w, h: got.h }; poster = got.poster; length = got.length; }
+  }
+  if (!poster) poster = speakerPng();
+  finishTyping();
+  const deck = deckNow();
+  const room = deck ? { w: deck.size.w * 0.6, h: deck.size.h * 0.6 } : { w: (renderer.width * 0.6) / renderer.view.scale, h: (renderer.height * 0.6) / renderer.view.scale };
+  const k = type.audio ? 0.375 : Math.min(0.75, room.w / px.w, room.h / px.h);
+  const w = px.w * k, h = px.h * k;
+  const c = deck && type.audio ? { x: deck.size.w / 2, y: deck.size.h / 2 } : pasteCentre();
+  let made: Shape | null = null;
+  doc.edit(type.audio ? 'Insert audio' : 'Insert video', () => {
+    made = doc.addShape({
+      kind: 'picture', x1: c.x - w / 2, y1: c.y - h / 2, x2: c.x + w / 2, y2: c.y + h / 2, px, src: poster,
+      video: { src, ...(type.audio ? { audio: true } : {}), start: 'click', once: true, ...(length ? { length: +length.toFixed(3) } : {}) },
+    });
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([made!.id]) };
+  editor.changed();
+  flash(`${type.audio ? 'Sound' : 'Video'} added: it starts when clicked in the show. Double-click it to trim it or change how it plays.`, 6000);
+}
+
+/**
+ * Insert > Zoom > Slide Zoom: pictures of the slides picked, on this slide; clicked in the show,
+ * each zooms into its slide. Summary Zoom: a new slide before the first one picked, with a zoom
+ * for each part of the deck (from each slide picked to the next), each coming back to it.
+ */
+async function insertZoom(summary: boolean): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') { flash('Zooms go on slides: use File > New Slides, or open a PowerPoint file.'); return; }
+  finishTyping();
+  refreshZooms(d);
+  const pick = await pickReuseSlides('', d, false, summary
+    ? { title: 'Summary Zoom', note: 'Click the first slide of each part of your talk (Shift+click picks a run). A new slide goes in before the first of them, with a zoom for each part: in the show, a click on one plays its part and comes back.', verb: (n) => (n ? `Insert Summary Zoom (${n} part${n === 1 ? '' : 's'})` : 'Insert Summary Zoom') }
+    : { title: 'Slide Zoom', note: 'Click the slides to zoom to (Shift+click picks a run). In the show, a click on a zoom zooms into its slide; turn on Return to Zoom in the panel to come back afterwards.', verb: (n) => (n > 1 ? `Insert ${n} Zooms` : 'Insert Zoom') });
+  if (!pick?.indices.length) return;
+  if (summary) {
+    const parts = summaryParts(pick.indices, d.slides.length);
+    const ids = parts.map((p) => ({ first: d.slides[p.first].id, last: d.slides[p.last].id }));
+    const at = parts[0].first;
+    d.insertSlide(at, 'title-only', (sd) => {
+      const title = [...sd.captions.values()].find((c) => c.ph === 'title');
+      if (title) sd.updateCaption(title.id, { runs: [{ text: 'Summary' }] });
+      const area = { x1: d.size.w * 0.06, y1: d.size.h * 0.26, x2: d.size.w * 0.94, y2: d.size.h * 0.94 };
+      // the slides moved one along: their pictures are drawn from the deck before the new slide goes in
+      zoomGrid(ids.length, d.size, area).forEach((box, k) => {
+        const i = d.slides.findIndex((s) => s.id === ids[k].first);
+        const z = i >= 0 ? zoomShape(d, i, box, { back: true, ...(ids[k].last !== ids[k].first ? { to: `#slide=${ids[k].last}` } : {}) }) : null;
+        if (z) sd.addShape(z);
+      });
+    }, 'Insert Summary Zoom');
+    flash('Summary Zoom added. In the show, click a zoom to play its part; the show comes back here after it.', 7000);
+    return;
+  }
+  const area = { x1: d.size.w * 0.1, y1: d.size.h * 0.3, x2: d.size.w * 0.9, y2: d.size.h * 0.9 };
+  const boxes = zoomGrid(pick.indices.length, d.size, area);
+  const made: number[] = [];
+  doc.edit(pick.indices.length > 1 ? 'Insert slide zooms' : 'Insert slide zoom', () => {
+    pick.indices.forEach((i, k) => { const z = zoomShape(d, i, boxes[k], {}); if (z) made.push(doc.addShape(z).id); });
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set(made) };
+  editor.changed();
+}
+
+/** What a click does in the slide show (Insert > Action), for the selected shapes or action buttons. */
+async function actionSettings(): Promise<void> {
+  const d = deckNow();
+  const shapes = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((s): s is Shape => !!s && s.kind === 'geo' && !s.diagram && !s.energy);
+  if (!d || !shapes.length) { flash('Select an action button or a shape on a slide first (Insert > Shapes > Action buttons).'); return; }
+  const cur = shapes[0].link ?? '';
+  const slides = d.slides.map((s, i) => ({ value: `#slide=${s.id}`, label: `Slide ${i + 1}${slideTitle(d, i) ? `: ${slideTitle(d, i)}` : ''}` }));
+  const jumps = Object.entries(SHOW_JUMPS).map(([value, label]) => ({ value, label }));
+  const kind = !cur ? 'none' : cur in SHOW_JUMPS || slideOfLink(cur) !== null ? 'place' : 'url';
+  const got = await ask('Action Settings', [
+    { name: 'kind', label: 'On a click', value: kind, options: [{ value: 'none', label: 'Nothing' }, { value: 'place', label: 'Go to a slide' }, { value: 'url', label: 'Open a web page or file' }] },
+    { name: 'place', label: 'Slide', value: kind === 'place' ? cur : '#next', options: [...jumps, ...slides] },
+    { name: 'url', label: 'Web page or file', value: kind === 'url' ? cur : '', placeholder: 'https://… or a file path' },
+  ], { ok: 'OK', note: 'What happens when this is clicked in the slide show. Saved as PowerPoint\'s own action.' });
+  if (!got) return;
+  const link = got.kind === 'place' ? got.place : got.kind === 'url' ? normalizeLink(got.url) ?? '' : '';
+  doc.edit('Action settings', () => { for (const s of shapes) doc.updateShape(s.id, { link: link || undefined }); });
+  editor.changed();
+}
+
+/**
+ * Insert > Equation on a slide or design: typed as LaTeX in the equation window, in the
+ * master's body text (its font, colour and size), in the middle of the slide.
+ */
+// ------------------------------------------------------------------ links
+
+/** A slide's title (its title placeholder's text), for the link window's list. */
+function slideTitle(d: Deck, i: number): string {
+  for (const c of d.docOf(i).captions.values()) if (c.ph === 'title') return plainText(c.runs).replace(/\s+/g, ' ').trim();
+  return '';
+}
+
+/** The places in the deck a link can go to: each slide (by its title), and the slide show's own jumps. */
+function slidePlaces(): { places: LinkPlace[]; title: string } | null {
+  const d = deckNow();
+  if (!d || ws.active.mode === 'design') return null;
+  const places: LinkPlace[] = d.slides.map((s, i) => ({ link: `#slide=${s.id}`, label: `${i + 1}. ${slideTitle(d, i) || `Slide ${i + 1}`}` }));
+  places.push({ link: '', label: 'In the slide show' }, ...Object.entries(SHOW_JUMPS).map(([link, label]) => ({ link, label, depth: 1 })));
+  return { places, title: 'Slide in this deck' };
+}
+
+/** The selected captions (not one being typed). */
+function pickedCaptions(): Caption[] {
+  return [...editor.sel.captions].map((id) => doc.captions.get(id)).filter((c): c is Caption => !!c);
+}
+
+/**
+ * Insert > Link (Ctrl+K) in drawings and slides: the text being typed (its selection), or the
+ * whole text of the selected captions and text boxes, as PowerPoint links a whole shape.
+ */
+async function insertLink(): Promise<void> {
+  const typing = editor.typingCaption;
+  if (typing) { await typing.editLink(); return; }
+  const caps = pickedCaptions();
+  if (!caps.length) { flash('Select the text to link (or a text box or caption), then choose Link. Ctrl+K while typing links the selected words.'); return; }
+  const first = caps[0];
+  const old = linkSpans(first.runs)[0]?.link;
+  const text = caps.length === 1 ? plainText(first.runs) : '';
+  const p = slidePlaces();
+  const got = await askLink({ text: caps.length === 1 && !text.includes('\n') ? text : null, link: old, places: p?.places, placeTitle: p?.title });
+  if (!got) return;
+  doc.edit('remove' in got ? 'Remove Link' : old ? 'Edit Link' : 'Insert Link', () => {
+    for (const c of caps) {
+      const n = plainText(c.runs).length;
+      const runs = 'remove' in got ? removeLink(c.runs, 0, n) : setLink(c.runs, 0, n, got.link, caps.length === 1 ? got.text : undefined).runs;
+      doc.updateCaption(c.id, { runs });
+    }
+  });
+  editor.changed();
+}
+
+/** Remove Link on the text being typed, or on the selected captions. */
+function removeLinks(): boolean {
+  const typing = editor.typingCaption;
+  if (typing) { typing.ed.removeLink(); return true; }
+  const caps = pickedCaptions().filter((c) => c.runs.some((r) => r.link));
+  if (!caps.length) { flash('Select text with a link first.'); return false; }
+  doc.edit('Remove Link', () => { for (const c of caps) doc.updateCaption(c.id, { runs: removeLink(c.runs, 0, plainText(c.runs).length) }); });
+  editor.changed();
+  return true;
+}
+
+/** Open Link: the link in the text being typed, or the first in the selected captions. */
+function openLink(): boolean {
+  const link = editor.typingCaption?.ed.linkHere()?.link ?? pickedCaptions().map((c) => linkSpans(c.runs)[0]?.link).find(Boolean);
+  if (!link) { flash('Select text with a link first.'); return false; }
+  void followLink(link);
+  return true;
+}
+
+CaptionEditor.linkPlaces = () => slidePlaces();
+
+setLinkHost({
+  goTo(place) {
+    if (docActive()) return docMode.goToPlace(place);
+    if (sheetActive()) return sheetMode.goToPlace(place);
+    const d = deckNow();
+    const id = slideOfLink(place);
+    if (d && id !== null) {
+      const i = d.slides.findIndex((s) => s.id === id);
+      if (i < 0) return false;
+      goSlide(i);
+      return true;
+    }
+    if (d && place in SHOW_JUMPS) {
+      // outside the slide show, the jumps go to the slide they would show
+      const i = place === '#first' ? 0 : place === '#last' ? d.slides.length - 1 : place === '#next' ? d.index + 1 : d.index - 1;
+      goSlide(Math.max(0, Math.min(d.slides.length - 1, i)));
+      return true;
+    }
+    return false;
+  },
+  placeName(place) {
+    if (docActive()) return docMode.placeName(place);
+    const d = deckNow();
+    const id = slideOfLink(place);
+    if (d && id !== null) {
+      const i = d.slides.findIndex((s) => s.id === id);
+      return i < 0 ? null : `Slide ${i + 1}${slideTitle(d, i) ? `: ${slideTitle(d, i)}` : ''}`;
+    }
+    if (place in SHOW_JUMPS) return SHOW_JUMPS[place];
+    const cell = cellOfLink(place);
+    return cell ? `Cell ${cell.sheet ? `${cell.sheet}!` : ''}${cell.cell}` : null;
+  },
+  async openHere(path) {
+    // drawings, documents, slides, sheets and workspaces open in a tab here
+    if (!/\.(cdxml|cdx|docx|pptx|xlsx|xlsm|xls|ods|csv|tsv|sdf|sd)$/i.test(path) && !path.toLowerCase().endsWith(`.${WORKSPACE.extension}`)) return false;
+    if (!isTauri()) return false;
+    await openRecent(path);
+    return true;
+  },
+  folder: () => (ws.active.ref.kind === 'path' ? folderOf(ws.active.ref.path) : null),
+  flash: (text) => flash(text, 6000),
+});
+
+async function insertEquation(): Promise<void> {
+  const deck = deckNow();
+  if (!deck) { flash('Equations go on slides, designs and documents.'); return; }
+  finishTyping();
+  const m = deck.master;
+  const font = m.bodyFont;
+  const got = await askEquation({ tex: '', font, ok: 'Insert', app: 'PowerPoint' });
+  if (!got || deckNow() !== deck) return;
+  const math: ShapeMath = { tex: got.tex, size: m.bodySize, color: slideColours(m, deck.current?.layout ?? 'blank').textColor, font };
+  const { w, h } = shapeMathSize(math, measureText);
+  const c = pasteCentre();
+  let made: Shape | null = null;
+  doc.edit('Insert equation', () => {
+    made = doc.addShape({ kind: 'picture', x1: c.x - w / 2, y1: c.y - h / 2, x2: c.x + w / 2, y2: c.y + h / 2, src: shapeMathPicture(math, measureText), px: { w: Math.round(w), h: Math.round(h) }, math });
+  });
+  editor.sel = { atoms: new Set(), bonds: new Set(), captions: new Set(), arrows: new Set(), shapes: new Set([made!.id]) };
+  editor.changed();
+}
+
+/** Double-clicking an equation: change it in the equation window. Its box keeps its top left corner and how much it was enlarged. */
+async function editEquationShape(id: number): Promise<void> {
+  finishTyping();
+  const s = doc.shapes.get(id);
+  if (!s?.math) return;
+  const k = shapeMathScale(s.math, s.x2 - s.x1, s.y2 - s.y1, measureText);
+  const got = await askEquation({ tex: s.math.tex, font: s.math.font ?? 'Arial', ok: 'Apply', app: 'PowerPoint' });
+  const now = doc.shapes.get(id);
+  if (!got || !now?.math || got.tex === now.math.tex) return;
+  const math = { ...now.math, tex: got.tex };
+  const { w, h } = shapeMathSize(math, measureText);
+  const x = Math.min(now.x1, now.x2), y = Math.min(now.y1, now.y2);
+  doc.edit('Change equation', () => doc.updateShape(id, { math, src: shapeMathPicture(math, measureText), px: { w: Math.round(w), h: Math.round(h) }, x1: x, y1: y, x2: x + w * k, y2: y + h * k }));
+  editor.changed();
+}
+editor.onEquation = (id) => void editEquationShape(id);
 
 /** Select just these (new) atoms and their bonds. */
 function selectNewAtoms(ids: number[]): void {
@@ -615,28 +1123,40 @@ function selectNewAtoms(ids: number[]): void {
 const names = new NameReader(new URL('opsin/opsin-data.dat', document.baseURI).href);
 let namesReady = false;
 
-/** Names the name reader can't read are looked up on PubChem (Edit > Preferences). */
+/** Names the name reader can't read are looked up on PubChem (Edit > Settings). */
 let pubchemNames = true;
+
+/** Why a name couldn't be turned into a structure: a plain message, the part that couldn't be read, and the name reader's own words. */
+interface NameError { error: string; bad?: string; details?: string }
+
+/** A short message for a name that couldn't be read, with the part the name reader stopped at. */
+function unreadableName(name: string, parser: string): NameError {
+  const ctx = /not understandable in the context it was used:\s*(.+?)\s*\.?$/m.exec(parser)?.[1];
+  const sect = /following section of the name:\s*(.+?)\s*(?:The following|$)/m.exec(parser)?.[1];
+  const bad = [ctx, sect].find((x) => x && name.includes(x.trim()))?.trim();
+  return { error: `Couldn't read "${name.trim()}". Check the spelling, or try a CAS number, SMILES or a simpler name.`, bad };
+}
 
 /**
  * A name as a laid-out molfile, or why not. Systematic names are read here, on this computer;
  * a name that can't be read (a trade name, an abbreviation) is looked up on PubChem, unless
- * that is turned off in Edit > Preferences.
+ * that is turned off in Edit > Settings.
  */
-async function nameToMolfile(name: string): Promise<{ mb: string; attach: number[]; warnings: string[] } | { error: string }> {
+async function nameToMolfile(name: string): Promise<{ mb: string; attach: number[]; warnings: string[] } | NameError> {
   const r = await names.read(name);
   namesReady = true;
   if (!chem.ready) return { error: 'The chemistry engine is still loading; try again in a moment.' };
   if (!r.ok) {
-    if (!pubchemNames || !name.trim()) return { error: r.message };
     const why = r.message.trim().replace(/([^.])$/, '$1.');
+    const failed = (more: string): NameError => ({ ...unreadableName(name, why), details: `${why}${more ? ' ' + more : ''}` });
+    if (!pubchemNames || !name.trim()) return failed('');
     let found: Awaited<ReturnType<typeof pubchemName>>;
     try {
       found = await pubchemName(name);
     } catch (e) {
-      return { error: `${why} Looking it up on PubChem didn't work either: ${(e as Error).message}` };
+      return failed(`Looking it up on PubChem didn't work: ${(e as Error).message}`);
     }
-    if (!found) return { error: `${why} PubChem doesn't know this name either.` };
+    if (!found) return failed('PubChem doesn\'t know this name either.');
     const mb = await chem.smilesToMol(found.smiles).catch(() => null);
     if (!mb) return { error: `PubChem knows this name, but its structure could not be drawn (${found.smiles}).` };
     const same = found.title.toLowerCase() === name.trim().toLowerCase();
@@ -674,7 +1194,7 @@ function toggleStructureLock(): void {
 }
 
 /** How Number Compounds counted last time (offered again). */
-const numbering = { style: 'numbers' as IdStyle, prefix: '', suffix: '', bold: true, same: true };
+const numbering = { style: 'numbers' as IdStyle, prefix: '', suffix: '', bold: true, same: true, align: true };
 
 /**
  * Each structure's key for "the same structure, the same ID": its canonical SMILES (with
@@ -695,7 +1215,7 @@ async function structureKeys(): Promise<Map<number, string>> {
 }
 
 /**
- * Scheme > Scheme Settings: spacing between structures and + signs, and the text above and below
+ * Chemistry > Reactions and Schemes > Scheme Settings: spacing between structures and + signs, and the text above and below
  * arrows (size, alignment, gap, the + boxes, fitting the arrow to it). A blank distance follows
  * the drawing's bond length.
  */
@@ -730,7 +1250,7 @@ async function schemeSettings(): Promise<void> {
 }
 
 /**
- * Scheme > Number Compounds: ID labels under the selected structures (or all), in scheme order,
+ * Chemistry > Labels and Numbers > Number Compounds: ID labels under the selected structures (or all), in scheme order,
  * counted as chosen; copies of one structure share an ID. Labels are tied to their structures.
  */
 async function numberCompounds(): Promise<void> {
@@ -745,6 +1265,7 @@ async function numberCompounds(): Promise<void> {
     { name: 'suffix', label: 'After each', value: numbering.suffix, type: 'text', placeholder: 'e.g. ′' },
     { name: 'bold', label: 'Bold', value: String(numbering.bold), type: 'checkbox' },
     { name: 'same', label: 'Same structure, same ID', value: String(numbering.same), type: 'checkbox' },
+    { name: 'align', label: 'Line up the numbers in each row', value: String(numbering.align), type: 'checkbox' },
     { name: 'old', label: 'IDs already there', value: 'renumber', options: [{ value: 'renumber', label: 'Number again' }, { value: 'keep', label: 'Keep' }] },
     { name: 'reagents', label: 'Reagents over arrows', value: 'skip', options: [{ value: 'skip', label: 'Leave unnumbered' }, { value: 'number', label: 'Number them too' }] },
   ], { ok: 'Number', note: 'Puts an ID under each selected structure (or every structure), following the arrows of a scheme, else left to right and top to bottom. Each is tied to its structure and is ordinary text you can change. For 1a, 1b, “Start at” is the number.' });
@@ -752,18 +1273,18 @@ async function numberCompounds(): Promise<void> {
   const style = got.style as IdStyle;
   const start = parseIdStart(got.start, style);
   if (start === null) { flash(`“${got.start}” isn't a place to start counting ${style === 'roman' || style === 'ROMAN' ? 'in roman numerals' : style === 'lower' || style === 'upper' ? 'in letters' : 'from'}.`); return; }
-  Object.assign(numbering, { style, prefix: got.prefix, suffix: got.suffix, bold: got.bold === 'true', same: got.same === 'true' });
+  Object.assign(numbering, { style, prefix: got.prefix, suffix: got.suffix, bold: got.bold === 'true', same: got.same === 'true', align: got.align === 'true' });
   let keyOf: ((atoms: number[]) => string | undefined) | undefined;
   if (numbering.same) {
     const keys = await structureKeys();
     keyOf = (atoms) => keys.get(atoms[0]);
   }
-  const n = editor.numberCompounds({ start: Math.max(0, start), style, prefix: got.prefix, suffix: got.suffix, bold: numbering.bold, keep: got.old === 'keep', reagents: got.reagents === 'number', keyOf });
+  const n = editor.numberCompounds({ start: Math.max(0, start), style, prefix: got.prefix, suffix: got.suffix, bold: numbering.bold, align: numbering.align, keep: got.old === 'keep', reagents: got.reagents === 'number', keyOf });
   if (!n) flash('No structures to number.');
 }
 
 /**
- * Structure > Add ID Label and Add Caption: text centred under each chosen structure, tied to
+ * Chemistry > Labels and Numbers > Add ID Label and Add Caption: text centred under each chosen structure, tied to
  * it, then typing straight away. An ID label is the next compound number (or the ID a copy of
  * the structure already has).
  */
@@ -865,7 +1386,7 @@ function useOwnTemplates(list: Template[]): void {
   toolbar.refreshTitles();
 }
 
-/** Structure > Save as Template: the selected structure goes into My templates. */
+/** Chemistry > Nicknames and Templates > Save as Template: the selected structure goes into My templates. */
 async function saveTemplate(): Promise<void> {
   const ids = [...editor.sel.atoms];
   if (!ids.length) { flash('Select a structure first, then save it as a template.'); return; }
@@ -881,10 +1402,10 @@ async function saveTemplate(): Promise<void> {
   flash(`Saved “${name}” in My templates. Click to place it, a bond to fuse it, or an atom to join it.`, 6000);
 }
 
-/** Structure > Delete Template…: take one of your own templates away. */
+/** Chemistry > Nicknames and Templates > Delete Template…: take one of your own templates away. */
 async function deleteTemplate(): Promise<void> {
   const list = ownTemplates();
-  if (!list.length) { flash('You have no templates of your own yet (Structure > Save as Template).'); return; }
+  if (!list.length) { flash('You have no templates of your own yet (Chemistry > Nicknames and Templates > Save as Template).'); return; }
   const got = await ask('Delete Template', [{ name: 'id', label: 'Template', value: list[list.length - 1].id, options: list.map((t) => ({ value: t.id, label: t.name })) }], { ok: 'Delete' });
   if (!got) return;
   useOwnTemplates(list.filter((t) => t.id !== got.id));
@@ -892,7 +1413,7 @@ async function deleteTemplate(): Promise<void> {
   storeSettings();
 }
 
-/** Structure > Define Nickname…: the selected group gets a name that can be typed as a label. */
+/** Chemistry > Nicknames and Templates > Define Nickname…: the selected group gets a name that can be typed as a label. */
 async function defineNickname(): Promise<void> {
   const g = selectedGroup(doc, editor.sel.atoms);
   if ('error' in g) { flash(g.error, 6000); return; }
@@ -908,10 +1429,10 @@ async function defineNickname(): Promise<void> {
   flash(`“${name}” can now be typed as a label.`, 5000);
 }
 
-/** Structure > Delete Nickname…: take one of your own nicknames away. */
+/** Chemistry > Nicknames and Templates > Delete Nickname…: take one of your own nicknames away. */
 async function deleteNickname(): Promise<void> {
   const names = Object.keys(ownNicknames);
-  if (!names.length) { flash('You have no nicknames of your own yet (Structure > Define Nickname).'); return; }
+  if (!names.length) { flash('You have no nicknames of your own yet (Chemistry > Nicknames and Templates > Define Nickname).'); return; }
   const got = await ask('Delete Nickname', [{ name: 'name', label: 'Nickname', value: names[0], options: names.map((n) => ({ value: n, label: `${n}  (${ownNicknames[n]})` })) }], { ok: 'Delete' });
   if (!got) return;
   const { [got.name]: _, ...rest } = ownNicknames;
@@ -922,9 +1443,9 @@ async function deleteNickname(): Promise<void> {
   storeSettings();
 }
 
-/** Structure > Contract Label…: fold the selected group into one label (Undo opens it again). */
+/** Chemistry > Contract Label…: fold the selected group into one label (Undo opens it again). */
 /**
- * Structure > Expand Label: the selected labels drawn out as atoms and bonds. Ligands on a
+ * Chemistry > Expand Label: the selected labels drawn out as atoms and bonds. Ligands on a
  * metal come from their templates; other abbreviations are laid out by the chemistry engine.
  */
 async function expandLabel(): Promise<void> {
@@ -943,13 +1464,39 @@ async function expandLabel(): Promise<void> {
   else if (!n) flash('Nothing to expand.');
 }
 
+/** Canonical SMILES of each built-in nickname with its join point (worked out once). */
+let nicknameKeys: Promise<Map<string, string[]>> | null = null;
+
+async function groupKey(smiles: string): Promise<string | null> {
+  const mb = await chem.smilesToMol('*' + smiles);
+  return mb ? chem.molToSmiles(mb) : null;
+}
+
+/** The built-in nicknames that mean exactly this group (SMILES from where it joins). */
+async function builtInNamesFor(smiles: string): Promise<string[]> {
+  if (!chem.ready) return [];
+  nicknameKeys ??= (async () => {
+    const m = new Map<string, string[]>();
+    for (const [name, smi] of builtInNicknames()) {
+      if (smi.includes('*')) continue;
+      const k = await groupKey(smi);
+      if (k) m.set(k, [...(m.get(k) ?? []), name]);
+    }
+    return m;
+  })();
+  const k = await groupKey(smiles);
+  return (k && (await nicknameKeys).get(k)) || [];
+}
+
 async function contractLabel(): Promise<void> {
   const g = selectedGroup(doc, editor.sel.atoms);
   if ('error' in g) { flash(g.error, 6000); return; }
-  const got = await ask('Contract Label', [{ name: 'name', label: 'Label', value: '' }],
-    { ok: 'Contract', note: 'The selected group becomes one label with this name. The formula and mass still count the whole group, and ChemDraw sees the group inside the label.' });
+  // when the selection is a group the program already has a name for (Ph, TBS, Boc), offer that name
+  const same = await builtInNamesFor(g.smiles);
+  const got = await ask('Contract Label', [{ name: 'name', label: 'Label', value: same[0] ?? '' }],
+    { ok: 'Contract', note: `The selected group becomes one label with this name.${same.length > 1 ? ` It is also known as ${same.slice(1).join(', ')}.` : ''} The formula and mass still count the whole group, and ChemDraw sees the group inside the label.` });
   if (!got) return;
-  const err = editor.contractLabel(got.name);
+  const err = editor.contractLabel(got.name, same);
   if (err) flash(err, 6000);
 }
 
@@ -970,21 +1517,21 @@ const pickedCurved = (): boolean => [...editor.sel.arrows].some((id) => { const 
 const pickedReactionArrow = (): number | undefined => [...editor.sel.arrows].find((id) => { const r = doc.arrows.get(id); return !!r && isReactionArrow(r); });
 const nameDialog = new NameDialog(async (name) => {
   const got = await nameToMolfile(name);
-  if ('error' in got) return got.error;
+  if ('error' in got) return got;
   const c = renderer.toDoc(renderer.width / 2, renderer.height / 2);
   try {
     let ids: number[] = [];
     doc.edit('Name to Structure', () => { ids = addNamed(got, c.x, c.y); });
     selectNewAtoms(ids);
   } catch (err) {
-    return String(err);
+    return { error: String(err) };
   }
   if (got.warnings.length) flash('Note: ' + got.warnings.join(' '), 9000);
   return null;
 }, () => !namesReady);
 
 /**
- * Structure > Name to Structure. Selected captions are read as names and replaced by their
+ * Chemistry > Name to Structure. Selected captions are read as names and replaced by their
  * structures (Undo puts them back); with no caption selected, a window asks for a name.
  */
 async function nameToStructure(): Promise<void> {
@@ -1023,10 +1570,21 @@ async function nameToStructure(): Promise<void> {
 /** Copy the selected structures (or everything) as SMILES text. */
 async function copySmiles(): Promise<void> {
   if (!chem.ready) { flash('The chemistry engine is still loading.'); return; }
-  const atoms = editor.sel.atoms.size ? editor.sel.atoms : doc.atoms.keys();
+  const atoms = [...(editor.sel.atoms.size ? editor.sel.atoms : doc.atoms.keys())];
   const { molblock } = toMolfile(doc, atoms);
-  const smiles = await chem.molToSmiles(molblock);
-  if (!smiles) { flash('There is no structure to copy.'); return; }
+  let smiles = await chem.molToSmiles(molblock);
+  if (!smiles) {
+    // most often an atom with too many bonds: say which, and offer the SMILES as drawn
+    const ids = new Set(atoms);
+    const bad = checks.list().find((w) => w.kind === 'atom' && ids.has(w.id));
+    if (!bad) { flash('There is no structure to copy.'); return; }
+    editor.reveal('atom', bad.id);
+    const loose = await chem.molToSmiles(molblock, true);
+    if (!loose) { flash(`Not copied: ${bad.text.join(' ')}`, 8000); return; }
+    const go = await ask('Copy as SMILES', [], { ok: 'Copy Anyway', note: `The structure can't be read as drawn (the atom with the problem is now selected). ${bad.text.join(' ')} Copy the SMILES anyway? Other programs may refuse it.` });
+    if (!go) return;
+    smiles = loose;
+  }
   await navigator.clipboard.writeText(smiles).then(() => flash('Copied SMILES: ' + smiles), () => flash('Could not use the clipboard.'));
 }
 
@@ -1122,9 +1680,17 @@ function align(how: Align): void {
 }
 
 let flashTimer = 0;
-function flash(msg: string, ms = 3500): void {
+function flash(msg: string, ms = 3500, action?: { label: string; run: () => void }): void {
   const el = $('#flash');
   el.textContent = msg;
+  el.classList.toggle('has-action', !!action);
+  if (action) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = action.label;
+    b.addEventListener('click', () => { el.classList.remove('show'); action.run(); });
+    el.append(' ', b);
+  }
   el.classList.add('show');
   clearTimeout(flashTimer);
   flashTimer = window.setTimeout(() => el.classList.remove('show'), ms);
@@ -1196,16 +1762,19 @@ const docFiles: DocxDeps = {
     const pic = recordPicture(d, FIGURE_MARGIN);
     if (!pic) return null;
     const png = new Uint8Array(await (await canvasPng(pictureCanvas(d, pic).canvas)).arrayBuffer());
-    return { png, svg: pictureSvg(pic), w: pic.box.x2 - pic.box.x1, h: pic.box.y2 - pic.box.y1 };
+    return { png, svg: pictureSvg(pic), w: pic.box.x2 - pic.box.x1, h: pic.box.y2 - pic.box.y1, x: pic.box.x1, y: pic.box.y1 };
   },
   svgToPng,
+  bakePicture: (p) => fxPng(p, 'baked'),
   fonts: bundledFaces,
+  smiles: (contents, style) => drawingSmiles(structureDoc(contents, style)),
 };
 
 /** Opening Word files: ChemDraw objects in them become structures, kept at the size they had. */
 const docRead: DocxReadDeps = {
-  chemdraw: (cdx, style) => {
-    const d = readCdxml(cdxToCdxml(cdx)).doc;
+  chemdraw: (cdx, style) => docRead.cdxml!(cdxToCdxml(cdx), style),
+  cdxml: (text, style) => {
+    const d = readCdxml(text).doc;
     fitPasted(d, style);
     return d.contents();
   },
@@ -1225,10 +1794,13 @@ const ws: Workspace = new Workspace(doc, {
     modeTool[tab.mode] = editor.toolName;
     editor.cropping = null;
     (ws.pane ?? tab).view = { ...renderer.view };
+    (ws.pane ?? tab).fitted = editor.stillFitted;
     if (tab.deck) { tab.deck.onChange = () => {}; tab.deck.onSwitch = () => {}; tab.deck.onMotion = () => {}; }
   },
   enter: (tab, opened) => enterTab(tab, opened),
-  changed: () => { renderTabs(); updateTitle(); layoutSplit(); },
+  // every way of closing a tab (×, middle-click, Delete, Ctrl+W) finishes a figure or cell structure first
+  closing: () => finishTyping(),
+  changed: () => { renderTabs(); updateTitle(); layoutSplit(); tickAutoSave(); },
   flash,
   pptx: pptxOptions(),
   measure: measureText,
@@ -1237,12 +1809,40 @@ const ws: Workspace = new Workspace(doc, {
     write: (book, name) => writeSheetFile(book, name, sheetFiles),
   },
   documents: {
-    read: (bytes) => readDocx(bytes, docRead),
-    write: (d) => writeDocx(d, docFiles),
+    read: (bytes, name) => readDocumentFile(bytes, name, docRead),
+    write: (d, name) => writeDocumentFile(d, name, docFiles),
   },
-  newStyle: (mode) => { const n = modeStyles[mode]; return n ? styleNamed(n, ownStyles) ?? null : null; },
-  newMaster: (m) => { const t = SLIDE_TEMPLATES.find((x) => x.id === slideTemplate); return t && t.id !== 'plain' ? applyTemplate(m, t) : null; },
+  newStyle: (mode) => { const n = modeStyleFor(mode); return n ? styleNamed(n, ownStyles) ?? null : null; },
+  newPage: () => (defaultPage ? { ...defaultPage } : null),
+  newMaster: (m) => { const t = themeById(slideTemplate); return t && t.id !== 'plain' ? applyTemplate(m, t) : null; },
+  beforeWrite: (tab, ref, name, how) => keeper.beforeWrite(tab, ref, name, how),
+  saved: (tab, data, how, was) => keeper.saved(tab, data, how, was),
+  autoSaveFailed: (tab, msg) => keeper.autoSaveFailed(tab, msg),
+  opened: (tab) => keeper.opened(tab),
+  dropped: (tab) => {
+    keeper.dropped(tab);
+    // a drawing being edited for Word: Word hears that the editing is over
+    const id = embeddedTabs.get(tab);
+    if (id !== undefined) { embeddedTabs.delete(tab); void invoke('ole_close', { id }).catch(() => {}); }
+  },
 });
+
+// AutoSave, recovery copies, Version History and shared folders (File > AutoSave and Recovery Options)
+let keepPrefs: KeepPrefs = { ...DEFAULT_KEEP };
+const keeper = new Keeper({
+  ws,
+  prefs: () => keepPrefs,
+  setPrefs: (p) => { keepPrefs = p; tickAutoSave(); renderTabs(); storeSettings(); },
+  flash,
+  refresh: () => { renderTabs(); updateTitle(); tickAutoSave(); },
+});
+/** File > AutoSave shows whether the tab showing saves itself. */
+function tickAutoSave(): void {
+  const b = document.querySelector<HTMLElement>('[data-cmd="autosave"]');
+  if (!b) return;
+  const t = ws.active;
+  b.setAttribute('aria-checked', String(keeper.autoSaveWanted(t) && ws.canAutoSave(t)));
+}
 
 /** How slides are saved for PowerPoint: structures as pictures (PNG and SVG), the bundled fonts inside. */
 function pptxOptions(): PptxOptions {
@@ -1254,13 +1854,32 @@ function pptxOptions(): PptxOptions {
       return { svg: pictureSvg(pic), png, box: pic.box };
     },
     svgToPng,
+    bakePicture: (p) => fxPng(p, 'baked'),
     fonts: bundledFaces,
+    smiles: drawingSmiles,
   };
+}
+
+/** The structures in a drawing as SMILES (for alt text), or null when there are none or the chemistry engine isn't ready. */
+async function drawingSmiles(d: Doc): Promise<string | null> {
+  if (!chem.ready || !d.atoms.size) return null;
+  const { molblock, unknownLabels } = toMolfile(d, d.atoms.keys());
+  return unknownLabels.length ? null : chem.molToSmiles(molblock);
 }
 
 /** The slide deck showing (in Slides mode), or null for a drawing. */
 function deckNow(): Deck | null {
   return ws.active.deck ?? null;
+}
+
+/** Slides' Selection Pane is open (Home > Selection Pane, Alt+F10). */
+let selectionPane = false;
+
+/** Design's Layers panel, or Slides' Selection Pane when it is open, in the right-hand panel. */
+function showLayers(tab = ws.active): void {
+  const design = tab.mode === 'design', slides = !!tab.deck && !design;
+  layers?.show(design || (slides && selectionPane) ? doc : null, slides);
+  for (const b of document.querySelectorAll('[data-cmd="selection-pane"]')) b.setAttribute('aria-pressed', String(slides && selectionPane));
 }
 
 /** Finish typing in a caption or the notes (and drawing a structure for a cell), before the slide or tab changes. */
@@ -1282,7 +1901,7 @@ function enterTab(tab: Tab, opened: boolean): void {
   document.body.classList.toggle('slides-mode', slides);
   document.body.classList.toggle('design-mode', design);
   editor.glueArrows = design;
-  layers?.show(design ? doc : null);
+  showLayers(tab);
   showGuides();
   if (deck) deck.onMotion = () => { animUi?.refresh(); ws.noteChange(); renderer.repaintAll(); editor.requestScene(); };
   if (deck) deck.onComments = () => { slideCmts?.update(); ws.noteChange(); };
@@ -1295,9 +1914,18 @@ function enterTab(tab: Tab, opened: boolean): void {
   tickToolboxes();
   applyModeColours(tab.mode, modeColours);
   for (const el of document.querySelectorAll<HTMLElement>('.slides-only')) el.hidden = !slides;
+  // another tab: back to Normal view
+  if (sorterOn) {
+    sorterOn = false;
+    sorterEl.hidden = true;
+    sorterList.show(null);
+  }
+  if (outlineView.shown) outlineView.show(false);
+  if (notesView.shown) { notesView.show(false); $('#notes-pane').classList.remove('np-hidden'); }
   showSheetParts();
   editor.paused = sheet || words;
   sheetMode.show(sheet ? tab : null);
+  if (words) fieldEnv.fileName = ws.mainOf(tab).name;
   docMode.show(words ? tab : null);
   renderer.screen = !!deck;
   renderer.page = deck ? slidePage : null;
@@ -1315,17 +1943,19 @@ function enterTab(tab: Tab, opened: boolean): void {
     if (design) showDesignState();
     notesBox.value = deck.current?.notes ?? '';
     showSlideState();
-  } else slideList.show(null);
+  } else { slideList.show(null); showRulers(); }
   animUi?.update();
   slideCmts?.slideChanged();
   layoutSplit();
   // the slide list and notes take room from the drawing area
   resize();
   const viewOf = ws.pane ?? tab;
-  if (viewOf.view && (!opened || ws.pane)) renderer.view = { ...viewOf.view };
+  if (viewOf.view && (!opened || ws.pane) && !(viewOf.fitted && !ws.pane && !slideSplit)) renderer.view = { ...viewOf.view };
   else if (ws.pane || slideSplit) fitSplitDrawing();
   else editor.fit();
   renderer.repaintAll();
+  // (fit leaves an empty drawing alone, so ask for the scene here: else the last tab's drawing stays on screen)
+  editor.requestScene();
   editor.clearSelection();
   editor.frame(true);
   refreshKeys();
@@ -1341,8 +1971,13 @@ const slidePage = {
   draw(ctx: CanvasRenderingContext2D): void {
     const d = deckNow();
     if (!d?.current) return;
-    drawSlidePage(ctx, { size: d.size, master: d.master, layout: d.current.layout, index: d.index }, SURROUND);
+    drawSlidePage(ctx, d.page(), SURROUND);
     if (ws.active.mode === 'design' && designGrid.on) drawGrid(ctx, d.size, designGrid.step);
+    if (ws.active.mode === 'slides') {
+      const v = d.settings.view;
+      if (slideLook.grid) drawGrid(ctx, d.size, v?.grid ?? defaultView(d.size).grid);
+      if (v?.showGuides) drawGuides(ctx, v, d.size, renderer.view.scale, guideDrag?.which);
+    }
     if (ws.active.mode === 'slides') animUi?.drawMarkers(ctx, renderer.view.scale);
     // (the comment markers are over the drawing, and follow it as it moves)
     if (ws.active.mode === 'slides') slideCmts?.place();
@@ -1354,7 +1989,7 @@ const slidePage = {
 let listKey = '';
 let masterSeen: unknown = null;
 let indexSeen = -1;
-const slideListKey = (d: Deck) => `${d.slides.map((s) => s.id + (s.notes.trim() ? 'n' : '')).join(',')}|${d.size.w}x${d.size.h}`;
+const slideListKey = (d: Deck) => `${d.slides.map((s) => s.id + (s.notes.trim() ? 'n' : '') + (s.hidden ? 'h' : '') + (s.section !== undefined ? `s${s.section}` : '')).join(',')}|${d.sections.map((x) => `${x.id}:${x.name}`).join('/')}|${d.size.w}x${d.size.h}|${d.looks}`;
 
 function deckChanged(deck: Deck): void {
   const key = slideListKey(deck);
@@ -1363,11 +1998,19 @@ function deckChanged(deck: Deck): void {
     masterSeen = deck.master;
     indexSeen = deck.index;
     slideList.rebuild();
+    if (sorterOn) sorterList.rebuild();
+    outlineView.rebuild();
+    notesView.rebuild();
   } else if (deck.index !== indexSeen) {
     // going to another slide moves the highlight; no picture needs drawing again
     indexSeen = deck.index;
     slideList.switched();
-  } else slideList.refresh();
+    if (sorterOn) sorterList.switched();
+    outlineView.mark(deck.index);
+  } else {
+    slideList.refresh();
+    if (sorterOn) sorterList.refresh();
+  }
   showSlideState();
   if (ws.active.mode === 'design') showDesignState();
   ws.noteChange();
@@ -1384,10 +2027,43 @@ function slideSwitched(deck: Deck): void {
   slideCmts?.slideChanged();
 }
 
-/** The layout and size boxes and the Slide menu show the slide being edited. */
+/** The layouts last put in the Layout box and the Format menu (they change with the slide master). */
+let layoutsShown = '';
+
+/** The Layout box and Format > Slide Layout list the deck's layouts: the five built in, as edited, then the ones made here. */
+function showLayoutMenus(deck: Deck): void {
+  const list = deckLayouts(deck.master);
+  const key = JSON.stringify(list.map((l) => [l.id, l.name]));
+  if (key === layoutsShown) return;
+  layoutsShown = key;
+  layoutSel.replaceChildren(...list.map((l) => new Option(l.name, l.id)));
+  const sub = document.querySelector<HTMLElement>('#layout-menu');
+  if (sub) {
+    const items: HTMLElement[] = list.map((l) => {
+      const b = document.createElement('button');
+      b.setAttribute('role', 'menuitemradio');
+      b.setAttribute('aria-checked', 'false');
+      b.dataset.cmd = `layout-${l.id}`;
+      const span = document.createElement('span');
+      span.textContent = l.name;
+      b.append(span);
+      return b;
+    });
+    const hr = document.createElement('hr');
+    const edit = document.createElement('button');
+    edit.setAttribute('role', 'menuitem');
+    edit.dataset.cmd = 'edit-layouts';
+    edit.textContent = 'Edit Layouts…';
+    sub.replaceChildren(...items, hr, edit);
+  }
+}
+
+/** The layout and size boxes and the Format menu show the slide being edited. */
 function showSlideState(): void {
   const deck = deckNow();
+  showRulers();
   if (!deck?.current) return;
+  showLayoutMenus(deck);
   layoutSel.value = deck.current.layout;
   const named = deck.size.w === WIDE.w && deck.size.h === WIDE.h ? 'wide' : deck.size.w === STANDARD.w && deck.size.h === STANDARD.h ? 'standard' : 'custom';
   let custom = sizeSel.querySelector<HTMLOptionElement>('option[value="custom"]');
@@ -1396,9 +2072,19 @@ function showSlideState(): void {
     custom.text = sizeName(deck.size);
   } else custom?.remove();
   sizeSel.value = named;
-  for (const l of LAYOUTS) $(`[data-cmd="layout-${l.id}"]`)?.setAttribute('aria-checked', String(l.id === deck.current.layout));
+  for (const b of document.querySelectorAll<HTMLElement>('[data-cmd^="layout-"]')) b.setAttribute('aria-checked', String(b.dataset.cmd === `layout-${deck.current.layout}`));
+  for (const b of document.querySelectorAll<HTMLElement>('[data-cmd="view-normal"], [data-cmd="view-sorter"]')) {
+    const on = b.dataset.cmd === 'view-sorter' ? slideViewNow() === 'sorter' : slideViewNow() === 'normal';
+    b.setAttribute(b.getAttribute('role') === 'menuitemradio' ? 'aria-checked' : 'aria-pressed', String(on));
+  }
   $('[data-cmd="size-wide"]')?.setAttribute('aria-checked', String(named === 'wide'));
   $('[data-cmd="size-standard"]')?.setAttribute('aria-checked', String(named === 'standard'));
+  const hidden = String(!!deck.current.hidden);
+  for (const b of document.querySelectorAll('[data-cmd="hide-slide"]')) b.setAttribute(b.getAttribute('role') === 'menuitemcheckbox' ? 'aria-checked' : 'aria-pressed', hidden);
+  // Set Up Show's two the ribbon shows as ticks
+  const show = deck.settings.show;
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="use-timings"]')) b.checked = !show?.manual;
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="play-narrations"]')) b.checked = !show?.noNarration;
 }
 
 // ---------------------------------------------------------------- transitions and animations (Slides mode)
@@ -1415,6 +2101,8 @@ animUi = new AnimationUI($('#ribbon'), $('#anim-section'), {
   finishTyping,
   flash,
   repaint: () => { renderer.repaintAll(); editor.requestScene(); },
+  host: () => $('#canvas-host'),
+  view: () => renderer.view,
 });
 
 slideCmts = new SlideComments($('#cmt-section'), $('#canvas-host'), {
@@ -1436,8 +2124,35 @@ layers = new LayersPanel($('#layers-section'), {
   select: (ids) => editor.selectShapes(ids),
   selected: () => editor.selectedShapes(),
   edit: (label, f) => { finishTyping(); doc.edit(label, f); editor.changed(); },
+  pick: (w) => { finishTyping(); editor.selectThese({ atoms: new Set(w.atoms), bonds: new Set(), captions: new Set(w.captions), arrows: new Set(w.arrows), shapes: new Set(w.shapes) }); },
+  picked: () => ({ shapes: [...editor.sel.shapes], captions: [...editor.sel.captions], atoms: [...editor.sel.atoms], arrows: [...editor.sel.arrows] }),
 });
+layers.onClose = () => { selectionPane = false; showLayers(); };
 const lib = (designLib = new DesignLibrary($('#design-lib'), (id) => { finishTyping(); editor.setTool(`geo:${id}`); }));
+// Design mode's shapes and icons fold away to a thin strip (remembered on this computer)
+{
+  const el = $('#design-lib');
+  const fold = document.createElement('button');
+  fold.type = 'button';
+  fold.className = 'dl-fold';
+  const KEY = 'chem-illustrator.design-lib-folded';
+  const show = (folded: boolean) => {
+    el.classList.toggle('folded', folded);
+    fold.textContent = folded ? '›' : '‹';
+    fold.title = folded ? 'Open the shapes and icons' : 'Fold the shapes and icons away, for more room for the page';
+    fold.setAttribute('aria-label', fold.title);
+    fold.setAttribute('aria-expanded', String(!folded));
+  };
+  let folded = false;
+  try { folded = localStorage.getItem(KEY) === '1'; } catch { /* no storage: start open */ }
+  show(folded);
+  fold.addEventListener('click', () => {
+    folded = !el.classList.contains('folded');
+    show(folded);
+    try { localStorage.setItem(KEY, folded ? '1' : '0'); } catch { /* not remembered */ }
+  });
+  el.querySelector('.dl-tabs')?.append(fold);
+}
 const designGrid = { on: false, step: 18 };
 const dzBg = $<HTMLInputElement>('#dz-bg');
 const dzGrid = $<HTMLInputElement>('#dz-grid');
@@ -1450,9 +2165,10 @@ dzGuides.checked = guidesOn.design;
 dzGuides.addEventListener('change', () => { guidesOn.design = dzGuides.checked; showGuides(); storeSettings(); });
 dzBg.addEventListener('change', () => {
   const d = deckNow();
-  if (!d || d.master.background.toLowerCase() === dzBg.value.toLowerCase()) return;
+  if (!d || (!d.master.fill && !d.current?.background && d.master.background.toLowerCase() === dzBg.value.toLowerCase())) return;
   finishTyping();
-  d.setMaster({ ...d.master, background: dzBg.value });
+  // a colour here takes the place of a gradient or picture set with Format Background
+  d.setAllBackgrounds(solid(dzBg.value));
 });
 
 /** The Design ribbon shows the page's size and background. */
@@ -1461,6 +2177,148 @@ function showDesignState(): void {
   if (!d) return;
   $('#dz-size').textContent = sizeLabel(d.size);
   if (/^#[0-9a-f]{6}$/i.test(d.master.background)) dzBg.value = d.master.background;
+}
+
+// ---------------------------------------------------------------- Slides' rulers, gridlines and guides
+
+const guideTip = new GuideTip(host);
+const rulers = new SlideRulers(host, {
+  view: () => renderer.view,
+  size: () => deckNow()?.size ?? null,
+  prefs: () => rulerPrefs,
+  selection: () => (editor.hasSelection() ? editor.selBox() : null),
+  newGuide: (axis, e) => {
+    const d = deckNow();
+    if (!d) return;
+    const view = slideViewOf(d);
+    // a new guide, shown, dragged from the ruler
+    const next = { ...view, showGuides: true, guides: { x: [...view.guides.x], y: [...view.guides.y] } };
+    next.guides[axis].push(axis === 'x' ? -1e6 : -1e6);
+    startGuideDrag(d, next, { axis, i: next.guides[axis].length - 1 }, e, 'Add guide', view);
+  },
+});
+
+/** The deck's guides and grid (PowerPoint's first ones when it has none). */
+function slideViewOf(d: Deck): SlideView {
+  return d.settings.view ?? defaultView(d.size);
+}
+
+
+/** Drag a guide (or a copy of it): its place shown by the pointer; let go off the slide to take it away. One undo step. */
+function startGuideDrag(d: Deck, view: SlideView, which: { axis: 'x' | 'y'; i: number }, e: PointerEvent, label: string, before = slideViewOf(d)): void {
+  finishTyping();
+  guideDrag = { which, view };
+  const el = renderer.overlay;
+  el.style.cursor = which.axis === 'x' ? 'col-resize' : 'row-resize';
+  const hostBox = host.getBoundingClientRect();
+  const move = (ev: PointerEvent) => {
+    const p = { x: (ev.clientX - hostBox.left - renderer.view.ox) / renderer.view.scale, y: (ev.clientY - hostBox.top - renderer.view.oy) / renderer.view.scale };
+    let v = which.axis === 'x' ? p.x : p.y;
+    // to a sixteenth of an inch (or a millimetre), Alt: anywhere
+    if (!ev.altKey) { const step = rulerPrefs.units === 'in' ? 4.5 : 72 / 25.4; const zero = rulerPrefs.from === 'centre' ? (which.axis === 'x' ? d.size.w : d.size.h) / 2 : 0; v = zero + Math.round((v - zero) / step) * step; }
+    view.guides[which.axis][which.i] = v;
+    const off = v < 0 || v > (which.axis === 'x' ? d.size.w : d.size.h);
+    guideTip.show(off ? 'Let go to take the guide away' : rulerText(v, d.size, which.axis, rulerPrefs), ev.clientX - hostBox.left, ev.clientY - hostBox.top);
+    renderer.repaintAll();
+    editor.requestScene();
+  };
+  const up = () => {
+    removeEventListener('pointermove', move, true);
+    removeEventListener('pointerup', up, true);
+    el.style.cursor = '';
+    guideTip.hide();
+    guideDrag = null;
+    const v = view.guides[which.axis][which.i];
+    const off = v < 0 || v > (which.axis === 'x' ? d.size.w : d.size.h);
+    if (off) view.guides[which.axis].splice(which.i, 1);
+    d.settings.view = before;
+    d.setSettings({ ...d.settings, view }, off ? 'Remove guide' : label);
+    renderer.repaintAll();
+    editor.requestScene();
+  };
+  addEventListener('pointermove', move, true);
+  addEventListener('pointerup', up, true);
+  move(e);
+}
+
+// on the slide, a guide is picked up where nothing else is: a drag moves it, Ctrl+drag copies it
+renderer.overlay.addEventListener('pointerdown', (e) => {
+  const d = deckNow();
+  if (e.button !== 0 || !d || ws.active.mode !== 'slides' || sorterOn || !d.settings.view?.showGuides || editor.toolName !== 'select') return;
+  const { p, taken } = editor.pointAt(e);
+  if (taken) return;
+  const view = d.settings.view;
+  const near = guideNear(view, p, 4 / renderer.view.scale);
+  if (!near) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const next: SlideView = { ...view, guides: { x: [...view.guides.x], y: [...view.guides.y] } };
+  let which = near;
+  if (e.ctrlKey || e.metaKey) { next.guides[near.axis].push(next.guides[near.axis][near.i]); which = { axis: near.axis, i: next.guides[near.axis].length - 1 }; }
+  startGuideDrag(d, next, which, e, e.ctrlKey || e.metaKey ? 'Copy guide' : 'Move guide');
+}, true);
+// over a guide, the pointer says it can be dragged
+renderer.overlay.addEventListener('pointermove', (e) => {
+  const d = deckNow();
+  if (guideDrag || e.buttons || !d || ws.active.mode !== 'slides' || !d.settings.view?.showGuides || editor.toolName !== 'select') return;
+  const { p, taken } = editor.pointAt(e);
+  const near = taken ? null : guideNear(d.settings.view, p, 4 / renderer.view.scale);
+  if (near) renderer.overlay.style.cursor = near.axis === 'x' ? 'col-resize' : 'row-resize';
+});
+
+editor.moveSnap = (box, raw, tol) => {
+  const d = deckNow();
+  return d && ws.active.mode === 'slides' ? snapMove(box, raw, d.settings.view ?? null, tol) : raw;
+};
+
+/** The rulers show in Normal view of slides when View > Ruler is ticked. */
+function showRulers(): void {
+  rulers.show(slideLook.ruler && ws.active.mode === 'slides' && !sorterOn && !!deckNow());
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="view-slide-ruler"]')) b.checked = slideLook.ruler;
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="view-gridlines"]')) b.checked = slideLook.grid;
+  const g = !!deckNow()?.settings.view?.showGuides;
+  for (const b of document.querySelectorAll<HTMLInputElement>('[data-cmd="view-guides"]')) b.checked = g;
+}
+
+/** View > Guides on or off (saved with the file, as PowerPoint does). */
+function toggleGuides(): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  const v = slideViewOf(d);
+  d.setSettings({ ...d.settings, view: { ...v, guides: { x: [...v.guides.x], y: [...v.guides.y] }, showGuides: !v.showGuides } }, v.showGuides ? 'Hide guides' : 'Show guides');
+  showRulers();
+  renderer.repaintAll();
+  editor.requestScene();
+}
+
+/** View > Grid Settings: snapping, the grid, the guides, the rulers' units. */
+async function gridSettings(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  const got = await gridAndGuides(slideViewOf(d), { grid: slideLook.grid, smart: guidesOn.slides }, rulerPrefs, d.size);
+  if (!got) return;
+  slideLook.grid = got.grid;
+  guidesOn.slides = got.smart;
+  Object.assign(rulerPrefs, got.prefs);
+  d.setSettings({ ...d.settings, view: got.view }, 'Grid and guides');
+  showGuides();
+  showRulers();
+  storeSettings();
+  renderer.repaintAll();
+  editor.requestScene();
+}
+
+/** Add a guide down (or across) the middle of the slide, shown. */
+function addGuide(axis: 'x' | 'y'): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  const v = slideViewOf(d);
+  const next = { ...v, showGuides: true, guides: { x: [...v.guides.x], y: [...v.guides.y] } };
+  next.guides[axis].push((axis === 'x' ? d.size.w : d.size.h) / 2);
+  d.setSettings({ ...d.settings, view: next }, 'Add guide');
+  showRulers();
+  renderer.repaintAll();
+  editor.requestScene();
 }
 
 /** Light lines across the page to line things up by (on screen only). */
@@ -1518,12 +2376,271 @@ host.addEventListener('drop', (e) => {
   overlay.focus();
 });
 
-const slideList = new SlideList($('#slide-list'), {
-  go: (i) => goSlide(i),
-  remove: (ix) => removeSlides(ix),
-  duplicate: (ix) => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(ix); } },
+const slideListHooks = {
+  go: (i: number) => goSlide(i),
+  remove: (ix: number[]) => removeSlides(ix),
+  duplicate: (ix: number[]) => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(ix); } },
   add: () => newSlide(),
+  copy: (ix: number[]) => copySlides(ix, false),
+  cut: (ix: number[]) => copySlides(ix, true),
+  paste: () => pasteSlides(),
+  menu: (x: number, y: number) => showContextMenu(x, y, slideListMenu(), { run: (cmd) => void command(cmd), key: commandKey }),
+  sectionMenu: (x: number, y: number, id: number) => {
+    showContextMenu(x, y, [...sectionItems(), null, { cmd: 'add-section' }], {
+      run: (cmd) => { sectionPicked = id; void command(cmd); },
+      key: commandKey,
+    });
+  },
+  renameSection: (id: number) => void renameSection(id),
+};
+const slideList = new SlideList($('#slide-list'), slideListHooks);
+
+// View > Slide Sorter: every slide in rows of larger pictures, over the slide being edited.
+// Double-click a slide (or press Enter) to go back to Normal view on it.
+let sorterOn = false;
+const sorterEl = $('#slide-sorter');
+const sorterList = new SlideList(sorterEl, { ...slideListHooks, open: (i) => { goSlide(i); setSorter(false); } }, { grid: true, thumbW: 220 });
+
+/** Slide Sorter on or off (Normal view). */
+function setSorter(on: boolean): void {
+  const d = deckNow();
+  if (on && (!d || ws.active.mode !== 'slides')) { flash('Slide Sorter is for slides: use File > New Slides, or open a PowerPoint file.'); return; }
+  if (on === sorterOn) { if (on) sorterList.focus(); return; }
+  finishTyping();
+  sorterOn = on;
+  sorterEl.hidden = !on;
+  $('#slide-list').hidden = on || ws.active.mode !== 'slides';
+  sorterList.show(on ? d : null);
+  if (on) {
+    sorterList.picked = new Set(slideList.pickedList());
+    sorterList.rebuild();
+    sorterList.focus();
+  } else {
+    if (d) slideList.show(d);
+    overlay.focus();
+  }
+  editor.paused = on;
+  resize();
+  showSlideState();
+}
+
+// View > Outline View: the outline in place of the slide list; View > Notes Page: the notes pages over the slide
+const outlineView = new OutlineView($('#slide-list').parentElement!, {
+  deck: () => (ws.active.mode === 'slides' ? deckNow() : null),
+  go: (i) => goSlide(i),
+  focusSlide: () => overlay.focus(),
 });
+const notesView = new NotesPageView(host, {
+  deck: () => (ws.active.mode === 'slides' ? deckNow() : null),
+  open: (i) => { setSlideView('normal'); goSlide(i); },
+});
+
+/** Which of Normal, Outline, Slide Sorter and Notes Page shows. */
+function slideViewNow(): 'normal' | 'outline' | 'sorter' | 'notes' {
+  return sorterOn ? 'sorter' : notesView.shown ? 'notes' : outlineView.shown ? 'outline' : 'normal';
+}
+
+/** Change the slides' view (Normal, Outline, Slide Sorter or Notes Page). */
+function setSlideView(v: 'normal' | 'outline' | 'sorter' | 'notes'): void {
+  const d = deckNow();
+  if (v !== 'normal' && (!d || ws.active.mode !== 'slides')) { flash('That view is for slides: use File > New Slides, or open a PowerPoint file.'); return; }
+  finishTyping();
+  if (v !== 'sorter' && sorterOn) setSorter(false);
+  if (v !== 'notes' && notesView.shown) { notesView.show(false); $('#notes-pane').classList.remove('np-hidden'); editor.paused = false; }
+  if (v !== 'outline' && outlineView.shown) { outlineView.show(false); $('#slide-list').hidden = ws.active.mode !== 'slides'; if (d) slideList.show(d); }
+  if (v === 'sorter') setSorter(true);
+  if (v === 'outline' && !outlineView.shown) { $('#slide-list').hidden = true; outlineView.show(true); }
+  if (v === 'notes' && !notesView.shown) {
+    $('#notes-pane').classList.add('np-hidden');
+    editor.paused = true;
+    notesView.show(true);
+    notesView.reveal(d!.index);
+  }
+  resize();
+  showSlideState();
+  for (const b of document.querySelectorAll<HTMLElement>('[data-cmd="view-outline"], [data-cmd="view-notes-page"]')) {
+    const on = b.dataset.cmd === 'view-outline' ? outlineView.shown : notesView.shown;
+    if (b.getAttribute('role') !== 'menuitem') b.setAttribute('aria-pressed', String(on));
+  }
+  if (v === 'normal') overlay.focus();
+}
+
+/** View > Notes Master and Handout Master: their settings, as one step of the history. */
+async function editPageMaster(which: 'notes' | 'handout'): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') { flash('Notes pages and handouts are for slides.'); return; }
+  finishTyping();
+  const next = which === 'notes' ? await editNotesMaster(d.master) : await editHandoutMaster(d.master);
+  if (!next || deckNow() !== d) return;
+  d.setMaster(next);
+  if (notesView.shown) notesView.rebuild();
+}
+
+/** The slides picked in the list showing: Slide Sorter's, or the slide list's. */
+function pickedSlides(): number[] {
+  return (sorterOn ? sorterList : slideList).pickedList();
+}
+
+/** Right-click in the slide list: what PowerPoint offers there. */
+function slideListMenu(): MenuItem[] {
+  return [
+    { cmd: 'cut-slides', label: 'Cut' }, { cmd: 'copy-slides', label: 'Copy' }, { cmd: 'paste-slides', label: 'Paste' },
+    { cmd: 'paste-slides-keep', label: 'Paste (Keep Source Formatting)' },
+    null,
+    { cmd: 'new-slide' }, { cmd: 'duplicate-slide' }, { cmd: 'delete-slide' },
+    null,
+    { label: 'Layout', items: deckLayouts(deckNow()?.master).map((l) => ({ cmd: `layout-${l.id}`, label: l.name })) },
+    { cmd: 'format-background' },
+    { cmd: 'hide-slide' },
+    null,
+    { cmd: 'add-section' },
+    ...(deckNow()?.sections.length ? [{ label: 'Section', items: sectionItems() }] : []),
+    null,
+    { cmd: 'reuse-slides' },
+    ...(sorterOn ? [null, { cmd: 'view-normal', label: 'Open in Normal View' }] : []),
+  ];
+}
+
+/** The section commands, as in PowerPoint's right-click on a section. */
+function sectionItems(): MenuItem[] {
+  return [
+    { cmd: 'rename-section' }, { cmd: 'remove-section' }, { cmd: 'remove-section-slides' }, { cmd: 'remove-all-sections' },
+    null,
+    { cmd: 'section-up' }, { cmd: 'section-down' },
+    null,
+    { cmd: 'collapse-sections' }, { cmd: 'expand-sections' },
+  ];
+}
+
+/** The section a section command works on: the one whose heading was right-clicked, else the slide being edited's. */
+let sectionPicked: number | null = null;
+function pickedSection(d: Deck): number | null {
+  const id = sectionPicked;
+  sectionPicked = null;
+  if (id !== null && d.sections.some((x) => x.id === id)) return id;
+  return d.current?.section ?? null;
+}
+
+async function renameSection(id?: number): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const sid = id ?? pickedSection(d);
+  const sec = d.sections.find((x) => x.id === sid);
+  if (!sec) { flash('This deck has no sections yet: use Add Section.'); return; }
+  const got = await ask('Rename Section', [{ name: 'name', label: 'Section name', value: sec.name }], { ok: 'Rename' });
+  if (got && deckNow() === d) d.renameSection(sec.id, got.name);
+}
+
+/** The section commands, by name. */
+function sectionCommand(cmd: string): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  if (cmd === 'add-section') {
+    const first = (sorterOn ? sorterList : slideList).pickedList()[0] ?? d.index;
+    const id = d.addSection(first);
+    void renameSection(id);
+    return;
+  }
+  if (cmd === 'collapse-sections' || cmd === 'expand-sections') { d.foldAll(cmd === 'collapse-sections'); return; }
+  if (cmd === 'remove-all-sections') { d.removeAllSections(); return; }
+  const id = pickedSection(d);
+  if (id === null) { flash('This deck has no sections yet: use Add Section.'); return; }
+  if (cmd === 'rename-section') { void renameSection(id); return; }
+  if (cmd === 'remove-section') d.removeSection(id);
+  else if (cmd === 'remove-section-slides') { if (!d.removeSection(id, true)) flash('A presentation needs at least one slide, so this section\'s slides were kept.'); }
+  else if (cmd === 'section-up' || cmd === 'section-down') {
+    const k = d.sections.findIndex((x) => x.id === id);
+    d.moveSection(id, k + (cmd === 'section-up' ? -1 : 1));
+  }
+}
+
+/**
+ * Slides copied or cut (in the slide list, or Edit > Copy Slides), with the deck they came from,
+ * for pasting into any deck that is open.
+ */
+let slideClip: SlideSource | null = null;
+
+function copySlides(ix: number[], cut: boolean): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  slideClip = d.copySlides(ix);
+  const n = slideClip.slides.length;
+  const what = `${n} slide${n === 1 ? '' : 's'}`;
+  if (cut && !d.remove(ix)) { flash(`Copied ${what}: a presentation needs at least one slide, so nothing was cut.`); return; }
+  flash(`${cut ? 'Cut' : 'Copied'} ${what}. Click in the slide list of this deck or another and press Ctrl+V to paste.`);
+}
+
+/**
+ * Paste the slides copied after the last slide picked, in this deck's look; `keep` keeps each
+ * slide's own background, fonts and colours. When the look would change, a button offers the
+ * other way, as PowerPoint's Paste Options do.
+ */
+function pasteSlides(keep?: boolean): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  if (!slideClip) { flash('Copy slides first: pick them in the slide list and press Ctrl+C (or Edit > Copy Slides).'); return; }
+  finishTyping();
+  const src = slideClip;
+  const after = pickedSlides().at(-1) ?? d.index;
+  const n = d.pasteSlides(src, !!keep, after);
+  const what = `${n} slide${n === 1 ? '' : 's'}`;
+  const sameLook = JSON.stringify(src.master) === JSON.stringify(d.master);
+  if (keep !== undefined || sameLook) { flash(`Pasted ${what}.`); return; }
+  const edits = d.edits;
+  flash(`Pasted ${what} in this deck's look.`, 8000, {
+    label: 'Keep source formatting',
+    run: () => {
+      // put them in again their own way, in place of the ones just pasted (if nothing has changed since)
+      if (deckNow() !== d || d.edits !== edits) { flash('Use Edit > Paste Slides (Keep Source Formatting) to paste them with their own look.'); return; }
+      d.undo();
+      d.pasteSlides(src, true, after);
+      flash(`Pasted ${what} with their own look.`);
+    },
+  });
+}
+
+/** Keep Source Formatting, as last chosen in Reuse Slides. */
+let reuseKeep = false;
+
+/** Reuse Slides: pick slides from another PowerPoint file to put in after this one. */
+async function reuseSlides(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const f = await openBytesDialog('PowerPoint presentations', [PPTX]).catch(async (e) => { await showError(String(e)); return null; });
+  if (!f) return;
+  let got: ReturnType<typeof readPptx>;
+  try {
+    got = readPptx(f.bytes);
+  } catch (e) {
+    flash(`Could not read ${f.name}: ${e instanceof Error ? e.message : String(e)}`, 8000);
+    return;
+  }
+  if (!got.slides.length) { flash(`${f.name} has no slides.`); return; }
+  // the file's slides in a deck of their own, to show and copy from
+  const from = new Deck(new Doc());
+  from.load(got.slides.map((s) => from.makeSlide(s.layout, s.contents, s.notes, s)), got.size, got.master);
+  const pick = await pickReuseSlides(f.name, from, reuseKeep);
+  if (!pick || deckNow() !== d) return;
+  reuseKeep = pick.keep;
+  const n = d.pasteSlides(from.copySlides(pick.indices), pick.keep, pickedSlides().at(-1) ?? d.index);
+  flash(`Inserted ${n} slide${n === 1 ? '' : 's'} from ${f.name}.${got.warnings.length ? ' ' + got.warnings.join(' ') : ''}`, got.warnings.length ? 12000 : 3500);
+}
+
+function hideSlides(): void {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const ix = pickedSlides();
+  // as in PowerPoint: hide them all unless they are all hidden already
+  const hide = !ix.every((i) => d.slides[i]?.hidden);
+  d.setHidden(hide, ix);
+  const n = ix.length;
+  flash(hide ? `${n > 1 ? `${n} slides are` : 'The slide is'} hidden: the slide show skips ${n > 1 ? 'them' : 'it'}, and PowerPoint will too.` : `${n > 1 ? `${n} slides` : 'The slide'} will show in the slide show again.`);
+}
 
 function goSlide(i: number): void {
   const d = deckNow();
@@ -1553,11 +2670,11 @@ function setLayout(l: LayoutId): void {
   d.setLayout(l);
 }
 
-function setSlideSize(size: { w: number; h: number }): void {
+function setSlideSize(size: { w: number; h: number }, fit: SizeFit = 'centre'): void {
   const d = deckNow();
   if (!d) return;
   finishTyping();
-  d.setSize(size);
+  d.setSize(size, fit);
   editor.fit();
 }
 
@@ -1565,6 +2682,7 @@ layoutSel.addEventListener('change', () => { setLayout(layoutSel.value as Layout
 sizeSel.addEventListener('change', () => {
   if (sizeSel.value === 'wide') setSlideSize(WIDE);
   else if (sizeSel.value === 'standard') setSlideSize(STANDARD);
+  else if (sizeSel.value === 'pick') { showSlideState(); void customSlideSize(); }
   sizeSel.blur();
 });
 
@@ -1589,6 +2707,59 @@ function flushNotes(): void {
   if (i >= 0) f.deck.setNotes(notesBox.value, i);
 }
 
+/**
+ * Chemistry > Orient Like First: each selected structure (or, with `scheme`, each structure in
+ * the drawing) is turned, and turned over if need be, so the part it shares with the first
+ * structure (top left, as a scheme is read) lies the same way round. Configuration is kept.
+ * Returns how many structures were turned, or null when there was nothing to compare.
+ */
+async function orientLikeFirst(scheme = false): Promise<number | null> {
+  if (!chem.ready) { flash('The chemistry engine is still loading; try again in a moment.'); return null; }
+  const picked = editor.sel.atoms;
+  const frags = doc.fragments().filter((f) => [...f].some((id) => !doc.atoms.get(id)?.multi) && (scheme || !picked.size ? true : [...f].some((id) => picked.has(id))));
+  if (!scheme && !picked.size) return null;
+  if (frags.length < 2) return null;
+  const box = (f: Set<number>) => {
+    let x1 = Infinity, y1 = Infinity;
+    for (const id of f) { const a = doc.atoms.get(id)!; x1 = Math.min(x1, a.x); y1 = Math.min(y1, a.y); }
+    return { x1, y1 };
+  };
+  // the first structure in reading order: the top row, then the leftmost in it
+  const top = Math.min(...frags.map((f) => box(f).y1));
+  const row = frags.filter((f) => box(f).y1 <= top + doc.style.bondLength * 2);
+  const ref = row.reduce((p, q) => (box(q).x1 < box(p).x1 ? q : p));
+  const others = frags.filter((f) => f !== ref);
+  const refEx = toMolfile(doc, ref);
+  const exs = others.map((f) => toMolfile(doc, f));
+  const pairs = await chem.common(refEx.molblock, exs.map((e) => e.molblock)).catch(() => null);
+  if (!pairs) { flash('Could not compare the structures.'); return 0; }
+  const moves: { atoms: Set<number>; f: (p: Vec) => Vec; mirror: boolean }[] = [];
+  others.forEach((f, i) => {
+    const pr = pairs[i];
+    if (!pr) return;
+    const from: Vec[] = [], to: Vec[] = [];
+    for (const [r, m] of pr) {
+      const ra = doc.atoms.get(refEx.map[r] ?? -1), ma = doc.atoms.get(exs[i].map[m] ?? -1);
+      if (ra && ma) { to.push(ra); from.push(ma); }
+    }
+    // only a real shared part: three atoms or more, and a good share of the structure
+    if (from.length < 3 || from.length < 0.3 * f.size) return;
+    const fit = bestFit(from, to);
+    if (!fit || !fitMatters(fit)) return;
+    let cx = 0, cy = 0;
+    for (const id of f) { const a = doc.atoms.get(id)!; cx += a.x; cy += a.y; }
+    moves.push({ atoms: f, f: fitMove(fit, { x: cx / f.size, y: cy / f.size }), mirror: fit.mirror });
+  });
+  if (moves.length) editor.reorient(moves);
+  return moves.length;
+}
+
+/** After a flip: nothing selected, or a plain flip that made the mirror image of a structure with wedges. */
+function flipped(r: boolean | 'stereo'): void {
+  if (!r) flash('Select something to flip.');
+  else if (r === 'stereo') flash('Flipped: the wedged centres are now the mirror image (the enantiomer). To keep the configuration, undo and use Flip, Keeping Configuration.', 7000, { label: 'Undo', run: () => undo() });
+}
+
 /** Undo and Redo: in Slides mode the deck's history covers every slide and the slide list; a sheet has its own. */
 function undo(): void {
   if (sheetActive()) { sheetMode.undo(); return; }
@@ -1597,6 +2768,7 @@ function undo(): void {
   if (!d) { editor.undo(); return; }
   finishTyping();
   if (d.undo()) editor.afterUndo();
+  refreshHistory();
 }
 
 function redo(): void {
@@ -1606,7 +2778,44 @@ function redo(): void {
   if (!d) { editor.redo(); return; }
   finishTyping();
   if (d.redo()) editor.afterUndo();
+  refreshHistory();
 }
+
+/** The name of the step Undo (or Redo) would take back in the tab in front: null with nothing to take back, '' when it has no name. */
+function historyStep(redo: boolean): string | null {
+  if (sheetActive()) return sheetMode.history(redo);
+  if (docActive()) return docMode.canUndo(redo) ? '' : null;
+  const h = deckNow() ?? doc;
+  if (!(redo ? h.canRedo() : h.canUndo())) return null;
+  return redo ? h.redoLabel : h.undoLabel;
+}
+
+/**
+ * Undo and Redo greyed out with nothing to take back, and named after the step they would
+ * (Undo Add Ring), on the toolbar and in the Edit menu. Checked after each click and key press.
+ */
+let historyQueued = false;
+function refreshHistory(): void {
+  if (historyQueued) return;
+  historyQueued = true;
+  requestAnimationFrame(() => {
+    historyQueued = false;
+    for (const [cmd, verb] of [['undo', 'Undo'], ['redo', 'Redo']] as const) {
+      const step = historyStep(cmd === 'redo');
+      const name = step ? `${verb} ${step}` : verb;
+      const k = commandKey(cmd);
+      const btn = $<HTMLButtonElement>(`#btn-${cmd}`);
+      btn.disabled = step === null;
+      btn.title = step === null ? `Nothing to ${verb.toLowerCase()}` : k ? `${name} (${k})` : name;
+      for (const item of document.querySelectorAll<HTMLButtonElement>(`header .menu [data-cmd="${cmd}"]`)) {
+        item.disabled = step === null;
+        const label = item.firstChild;
+        if (label?.nodeType === Node.TEXT_NODE) label.textContent = name;
+      }
+    }
+  });
+}
+for (const ev of ['pointerup', 'keyup'] as const) document.addEventListener(ev, refreshHistory, true);
 
 // ---------------------------------------------------------------- the tab strip
 
@@ -1622,19 +2831,36 @@ const TAB_ICONS: Record<Tab['mode'], [string, string]> = {
 };
 
 function renderTabs(): void {
+  refreshHistory();
+  fitRibbons();
   const items = ws.tabs.map((t) => {
     const el = document.createElement('div');
     el.className = `tab tab-${t.mode}${t === ws.active ? ' active' : ''}${t.dirty ? ' dirty' : ''}`;
     el.setAttribute('role', 'tab');
     el.setAttribute('aria-selected', String(t === ws.active));
-    el.title = (t.ref.kind === 'path' ? t.ref.path : t.name) + (t.dirty ? ' (not saved)' : '');
+    // the keys reach the tab showing; the arrow keys go along to the others
+    el.tabIndex = t === ws.active ? 0 : -1;
+    el.addEventListener('keydown', (e) => {
+      if (e.target !== el) return;
+      const i = ws.tabs.indexOf(t);
+      const to = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? ws.tabs.length - 1 : null;
+      if (to !== null) {
+        e.preventDefault();
+        const n = ws.tabs[(to + ws.tabs.length) % ws.tabs.length];
+        if (n !== ws.active) ws.activate(n);
+        $('#tabs').querySelector<HTMLElement>('[aria-selected="true"]')?.focus();
+      } else if (e.key === 'Delete') { e.preventDefault(); void ws.close(t); }
+    });
+    el.title = (t.ref.kind === 'path' ? t.ref.path : t.name) + (t.dirty ? ' (not saved)' : '')
+      + (t.savedAt ? `\n${t.savedHow === 'autosaved' ? 'AutoSaved' : 'Saved'} ${new Date(t.savedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : '')
+      + (keeper.autoSaveWanted(t) && ws.canAutoSave(t) ? ' (AutoSave on)' : '');
     const icon = document.createElement('span');
     icon.className = 'tab-icon';
     icon.innerHTML = TAB_ICONS[t.mode][0];
     icon.title = TAB_ICONS[t.mode][1];
     const name = document.createElement('span');
     name.className = 'tab-name';
-    name.textContent = t.name;
+    name.textContent = ws.label(t);
     const close = document.createElement('button');
     close.className = 'tab-close';
     close.type = 'button';
@@ -1649,17 +2875,56 @@ function renderTabs(): void {
     el.append(icon, name, close);
     return el;
   });
-  const add = (label: string, title: string, cmd: string) => {
-    const b = document.createElement('button');
-    b.className = 'tab-new';
-    b.type = 'button';
-    b.textContent = label;
-    b.title = title;
-    b.addEventListener('click', () => command(cmd));
-    return b;
-  };
-  tabsEl.replaceChildren(...items, add('+ Drawing', 'New drawing', 'new'), add('+ Slides', 'New slides', 'new-slides'), add('+ Sheet', 'New sheet', 'new-sheet'), add('+ Document', 'New document', 'new-document'), add('+ Design', 'New design: a TOC graphic, graphical abstract, poster, flowchart or figure', 'new-design'));
-  tabsEl.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  tabStrip.replaceChildren(...items);
+  tabStrip.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  showTabArrows();
+}
+
+// The tab strip scrolls when the tabs don't fit; arrows at its ends, a list of every open file,
+// and one + button for a new file of any kind stay pinned at the right.
+const tabStrip = document.createElement('div');
+tabStrip.className = 'tab-strip';
+const tabButton = (cls: string, text: string, title: string) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = `tab-ctl ${cls}`;
+  b.textContent = text;
+  b.title = title;
+  b.setAttribute('aria-label', title);
+  return b;
+};
+const tabLeft = tabButton('tab-left', '‹', 'Scroll the tabs left');
+const tabRight = tabButton('tab-right', '›', 'Scroll the tabs right');
+const tabList = tabButton('tab-list', '▾', 'List of open files');
+const tabAdd = tabButton('tab-add', '+', 'New file: drawing, slides, sheet, document or design');
+tabLeft.addEventListener('click', () => tabStrip.scrollBy({ left: -tabStrip.clientWidth * 0.7, behavior: 'smooth' }));
+tabRight.addEventListener('click', () => tabStrip.scrollBy({ left: tabStrip.clientWidth * 0.7, behavior: 'smooth' }));
+tabStrip.addEventListener('scroll', () => showTabArrows(), { passive: true });
+tabStrip.addEventListener('wheel', (e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { tabStrip.scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });
+new ResizeObserver(() => showTabArrows()).observe(tabStrip);
+const menuAt = (b: HTMLElement) => { const r = b.getBoundingClientRect(); return [Math.max(4, r.right - 220), r.bottom + 2] as const; };
+tabList.addEventListener('click', () => {
+  const [x, y] = menuAt(tabList);
+  showContextMenu(x, y, ws.tabs.map((t) => ({ cmd: `tab-show:${t.id}`, label: `${t === ws.active ? '✓ ' : ''}${ws.label(t)}${t.dirty ? ' •' : ''}` })), {
+    run: (cmd) => { const t = ws.tabs.find((x) => `tab-show:${x.id}` === cmd); if (t) ws.activate(t); },
+    key: () => undefined,
+  });
+});
+tabAdd.addEventListener('click', () => {
+  const [x, y] = menuAt(tabAdd);
+  showContextMenu(x, y, [
+    { cmd: 'new', label: 'Drawing' }, { cmd: 'new-slides', label: 'Slides' }, { cmd: 'new-sheet', label: 'Sheet' },
+    { cmd: 'new-document', label: 'Document' }, { cmd: 'new-design', label: 'Design (TOC graphic, abstract, poster, figure)' },
+    { cmd: 'new-from-template', label: 'Document or Sheet from Template…' },
+  ], { run: (cmd) => void command(cmd), key: commandKey });
+});
+tabsEl.replaceChildren(tabLeft, tabStrip, tabRight, tabList, tabAdd);
+
+function showTabArrows(): void {
+  const over = tabStrip.scrollWidth > tabStrip.clientWidth + 1;
+  tabLeft.hidden = tabRight.hidden = !over;
+  tabLeft.disabled = tabStrip.scrollLeft <= 0;
+  tabRight.disabled = tabStrip.scrollLeft + tabStrip.clientWidth >= tabStrip.scrollWidth - 1;
 }
 
 // Tabs are dragged along the strip to put them in another order (as in browsers).
@@ -1668,7 +2933,7 @@ function dragTab(e: PointerEvent, el: HTMLElement, t: Tab): void {
   if (e.button !== 0 || (e.target as HTMLElement).closest('.tab-close')) return;
   tabDragged = false;
   const startX = e.clientX;
-  const tabs = [...tabsEl.querySelectorAll<HTMLElement>('.tab')];
+  const tabs = [...tabStrip.querySelectorAll<HTMLElement>('.tab')];
   const from = tabs.indexOf(el);
   let to = from;
   const move = (ev: PointerEvent) => {
@@ -1736,6 +3001,76 @@ async function pickPicture(): Promise<{ bytes: Uint8Array; mime: string; name: s
   return { bytes: f.bytes, mime, name: f.name };
 }
 
+// ---------------------------------------------------------------- embedded objects (Insert > Object)
+
+/** Ask for a file of any kind, to put in a document as an object. */
+async function pickObjectFile(): Promise<{ name: string; bytes: Uint8Array } | null> {
+  try {
+    return await openAnyBytesDialog();
+  } catch (e) {
+    await showError('Could not open the file: ' + String(e));
+    return null;
+  }
+}
+
+/** The picture an object shows: a workbook's cells, a PDF's first page, a picture, or an icon. */
+function objectPictureOf(name: string, bytes: Uint8Array, icon: boolean): Promise<ObjectPicture> {
+  return objectPicture(name, bytes, icon, {
+    readBook: async (b) => (await readSheetFile(b, name, sheetFiles)).book,
+    pdfPage: (b) => import('./render/pdf-page').then((m) => m.pdfFirstPage(b)),
+  });
+}
+
+/**
+ * Open an object's file in its own program: written to a folder of its own in the temporary
+ * folder and opened as a double-click in Explorer would. While it is open (up to a working day)
+ * the file is checked every couple of seconds, and each save there is handed to `changed` once
+ * the file has stopped changing. In a browser the file is downloaded instead.
+ */
+async function openObjectFile(file: { name: string; bytes: Uint8Array }, changed: (bytes: Uint8Array) => void): Promise<string | null> {
+  const ext = /\.([^.\\/]+)$/.exec(file.name)?.[1] ?? 'bin';
+  if (!isTauri()) {
+    await writeFile({ kind: 'none' }, file.name, file.bytes, { description: file.name, extension: ext, mime: 'application/octet-stream' });
+    return `${file.name} was downloaded: in a browser it can't open in its program or bring changes back here (the desktop app does both).`;
+  }
+  let path: string;
+  try {
+    const dir = await invoke<string>('ole_object_folder');
+    path = `${dir}${/Windows/i.test(navigator.userAgent) ? '\\' : '/'}${file.name.replace(/[\\/:*?"<>|]/g, '_')}`;
+    await writeFile({ kind: 'path', path }, file.name, file.bytes, { description: file.name, extension: ext, mime: 'application/octet-stream' });
+    const { openPath } = await import('@tauri-apps/plugin-opener');
+    await openPath(path);
+  } catch (e) {
+    return `Could not open ${file.name}: ${String(e)}`;
+  }
+  const stamp = async () => { const s = await stampOf({ kind: 'path', path }); return s ? `${s.modified}:${s.size}` : ''; };
+  let seen = await stamp(), pending = '';
+  const until = Date.now() + 10 * 3600e3;
+  const timer = window.setInterval(() => {
+    if (Date.now() > until) { window.clearInterval(timer); return; }
+    void stamp().then(async (now) => {
+      if (!now || now === seen) { pending = ''; return; }
+      // wait for one more look at the same stamp: the program may still be writing
+      if (now !== pending) { pending = now; return; }
+      const bytes = await readRef({ kind: 'path', path });
+      if (!bytes?.length) return;
+      seen = now;
+      pending = '';
+      changed(bytes);
+    });
+  }, 1500);
+  return null;
+}
+
+/** Another program's object on the Windows clipboard (Excel's cells, for one), with the picture it came with. */
+async function clipboardObject(): Promise<{ embed: Embedded; picture: { bytes: Uint8Array; mime: string } | null } | null> {
+  const got = await nativeFirst(['Embedded Object']).catch(() => null);
+  const embed = got ? fromEmbedSource(got[1]) : null;
+  if (!embed) return null;
+  const pic = await nativeFirst(['PNG', 'CF_ENHMETAFILE']).catch(() => null);
+  return { embed, picture: pic ? { bytes: pic[1], mime: pic[0] === 'PNG' ? 'image/png' : 'image/x-emf' } : null };
+}
+
 /** Ask for a BibTeX or RIS file of references, and read its text. */
 async function pickReferenceFile(): Promise<{ name: string; text: string } | null> {
   const f = await openBytesDialog('BibTeX or RIS references', [], ['bib', 'ris', 'txt']);
@@ -1775,7 +3110,7 @@ function placePicture(bytes: Uint8Array, mime: string, at: { x: number; y: numbe
 }
 
 /**
- * An animation from Scheme > Animate Reaction on the slide: a video (its first frame shown while
+ * An animation from Chemistry > Animate > Animate Reaction on the slide: a video (its first frame shown while
  * editing) or an animated GIF, in the middle of the slide, at most 80% of it.
  */
 function placeClip(v: { mp4?: Uint8Array; still: Uint8Array; gif?: Uint8Array; w: number; h: number }): void {
@@ -1804,6 +3139,28 @@ function cropPicture(): void {
   editor.requestOverlay();
   stylePanel.refresh();
   if (editor.cropping !== null) flash('Drag the black handles to cut the edges off. Press Esc or click elsewhere when you are done.', 6000);
+}
+
+/**
+ * Picture Format…: the selected pictures' corrections, colours, see-through, Remove Background
+ * and shape; the first one's crop too (cropping to proportions keeps its width).
+ */
+async function formatPicture(): Promise<void> {
+  const pics = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => x?.kind === 'picture' && !!x.src && !x.chart && !x.math && !x.video);
+  if (!pics.length) { flash('Select a picture first.'); return; }
+  const p = pics[0];
+  const got = await pictureFormat({ src: p.src!, fx: p.fx, crop: p.crop, w: Math.abs(p.x2 - p.x1), h: Math.abs(p.y2 - p.y1), count: pics.length });
+  if (!got) return;
+  doc.edit('Picture format', () => {
+    for (const x of pics) doc.updateShape(x.id, { fx: got.fx && structuredClone(got.fx) });
+    if (got.crop) {
+      const c = got.crop;
+      const x1 = Math.min(p.x1, p.x2), y1 = Math.min(p.y1, p.y2), w = Math.abs(p.x2 - p.x1);
+      doc.updateShape(p.id, { crop: c.l || c.t || c.r || c.b ? c : undefined, ...(got.aspect ? { x1, y1, x2: x1 + w, y2: y1 + w / got.aspect } : {}) });
+    }
+  });
+  editor.requestScene();
+  stylePanel.refresh();
 }
 
 /** Picture > Remove white: near-white pixels become see-through (the picture becomes a PNG). */
@@ -1879,15 +3236,19 @@ async function drawingStyleDialog(): Promise<void> {
   const current = deck ? deck.master.drawing : book ? book.drawingStyle : file ? file.t.drawingStyle : doc.style;
   const hasStructures = deck ? deck.slides.some((_, i) => deck.docOf(i).atoms.size > 0)
     : file ? Object.values(file.t.objects).some((o) => o.kind === 'drawing' && o.contents.atoms.length > 0)
-    : book ? false : doc.atoms.size > 0 || doc.captions.size > 0;
+    : book ? book.sheets.some((s) => [...s.cells.values()].some((c) => !!c.structure)) : doc.atoms.size > 0 || doc.captions.size > 0;
   const got = await editDrawingStyle({
     current, own: ownStyles, kindPlural: STYLE_KINDS[mode].plural, where: STYLE_KINDS[mode].where,
-    isDefault: modeStyles[mode] !== undefined && modeStyles[mode] === current.name, hasStructures,
+    isDefault: modeStyleFor(mode) === current.name, hasStructures,
   });
   if (!got || ws.active !== tab) return;
   ownStyles = got.own;
   if (got.forNew) modeStyles[mode] = got.style.name;
-  else if (modeStyles[mode] === current.name || modeStyles[mode] === got.style.name) delete modeStyles[mode];
+  else if (modeStyleFor(mode) === current.name || modeStyleFor(mode) === got.style.name) {
+    // no longer the default for new tabs: back to the standard one (or, where that is this style, plain ACS)
+    delete modeStyles[mode];
+    if (modeStyleFor(mode) === got.style.name) modeStyles[mode] = 'ACS Document 1996';
+  }
   if (modeStyles[mode] && !styleNamed(modeStyles[mode]!, ownStyles)) {
     // a default that isn't a built-in style is kept as one of your own, so new tabs can find it
     ownStyles = [...ownStyles, { ...got.style }];
@@ -1896,8 +3257,7 @@ async function drawingStyleDialog(): Promise<void> {
   const next = got.style;
   if (deck) deck.setDrawingStyle(next, got.how);
   else if (book) {
-    book.drawingStyle = { ...next };
-    book.edits++;
+    book.setDrawingStyle(next, (c, old) => restyleContents(c, old, next, got.how));
     sheetMode.styleChanged();
   } else if (file) {
     const t = file.t, old = t.drawingStyle;
@@ -1927,30 +3287,207 @@ async function slideMaster(): Promise<void> {
   if (m && deckNow() === d) d.setMaster(m);
 }
 
+/**
+ * Design > Format Background: the background of the slides picked in the slide list (the one
+ * being edited when nothing else is picked), or of every slide; a design's page in Design mode.
+ */
+async function backgroundDialog(): Promise<void> {
+  const d = deckNow();
+  if (!d?.current) return;
+  finishTyping();
+  const design = ws.active.mode === 'design';
+  const picked = design ? [d.index] : pickedSlides();
+  const first = d.slides[picked[0]] ?? d.current;
+  const page = d.page(d.slides.indexOf(first));
+  const got = await formatBackground({
+    current: slideBackground(page.master, page.layout, page.own),
+    own: picked.some((i) => !!d.slides[i]?.background),
+    hideGraphics: !!first.hideGraphics,
+    count: picked.length,
+    design,
+    textColour: d.master.textColor,
+    aspect: d.size.w / d.size.h,
+    preview: (canvas, w, h, bg, hideGraphics) => {
+      const i = d.slides.indexOf(first);
+      if (i >= 0) paintSlide(canvas, w, h, window.devicePixelRatio || 1, { ...d.page(i), own: bg, hideGraphics }, d.docOf(i));
+    },
+    pickPicture: async (): Promise<SlideImage | null> => {
+      const p = await pickPicture();
+      return p ? { src: dataUrl(p.bytes, p.mime), px: imageSize(p.bytes, p.mime) ?? { w: 200, h: 200 } } : null;
+    },
+  });
+  // the deck may have gone (its tab closed) while the window was open
+  if (!got || deckNow() !== d) return;
+  if (got.action === 'reset') d.setBackground(undefined, picked, got.hideGraphics);
+  else if (got.action === 'all' || design) d.setAllBackgrounds(got.bg, got.hideGraphics);
+  else d.setBackground(got.bg, picked, got.hideGraphics);
+}
+
 /** Design > Templates: a ready-made look for every slide, and optionally for new decks too. */
 let slideTemplate: string | null = null;
+/** Your own slide themes (made in Design > Templates), kept in the settings. */
+let slideThemes: SlideTemplate[] = [];
+const themeById = (id: string | null) => [...SLIDE_TEMPLATES, ...slideThemes].find((x) => x.id === id);
 async function slideTemplates(): Promise<void> {
   const d = deckNow();
   if (!d) return;
   finishTyping();
-  const got = await pickSlideTemplate(d.master, d.size, slideTemplate);
+  const got = await pickSlideTemplate(d.master, d.size, slideTemplate, slideThemes);
   if (!got) return;
-  if (deckNow() === d) d.setMaster(applyTemplate(d.master, got.template));
-  if (got.forNew) {
-    slideTemplate = got.template.id;
+  if (JSON.stringify(got.mine) !== JSON.stringify(slideThemes)) {
+    slideThemes = got.mine;
+    // a theme for new decks that has been deleted: back to the plain look
+    if (slideTemplate && !themeById(slideTemplate)) slideTemplate = null;
     storeSettings();
-    flash(`New slide decks will start with ${got.template.name}. Pick Plain to go back.`);
+  }
+  const t = got.template;
+  if (!t) return;
+  if (deckNow() === d) d.setMaster(applyTemplate(d.master, t));
+  if (got.forNew) {
+    slideTemplate = t.id;
+    storeSettings();
+    flash(`New slide decks will start with ${t.name}. Pick Plain to go back.`);
   }
 }
 
-function present(fromHere: boolean, notes = false): void {
+/** Slide Master > Edit Layouts: the deck's layouts and their placeholders. */
+async function editSlideLayouts(): Promise<void> {
+  const d = deckNow();
+  if (!d?.current || ws.active.mode !== 'slides') { flash('Layouts are for slides: use File > New Slides, or open a PowerPoint file.'); return; }
+  finishTyping();
+  const used = new Map<LayoutId, number>();
+  for (const s of d.slides) used.set(s.layout, (used.get(s.layout) ?? 0) + 1);
+  const got = await editLayouts({ master: d.master, size: d.size, current: d.current.layout, used });
+  if (got && deckNow() === d) d.setLayouts(got);
+}
+
+/** Design > Slide Size > Custom Slide Size: any size, with what is on the slides scaled to fit or kept as it is. */
+async function customSlideSize(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const got = await pickSlideSize(d.size);
+  if (got && deckNow() === d) setSlideSize(got.size, got.fit);
+}
+
+function present(fromHere: boolean, notes = false, how: { custom?: number; windowed?: boolean; rehearse?: boolean; record?: boolean } = {}): void {
   const d = deckNow();
   if (!d) { flash('Present shows slides: use File > New Slides, or open a PowerPoint file.'); return; }
   if (presenter.running || presenterView.running) return;
   finishTyping();
+  // Set Up Show: the slides it plays, how it goes on, and the rest
+  const setup = d.settings.show ?? defaultShow();
+  const order = showOrder(d.slides, setup, d.settings.customShows ?? [], how.custom ?? setup.custom);
+  if (order && !order.length) { flash('The show has no slides to play: every slide it names is hidden or gone (Slide Show > Set Up Show).'); return; }
+  const kiosk = setup.type === 'kiosk' && !how.rehearse && !how.windowed;
+  if (kiosk && !d.slides.some((s) => s.transition?.advanceAfter)) flash('At a kiosk the show goes on only by the slides\' times: give them times with Rehearse Timings (or Transitions > After). Esc ends the show.', 9000);
+  const opts: ShowOptions = {
+    order, noAnimation: setup.noAnimation, noNarration: setup.noNarration, manual: setup.manual, loop: setup.loop, kiosk,
+    windowed: how.windowed || (setup.type === 'window' && !notes && !how.rehearse), rehearse: how.rehearse, record: how.record,
+  };
   editor.paused = true;
-  void (notes ? presenterView : presenter).start(d, fromHere ? d.index : 0);
+  refreshZooms(d);
+  // from the start: the first slide that isn't hidden; from here: this slide even when hidden, as in PowerPoint
+  const from = fromHere ? d.index : order ? order[0] : d.firstShown();
+  void (notes ? presenterView.start(d, from, opts) : presenter.start(d, from, opts));
 }
+
+/** Rehearse Timings and Record, kept: each slide's time, and its narration as a sound on it. */
+presenter.onRehearsed = (r) => {
+  const d = deckNow();
+  if (!d) return;
+  void (async () => {
+    if (r.recordings.size) {
+      const sounds = new Map<number, { src: string; seconds: number }>();
+      for (const [i, blob] of r.recordings) {
+        try {
+          const w = await recordingToWav(blob);
+          if (w.seconds > 0.2) sounds.set(i, { src: dataUrl(w.bytes, 'audio/wav'), seconds: w.seconds });
+        } catch { /* a recording this computer can't read is left out */ }
+      }
+      const ix = [...sounds.keys()].filter((i) => i >= 0 && i < d.slides.length);
+      if (ix.length) {
+        const poster = speakerPng(), s = 24;
+        d.editSlides('Record narration', ix, (sd, i) => {
+          // a new recording takes the place of the slide's old one
+          for (const sh of [...sd.shapes.values()]) if (sh.video?.narration) sd.removeShape(sh.id);
+          const n = sounds.get(i)!;
+          sd.addShape({
+            kind: 'picture', x1: d.size.w - s - 12, y1: d.size.h - s - 12, x2: d.size.w - 12, y2: d.size.h - 12, px: { w: 128, h: 128 }, src: poster, name: NARRATION_NAME,
+            video: { src: n.src, audio: true, start: 'auto', once: true, hide: true, narration: true, length: +n.seconds.toFixed(3) },
+          });
+        });
+      } else flash('Nothing was recorded (the microphone gave no sound).');
+    }
+    d.setTimings(r.times, r.recordings.size ? 'Record slide show timings' : 'Rehearse timings');
+    flash(`Kept: the show takes ${clockText(r.total)}${r.recordings.size ? ', with narration on the slides' : ''}. Set Up Show > Advance slides can turn the times off.`, 8000);
+  })();
+};
+
+/** Insert > Header & Footer (Date & Time, Slide Number): the slides', notes pages' and handouts' header and footer. */
+async function headerFooter(tab: 'slide' | 'notes' = 'slide'): Promise<void> {
+  const d = deckNow();
+  if (!d?.current || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const ix = pickedSlides();
+  const got = await editHeaderFooter(d.master, d.current, ix.length, tab);
+  if (!got || deckNow() !== d) return;
+  d.setHeaderFooter(got.master, got.show, got.scope === 'picked' ? ix : undefined);
+}
+
+/** Slide Show > Set Up Show. */
+async function setUpShowCmd(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const got = await setUpShow(d.settings.show, d.settings.customShows ?? [], d.slides.length);
+  if (got && deckNow() === d) d.setSettings({ ...d.settings, show: got }, 'Set up show');
+  showSlideState();
+}
+
+/** Custom Slide Show > Custom Shows: make and change them (and play one). */
+async function customShowsCmd(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const names = d.slides.map((s, i) => {
+    const t = [...d.docOf(i).captions.values()].find((c) => c.ph === 'title');
+    const words = t ? t.runs.map((r) => r.text).join('').replace(/\s+/g, ' ').trim() : '';
+    return { id: s.id, name: `${i + 1}. ${words || 'Slide ' + (i + 1)}${s.hidden ? ' (hidden)' : ''}` };
+  });
+  const got = await editCustomShows(d.settings.customShows ?? [], names);
+  if (!got || deckNow() !== d) return;
+  const show = d.settings.show && d.settings.show.custom !== undefined && !got.shows.some((c) => c.id === d.settings.show!.custom) ? { ...d.settings.show, custom: undefined } : d.settings.show;
+  if (show && show.custom === undefined) delete show.custom;
+  d.setSettings({ ...d.settings, customShows: got.shows, ...(show ? { show } : {}) }, 'Custom shows');
+  if (got.play !== undefined) present(false, false, { custom: got.play });
+}
+
+/** Custom Slide Show: the deck's custom shows to play, and Custom Shows… */
+function customShowMenu(anchor: HTMLElement): void {
+  const d = deckNow();
+  if (!d) return;
+  const r = anchor.getBoundingClientRect();
+  const shows = d.settings.customShows ?? [];
+  showContextMenu(r.left, r.bottom, [
+    ...shows.map((c) => ({ cmd: `custom-show:${c.id}`, label: c.name })),
+    ...(shows.length ? [null] : []),
+    { cmd: 'custom-shows', label: 'Custom Shows…' },
+  ], { run: (cmd) => (cmd.startsWith('custom-show:') ? present(false, false, { custom: Number(cmd.slice(12)) }) : void command(cmd)), key: commandKey });
+}
+
+/** Ink drawn in the slide show, kept: shapes on its slides, as one step to undo. */
+presenter.onKeepInk = presenterView.onKeepInk = (ink) => {
+  const d = deckNow();
+  if (!d) return;
+  const indices = [...ink.keys()].filter((i) => i >= 0 && i < d.slides.length);
+  if (!indices.length) return;
+  d.editSlides('Keep ink', indices, (sd, i) => {
+    for (const st of ink.get(i) ?? []) { const sh = inkShape(st); if (sh) sd.addShape(sh); }
+  });
+  editor.requestScene();
+  flash(`Ink kept on ${indices.length} slide${indices.length === 1 ? '' : 's'}. Each line is a shape: move it, recolour it or delete it.`, 6000);
+};
 
 presenter.onEnd = presenterView.onEnd = (i) => {
   editor.paused = false;
@@ -1984,11 +3521,11 @@ async function exportPdf(): Promise<void> {
   const docFile = docActive() ? tab.document : null;
   if (docFile) {
     // the pages as laid out on screen, figures as shapes and text so they stay sharp
-    pages = recordPages(docFile.t, docFile.layout(), (c, style) => figures.record(c, style).pic);
+    pages = recordPages(docFile.t, docFile.printLayout(), (c, style) => figures.record(c, style).pic);
   } else if (deck) {
     pages = deck.slides.map((s, i) => ({
       w: deck.size.w, h: deck.size.h,
-      items: recordSlide({ size: deck.size, master: deck.master, layout: s.layout, index: i }, deck.docOf(i)),
+      items: recordSlide(deck.page(i), deck.docOf(i)),
     }));
   } else {
     const pic = recordPicture(doc, 18);
@@ -1999,7 +3536,7 @@ async function exportPdf(): Promise<void> {
   const target = await saveFileDialog(withExtension(tab.name, PDF.extension), PDF).catch(async (e) => { await showError(String(e)); return null; });
   if (!target) return;
   try {
-    const bytes = await writePdf(pages, { title: tab.name.replace(/\.[^.]+$/, ''), image: pdfImage });
+    const bytes = await writePdf(pages, { title: tab.name.replace(/\.[^.]+$/, ''), image: pdfImage, fonts: pdfFonts });
     await writeFile(target.ref, target.name, bytes, PDF);
   } catch (e) {
     await showError(`Could not save ${target.name}: ${e instanceof Error ? e.message : String(e)}`);
@@ -2011,7 +3548,7 @@ async function exportPdf(): Promise<void> {
 // ---------------------------------------------------------------- printing
 
 /** The choices made in the Print window, kept while the app is open. */
-const printChoices = { paper: defaultPaper(navigator.language) as string, orient: 'auto', size: 'actual', handout: '1', frame: 'true', sheet: 'all', sheetOrient: 'portrait', grid: 'false' };
+const printChoices = { paper: defaultPaper(navigator.language) as string, orient: 'auto', size: 'actual', handout: '1', frame: 'true', sheet: 'all' };
 const PAPER_OPTIONS = Object.entries(PAPERS).map(([value, p]) => ({ value, label: p.name }));
 
 const pageSvgOf = (p: PdfPage) => {
@@ -2024,57 +3561,62 @@ async function printNow(): Promise<void> {
   finishTyping();
   const tab = ws.active, deck = tab.deck;
   if (sheetActive()) {
+    const area = !!sheetMode.view.sheet?.pageSetup?.printArea?.length;
     const v = await ask('Print', [
-      { name: 'sheet', label: 'Print', value: printChoices.sheet, options: [{ value: 'all', label: 'The whole sheet' }, { value: 'sel', label: 'The selected cells' }] },
-      { name: 'sheetOrient', label: 'Orientation', value: printChoices.sheetOrient, options: [{ value: 'portrait', label: 'Portrait' }, { value: 'landscape', label: 'Landscape' }] },
-      { name: 'grid', label: 'Gridlines', value: printChoices.grid, type: 'checkbox' },
-    ], { ok: 'Print…', note: 'The paper size, copies and pages are chosen in the next window.' });
+      { name: 'sheet', label: 'Print', value: printChoices.sheet, options: [
+        { value: 'all', label: area ? 'The print area' : 'The whole sheet' },
+        ...(area ? [{ value: 'used', label: 'The whole sheet (ignore the print area)' }] : []),
+        { value: 'sel', label: 'The selected cells' },
+      ] },
+    ], { ok: 'Print…', note: 'Paper, orientation, margins, scaling, titles, headers and footers come from the Page Layout tab (Page Setup…). Copies and the printer are chosen in the next window: set its paper to match.' });
     if (!v) return;
     Object.assign(printChoices, v);
-    const html = sheetMode.printTable(v.sheet === 'sel');
-    if (!html) { flash('There is nothing in this sheet to print.'); return; }
-    printPages({ html: `<div class="${v.grid === 'true' ? 'grid' : ''}">${html}</div>`, landscape: v.sheetOrient === 'landscape' });
+    const got = sheetMode.printedSheet({ selection: v.sheet === 'sel', ignoreArea: v.sheet === 'used', file: tab.name });
+    if (!got) { flash('There is nothing in this sheet to print.'); return; }
+    printPages({ pages: got.pages, w: got.w, h: got.h });
     return;
   }
   const docFile = docActive() ? tab.document : null;
   if (docFile) {
     // the pages as laid out on screen
-    const pages = recordPages(docFile.t, docFile.layout(), (c, style) => figures.record(c, style).pic);
+    const pages = recordPages(docFile.t, docFile.printLayout(), (c, style) => figures.record(c, style).pic);
     if (!pages.length) return;
     printPages({ pages: pages.map(pageSvgOf), w: pages[0].w, h: pages[0].h });
     return;
   }
   if (deck) {
-    const slide = (i: number) => itemsToSvg(recordSlide({ size: deck.size, master: deck.master, layout: deck.slides[i].layout, index: i }, deck.docOf(i)), { x1: 0, y1: 0, x2: deck.size.w, y2: deck.size.h });
+    const slide = (i: number) => itemsToSvg(recordSlide(deck.page(i), deck.docOf(i)), { x1: 0, y1: 0, x2: deck.size.w, y2: deck.size.h });
     if (tab.mode === 'design') { printPages({ pages: [slide(deck.index)], w: deck.size.w, h: deck.size.h }); return; }
+    const m = deck.master;
     const v = await ask('Print', [
       { name: 'handout', label: 'Layout', value: printChoices.handout, options: [
-        { value: '1', label: 'Full page slides' }, { value: '2', label: 'Handouts: 2 slides a page' }, { value: '3', label: 'Handouts: 3 slides a page, with lines for notes' },
+        { value: '1', label: 'Full page slides' }, { value: 'notes', label: 'Notes Pages (as the Notes Master sets them)' },
+        { value: 'master', label: `Handouts as the Handout Master sets them (${(m.handout ?? defaultHandout()).perPage} a page)` },
+        { value: '2', label: 'Handouts: 2 slides a page' }, { value: '3', label: 'Handouts: 3 slides a page, with lines for notes' },
         { value: '4', label: 'Handouts: 4 slides a page' }, { value: '6', label: 'Handouts: 6 slides a page' }, { value: '9', label: 'Handouts: 9 slides a page' },
       ] },
       { name: 'paper', label: 'Paper (handouts)', value: printChoices.paper, options: PAPER_OPTIONS },
       { name: 'frame', label: 'Frame the slides (handouts)', value: printChoices.frame, type: 'checkbox' },
-    ], { ok: 'Print…', note: 'Full page slides print at the slide\'s own shape; the next window fits them to the paper. Copies and which pages are chosen there too.' });
+    ], { ok: 'Print…', note: 'Full page slides print at the slide\'s own shape, notes pages at 7.5 × 10 in; the next window fits them to the paper. Handouts and notes pages carry the header and footer from Insert > Header & Footer > Notes and Handouts. Copies and which pages are chosen in the next window.' });
     if (!v) return;
     Object.assign(printChoices, v);
-    const n = Number(v.handout);
-    if (n === 1) { printPages({ pages: deck.slides.map((_, i) => slide(i)), w: deck.size.w, h: deck.size.h }); return; }
-    const page = orient(PAPERS[v.paper] ?? PAPERS.letter, 'portrait');
-    const cells = handoutCells(page, n);
-    const pages: string[] = [];
-    for (let first = 0; first < deck.slides.length; first += n) {
-      const parts: string[] = [];
-      cells.forEach((cell, k) => {
-        const i = first + k;
-        if (i >= deck.slides.length) return;
-        const at = placeIn(deck.size.w, deck.size.h, cell, 'fit');
-        parts.push(placeSvg(slide(i), at));
-        if (v.frame === 'true') parts.push(`<rect x="${at.x}" y="${at.y}" width="${at.w}" height="${at.h}" fill="none" stroke="#888" stroke-width="0.5"/>`);
-        if (n === 3) for (const l of noteLines({ ...cell, h: at.h, y: at.y }, page)) parts.push(`<line x1="${l.x1}" x2="${l.x2}" y1="${l.y}" y2="${l.y}" stroke="#bbb" stroke-width="0.5"/>`);
-      });
-      pages.push(pageSvg(page.w, page.h, parts));
+    if (v.handout === '1') { printPages({ pages: deck.slides.map((_, i) => slide(i)), w: deck.size.w, h: deck.size.h }); return; }
+    if (v.handout === 'notes') {
+      const size = notesPageSize(m.notesPage);
+      const pages = deck.slides.map((s, i) => notesPageSvg(m, deck.size, slide(i), s.notes, i + 1, (t, k) => measureText(t, k, m.notesPage?.font || m.bodyFont || 'Arial'), placeSvg));
+      printPages({ pages, w: size.w, h: size.h });
+      return;
     }
-    printPages({ pages, w: page.w, h: page.h });
+    const setup: HandoutSetup = v.handout === 'master' ? { ...(m.handout ?? defaultHandout()) } : { ...(m.handout ?? defaultHandout()), perPage: Number(v.handout) as HandoutSetup['perPage'] };
+    setup.frame = v.frame === 'true';
+    const paper = PAPERS[v.paper] ?? PAPERS.letter;
+    const pages: string[] = [];
+    for (let first = 0, page = 1; first < deck.slides.length; first += setup.perPage, page++) {
+      const svgs = deck.slides.slice(first, first + setup.perPage).map((_, k) => slide(first + k));
+      pages.push(handoutPageSvg(m, deck.size, setup, svgs, page, placeSvg, paper));
+    }
+    const L = handoutLayout(deck.size, setup, paper);
+    printPages({ pages, w: L.page.w, h: L.page.h });
     return;
   }
   const pic = recordPicture(doc, 4);
@@ -2093,8 +3635,8 @@ async function printNow(): Promise<void> {
 }
 
 /**
- * File > Export Picture: the page (a design or the current slide) or the drawing as a PNG at
- * the resolution picked, or as an SVG, on its background colour or see-through.
+ * File > Export Picture: the page (a design or the current slide) or the drawing as a PNG or
+ * TIFF at the resolution picked, or as an SVG, EMF or EPS, on its background colour or see-through.
  */
 async function exportPicture(): Promise<void> {
   const tab = ws.active, deck = tab.deck;
@@ -2102,9 +3644,12 @@ async function exportPicture(): Promise<void> {
   const v = await ask('Export Picture', [
     { name: 'format', label: 'Format', value: 'png', options: [
       { value: 'png', label: 'PNG (a picture of dots: journals, Word, web)' },
+      { value: 'tiff', label: 'TIFF (a picture of dots, LZW-compressed: what many journals ask for)' },
       { value: 'svg', label: 'SVG (shapes that stay sharp: Illustrator, Inkscape, web)' },
+      { value: 'emf', label: 'EMF (shapes that stay sharp: Word, PowerPoint on Windows)' },
+      { value: 'eps', label: 'EPS (shapes that stay sharp: older journal systems, Illustrator)' },
     ] },
-    { name: 'dpi', label: 'Resolution (PNG)', value: '300', type: 'number', unit: 'dpi' },
+    { name: 'dpi', label: 'Resolution (PNG, TIFF)', value: '300', type: 'number', unit: 'dpi' },
     { name: 'bg', label: 'Background', value: deck ? 'page' : 'clear', options: [
       { value: deck ? 'page' : 'white', label: deck ? 'The page colour' : 'White' },
       { value: 'clear', label: 'See-through' },
@@ -2115,13 +3660,15 @@ async function exportPicture(): Promise<void> {
   const clear = v.bg === 'clear';
   const CLEAR = 'rgba(0,0,0,0)';
   let w: number, h: number;
+  let items: () => { items: Item[]; box: EmfBox };
   let svg: () => string;
   let png: (k: number) => HTMLCanvasElement;
   if (deck) {
-    const i = deck.index, s = deck.slides[i];
-    const page = { size: deck.size, master: clear ? { ...deck.master, background: CLEAR } : deck.master, layout: s.layout, index: i };
+    const i = deck.index;
+    const page = clear ? { ...deck.page(i), own: solid(CLEAR) } : deck.page(i);
     ({ w, h } = deck.size);
-    svg = () => itemsToSvg(recordSlide(page, deck.docOf(i)).filter((it) => !(it.kind === 'path' && it.fill === CLEAR)), { x1: 0, y1: 0, x2: w, y2: h });
+    items = () => ({ items: recordSlide(page, deck.docOf(i)).filter((it) => !(it.kind === 'path' && it.fill === CLEAR)), box: { x1: 0, y1: 0, x2: w, y2: h } });
+    svg = () => { const p = items(); return itemsToSvg(p.items, p.box); };
     png = (k) => {
       const c = document.createElement('canvas');
       paintSlide(c, w, h, k, page, deck.docOf(i));
@@ -2133,6 +3680,7 @@ async function exportPicture(): Promise<void> {
     const b = pic.box;
     w = b.x2 - b.x1; h = b.y2 - b.y1;
     const back = clear ? [] : [{ kind: 'path' as const, segs: [{ k: 'M' as const, x: b.x1, y: b.y1 }, { k: 'L' as const, x: b.x2, y: b.y1 }, { k: 'L' as const, x: b.x2, y: b.y2 }, { k: 'L' as const, x: b.x1, y: b.y2 }, { k: 'Z' as const }], fill: '#ffffff' }];
+    items = () => ({ items: [...back, ...pic.items], box: b });
     svg = () => itemsToSvg([...back, ...pic.items], b);
     png = (k) => {
       const { canvas } = pictureCanvas(doc, pic, k * 72);
@@ -2146,19 +3694,26 @@ async function exportPicture(): Promise<void> {
       return c;
     };
   }
-  const type = v.format === 'svg' ? SVG : PICTURE;
+  const type = ({ svg: SVG, tiff: TIFF, emf: EMF, eps: EPS } as Record<string, FileType>)[v.format] ?? PICTURE;
   const target = await saveFileDialog(withExtension(tab.name, type.extension), type).catch(async (e) => { await showError(String(e)); return null; });
   if (!target) return;
   let note = '';
   try {
     if (type === SVG) await writeFile(target.ref, target.name, svg(), SVG);
+    else if (type === EMF) { const p = items(); await writeFile(target.ref, target.name, itemsToEmf(p.items, p.box), EMF); }
+    else if (type === EPS) { const p = items(); await writeFile(target.ref, target.name, await itemsToEps(p.items, p.box, pdfImage, tab.name.replace(/\.[^.]+$/, '')), EPS); }
     else {
       const k = bitmapScale(w, h, dpi, EXPORT_MAX_SIDE, EXPORT_MAX_PIXELS);
       const c = png(k);
       const got = Math.round((c.width / w) * 72);
       if (got < dpi - 1) note = ` at ${got} dpi (the most for a page this big)`;
-      const bytes = new Uint8Array(await (await canvasPng(c)).arrayBuffer());
-      await writeFile(target.ref, target.name, pngWithDpi(bytes, (c.width / w) * 72), PICTURE);
+      if (type === TIFF) {
+        const px = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+        await writeFile(target.ref, target.name, writeTiff(px, c.width, c.height, (c.width / w) * 72, clear), TIFF);
+      } else {
+        const bytes = new Uint8Array(await (await canvasPng(c)).arrayBuffer());
+        await writeFile(target.ref, target.name, pngWithDpi(bytes, (c.width / w) * 72), PICTURE);
+      }
       note = `, ${c.width} × ${c.height} pixels` + note;
     }
   } catch (e) {
@@ -2206,7 +3761,7 @@ async function pdfImage(src: string): Promise<PdfImage | null> {
 
 // ---------------------------------------------------------------- sheets: the grid, and structures drawn for cells
 
-const SHEET_HINT = 'Type in a cell, or double-click to change it. Sheet > Draw Structure puts a structure in a cell; Insert Property Columns works out formula, MW, HRMS m/z and more.';
+const SHEET_HINT = 'Type in a cell, or double-click to change it. Insert > Structure in Cell puts a structure in a cell; Insert > Insert Property Columns works out formula, MW, HRMS m/z and more.';
 
 /** True when a sheet is showing (and no structure is being drawn for one of its cells). */
 function sheetActive(): boolean {
@@ -2222,11 +3777,16 @@ const sheetMode = new SheetMode({
   flash,
   editStructure: (contents, title, done) => editCellStructure(contents, title, done),
   key: (e) => sheetKey(e),
-  changed: () => ws.noteChange(),
+  command: (name) => command(name),
+  changed: (book) => ws.noteChange(book && ws.tabs.find((t) => t.book === book)),
+  isOpen: (book) => ws.tabs.some((t) => t.book === book),
   toStructure: (text, style) => textToStructure(text, style),
   writeCells: (own, text, html) => writeCells(own, text, html),
   copyStructure: async (contents, style) => (await copyDrawing(structureDoc(contents, style), null)).replace(/^Copied the whole drawing/, 'Copied the structure'),
   readCells: (e) => readCells(e),
+  askName: () => docMode.askReviewName(),
+  pickPicture: () => pickPicture(),
+  print: () => void printNow(),
 }, sheetChem);
 
 /** The style structures in the sheet showing are drawn in. */
@@ -2239,12 +3799,12 @@ const sheetStyle = (): DocStyle => ws.active.book?.drawingStyle ?? ACS_1996;
 function showSheetParts(): void {
   const sheet = ws.active.mode === 'sheet';
   const words = ws.active.mode === 'document';
-  for (const el of document.querySelectorAll<HTMLElement>('.sheet-only, .no-sheet, .doc-only, .no-doc, .draw-only')) {
+  for (const el of document.querySelectorAll<HTMLElement>('.sheet-only, .no-sheet, .doc-only, .no-doc')) {
     const c = el.classList;
     el.hidden = (c.contains('sheet-only') && !sheet) || (c.contains('no-sheet') && sheet) || (c.contains('doc-only') && !words)
-      || (c.contains('no-doc') && words) || (c.contains('draw-only') && (sheet || words) && !drawingOnTop());
+      || (c.contains('no-doc') && words);
   }
-  $('#sheet-menu-wrap').hidden = !sheet || drawingOnTop();
+  tickMenuModes();
 }
 
 /** A key pressed in a sheet: Excel's keys first, then the menu keys that use Ctrl, Alt or a function key. */
@@ -2281,7 +3841,7 @@ async function textToStructure(text: string, style: DocStyle): Promise<{ content
   }
   if (!got) {
     const named = await nameToMolfile(t);
-    if ('error' in named) return { error: `"${t}" isn't SMILES, and couldn't be read as a name: ${named.error}` };
+    if ('error' in named) return { error: named.bad !== undefined || named.details ? `"${t}" isn't SMILES or a name that could be read. Check the spelling, or try a CAS number or a simpler name.` : named.error };
     got = named;
   }
   const d = new Doc();
@@ -2299,6 +3859,7 @@ async function textToStructure(text: string, style: DocStyle): Promise<{ content
  * and Word keep bold, colours and borders) and tab-separated text.
  */
 async function writeCells(own: string, text: string, html: string): Promise<void> {
+  forgetCopy();
   if (nativeClipboard) {
     const enc = new TextEncoder();
     await writeNativeFormats([[CELLS_FORMAT, enc.encode(own)], ['HTML Format', cfHtml(html)], ['CF_UNICODETEXT', enc.encode(text)]]);
@@ -2348,7 +3909,7 @@ function activeStructureDoc(): Doc | null {
 // Drawing a structure for a cell: the drawing area floats over the sheet, with Done and Cancel.
 // The cell's drawing is swapped into the editor's document while it's drawn (the sheet's tab
 // leaves that document empty), so every drawing tool, key and check works on it as usual.
-let cellEdit: { done: (c: Contents | null) => void; saved: Doc } | null = null;
+let cellEdit: { done: (c: Contents | null) => void; saved: Doc; view: typeof renderer.view } | null = null;
 
 function editCellStructure(contents: Contents | null, title: string, done: (c: Contents | null) => void, style: DocStyle = sheetStyle()): void {
   finishCellStructure(true);
@@ -2356,7 +3917,9 @@ function editCellStructure(contents: Contents | null, title: string, done: (c: C
   const drawing = structureDoc(contents ?? blank, style);
   editor.clearSelection();
   doc.swap(drawing);
-  cellEdit = { done, saved: drawing };
+  // the drawing beside (split view) waits in `drawing`, its zoom kept for after
+  cellEdit = { done, saved: drawing, view: { ...renderer.view } };
+  ws.aside = ws.pane ? drawing : null;
   document.body.classList.add('floating-drawing');
   layoutSplit();
   $('#structure-title').textContent = title;
@@ -2398,6 +3961,10 @@ function finishCellStructure(keep: boolean): void {
   editor.lastEdited = null;
   editor.cropping = null;
   doc.swap(e.saved);
+  ws.aside = null;
+  // the drawing beside is back as it was: not changed, at its own zoom
+  if (ws.pane) ws.pane.seen = doc.version;
+  renderer.view = e.view;
   document.body.classList.remove('floating-drawing');
   $('#structure-bar').hidden = true;
   const sheet = ws.active.mode === 'sheet';
@@ -2445,8 +4012,10 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work differently while a sheet shows. */
 const SHEET_COMMANDS: Record<string, () => unknown> = {
-  cut: () => sheetMode.copy(true),
-  copy: () => sheetMode.copy(),
+  'sheet-new-window': () => { sheetMode.view.commitEdit(); ws.newWindow(); },
+  // (through the sheet's own command, which copies a selected chart rather than the cells under it)
+  cut: () => sheetMode.run('cut'),
+  copy: () => sheetMode.run('copy'),
   paste: () => sheetMode.paste(null),
   'select-all': () => sheetMode.selectAll(),
   'copy-smiles': async () => {
@@ -2494,6 +4063,9 @@ function docActive(): boolean {
 }
 
 /** The style structures in the document showing are drawn in. */
+/** Insert > Quick Parts: saved pieces of text (kept with the settings). */
+let docQuickParts: QuickPart[] = [];
+
 const docStyle = (): DocStyle => ws.active.document?.t.drawingStyle ?? ACS_1996;
 
 const docMode = new DocumentMode({
@@ -2502,17 +4074,46 @@ const docMode = new DocumentMode({
   command: (name) => command(name),
   changed: () => ws.noteChange(),
   editDrawing: (contents, title, done) => editCellStructure(contents, title, done, docStyle()),
+  editDiagram: (contents) => documentDiagram(contents),
   copyDrawing: async (contents, style) => (await copyDrawing(structureDoc(contents, style), null)).replace(/^Copied the whole drawing/, 'Copied the structure'),
+  copiedOther: () => forgetCopy(),
+  copyPicture: (src) => copyImage(src),
   readPaste: (e) => readDocPaste(e),
   toStructure: (text, style) => textToStructure(text, style),
   pickPicture: () => pickPicture(),
+  pickObjectFile: () => pickObjectFile(),
+  objectPicture: (name, bytes, icon) => objectPictureOf(name, bytes, icon),
+  openObjectFile: (file, changed) => openObjectFile(file, changed),
+  clipboardObject: nativeClipboard ? () => clipboardObject() : undefined,
   pickReferenceFile: () => pickReferenceFile(),
   preferredChanged: () => storeSettings(),
   reviewNameChanged: () => storeSettings(),
+  quickParts: () => docQuickParts,
+  setQuickParts: (list) => { docQuickParts = list; storeSettings(); },
+  setNewDesign: (d) => { setNewDocDesign(d); storeSettings(); },
+  openDocuments: () => {
+    const seen = new Set<unknown>();
+    return ws.tabs.filter((t) => t.mode === 'document' && t.document && !seen.has(t.document) && seen.add(t.document)).map((t) => ({ name: ws.label(t), t: t.document!.t }));
+  },
+  pickDocument: async () => {
+    const f = await openBytesDialog('Word documents', [DOCX]).catch(async (e) => { await showError(String(e)); return null; });
+    if (!f) return null;
+    try {
+      const { doc, warnings } = await readDocx(f.bytes, docRead);
+      if (warnings.length) flash(`${f.name}: ${warnings.join(' ')}`, 8000);
+      return { name: f.name, t: doc };
+    } catch (e) {
+      await showError(`Could not open ${f.name}: ${String(e)}`);
+      return null;
+    }
+  },
+  showDocument: (t, name) => { ws.showDocument(t, name); },
   newTable: (rows, cols, style) => tableDrawing(emptyTable(rows, cols, style.captionSize), style),
   measure: measureText,
 });
 docBoxPrefs.changed = () => storeSettings();
+docRulerPrefs.changed = () => storeSettings();
+formulaBarPrefs.changed = () => storeSettings();
 // documents measure fonts they have no published widths for on the screen
 setScreenMeasure(measureText);
 void document.fonts?.ready.then(() => docMode.fontsChanged());
@@ -2585,6 +4186,12 @@ const DOC_COMMANDS: Record<string, () => unknown> = {
     const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#doc-ribbon .rb-tabs')!;
     shapeMenu.show(anchor, 'Click a shape to put it in the text at the caret. Double-click it there to change its size, colour or text.', (id) => docMode.insertShape(id));
   },
+  'insert-diagram': () => void docMode.insertDiagram(),
+  'insert-icons': () => {
+    const b = document.querySelector<HTMLElement>('#doc-ribbon [data-doc="insert-icons"]');
+    const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#doc-ribbon .rb-tabs')!;
+    shapeMenu.show(anchor, 'Click an icon to put it in the text at the caret. Double-click it there to change its size or colour.', (id) => docMode.insertShape(id), 'icons');
+  },
   'copy-smiles': async () => {
     const d = pickedFigureDoc();
     if (!d) { flash('Click a structure first (it gets a blue frame), then Copy as SMILES.'); return; }
@@ -2618,6 +4225,8 @@ const DOC_COMMANDS: Record<string, () => unknown> = {
     docMode.insertObject({ kind: 'drawing', contents: r.contents }, 'Paste SMILES');
   },
   'name-to-structure': () => docMode.run('structure-from-name-doc'),
+  // View > New Window: the document in another tab too, with its own view and place
+  'doc-new-window': () => { ws.newWindow(); },
 };
 
 /** Menu commands from the drawing's list that also work while a document shows. */
@@ -2633,12 +4242,140 @@ window.addEventListener('keydown', (e) => {
 });
 
 /** Menu commands that work the same whatever shows. */
-const ANY_TAB = new Set(['edit-palettes', 'preferences', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'print',
-  'help', 'user-guide', 'send-feedback', 'report-problem', 'check-updates']);
+const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'export-settings', 'import-settings', 'customize-ribbon', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'reset-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
+  'drawing-style', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'title-bar-in-menu', 'collapse-ribbon', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
+  'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
+
+// ---------------------------------------------------------------- accessibility (Review > Check Accessibility, Alt Text…)
+
+/** What makes the file showing hard to use with a screen reader or to read. */
+function accessibilityIssues(): Issue[] {
+  if (sheetActive()) return ws.active.book ? checkWorkbook(ws.active.book) : [];
+  if (docActive()) { const t = docMode.file?.t; return t ? checkDocument(t) : []; }
+  const deck = deckNow();
+  if (deck && ws.active.mode === 'slides') {
+    const out: Issue[] = [];
+    const titles: (string | null)[] = [];
+    deck.slides.forEach((_, i) => {
+      const d = deck.docOf(i);
+      out.push(...checkDrawing(d, { slide: i, slideTitle: true, ...(d === doc ? { captionBox: (c: Caption) => renderer.captionBox(c) } : {}) }));
+      const t = [...d.captions.values()].find((c) => c.ph === 'title');
+      titles.push(t ? t.runs.map((r) => r.text).join('') : null);
+    });
+    return [...out, ...repeatedTitles(titles)];
+  }
+  return checkDrawing(doc, { captionBox: (c) => renderer.captionBox(c) });
+}
+
+/** Go to what an accessibility issue is about, and select it. */
+function goToIssue(p: IssuePlace): void {
+  if (sheetActive()) { sheetMode.goToIssue(p); return; }
+  if (docActive()) {
+    if (p.kind === 'doc-object') docMode.goToObject(p.id);
+    else if (p.kind === 'doc-para') docMode.revealPara(p.para);
+    return;
+  }
+  if (p.kind !== 'drawing') return;
+  const deck = deckNow();
+  if (deck && p.slide !== undefined) deck.go(p.slide);
+  // brought into view (zoomed in to it), then picked whole
+  if (p.atoms?.length) editor.reveal('atom', p.atoms[0]);
+  else if (p.captions?.length) editor.reveal('caption', p.captions[0]);
+  editor.selectThese({ atoms: new Set(p.atoms ?? []), bonds: new Set(), captions: new Set(p.captions ?? []), arrows: new Set(), shapes: new Set(p.shapes ?? []) });
+}
+
+/** Alt Text… in a drawing, on a slide or in a design: for the picture or chart picked, or else the structure picked. */
+async function drawingAltText(): Promise<boolean> {
+  const pics = [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => x?.kind === 'picture');
+  if (pics.length === 1) {
+    const p = pics[0];
+    const got = await askAltText(p.chart ? 'chart' : p.math ? 'equation' : p.video ? (p.video.audio ? 'sound' : 'video') : 'picture', p.alt);
+    if (got === null || !doc.shapes.has(p.id)) return false;
+    doc.edit('Alt text', () => doc.updateShape(p.id, { alt: got || undefined }));
+    return true;
+  }
+  const atom = [...editor.sel.atoms].find((id) => doc.atoms.has(id));
+  if (pics.length === 0 && atom !== undefined) {
+    const frag = [...doc.fragmentOf(atom)].map((id) => doc.atoms.get(id)).filter((a): a is Atom => !!a);
+    const got = await askAltText('structure', structureAlt(frag), 'Screen readers read this out in place of the structure, and PowerPoint and Word keep it as the picture\'s alt text. Left empty, the structure is described by its SMILES.');
+    if (got === null || !doc.atoms.has(atom)) return false;
+    setStructureAlt(doc, atom, got);
+    return true;
+  }
+  flash(pics.length > 1 ? 'Select one picture at a time for Alt Text.' : 'Click a picture, chart or structure first, then Alt Text.');
+  return false;
+}
+
+const accessibility = new AccessibilityPane({
+  check: accessibilityIssues,
+  goTo: goToIssue,
+  fixAlt: async (p) => {
+    if (sheetActive()) return sheetMode.altText();
+    if (docActive()) return p.kind === 'doc-object' ? docMode.altText(p.id) : false;
+    return drawingAltText();
+  },
+});
+
+const slideCompare = new SlideComparePane({
+  deck: () => (ws.active.mode === 'slides' ? deckNow() : null),
+  flash: (m, ms) => flash(m, ms),
+  changed: () => { const d = deckNow(); if (d) deckChanged(d); },
+});
+
+/** File > New from Template: a document or sheet started from one of our templates. */
+async function newFromTemplate(): Promise<void> {
+  finishTyping();
+  const got = await pickFileTemplate(sheetActive() ? 'sheet' : 'document');
+  if (!got) return;
+  if (got.kind === 'sheet') {
+    ws.newSheet(got.template?.make());
+  } else ws.newDocument(got.template?.make());
+  if (got.template) flash(`New ${got.template.name.toLowerCase()}: type over the text in [brackets].`);
+}
+
+/** Review > Compare (slides): another version of this deck, from an open tab or a PowerPoint file, to review slide by slide. */
+async function compareSlides(): Promise<void> {
+  const d = deckNow();
+  if (!d || ws.active.mode !== 'slides') return;
+  finishTyping();
+  const others = ws.tabs.filter((t) => t !== ws.active && t.mode === 'slides' && t.deck);
+  let pick = 'file';
+  if (others.length) {
+    const got = await ask('Compare Presentations', [{
+      name: 'with', label: 'Compare with', value: 'file',
+      options: [{ value: 'file', label: 'A PowerPoint file…' }, ...others.map((t, i) => ({ value: String(i), label: t.name }))],
+    }], { ok: 'Compare', note: 'Each slide that differs in the other version is listed, to accept into this deck or reject.' });
+    if (!got) return;
+    pick = got.with;
+  }
+  const theirs = new Deck(new Doc());
+  let name: string;
+  if (pick === 'file') {
+    const f = await openBytesDialog('PowerPoint presentations', [PPTX]).catch(async (e) => { await showError(String(e)); return null; });
+    if (!f) return;
+    try {
+      const got = readPptx(f.bytes);
+      theirs.load(got.slides.map((s) => theirs.makeSlide(s.layout, s.contents, s.notes, s, got.master)), got.size, got.master);
+    } catch (e) {
+      flash(`Could not read ${f.name}: ${e instanceof Error ? e.message : String(e)}`, 8000);
+      return;
+    }
+    name = f.name;
+  } else {
+    const t = others[Number(pick)];
+    const src = t.deck!.copySlides(t.deck!.slides.map((_, i) => i));
+    theirs.load(src.slides.map((s) => theirs.makeSlide(s.layout, s.contents, s.notes, s.motion, src.master)), src.size, src.master);
+    name = t.name;
+  }
+  if (deckNow() !== d) return;
+  const n = slideCompare.start(d, theirs, name, document.querySelector<HTMLElement>('[data-cmd="compare-slides"]:not([hidden])'));
+  flash(n ? `${n} change${n === 1 ? '' : 's'} from ${name} to review.` : `${name} has the same slides as this deck.`);
+}
 
 /** Run a menu command in the way that suits the tab showing. False when it doesn't apply there. */
 function command(name: string): boolean {
+  // View > Toolboxes: one of your own
+  if (name.startsWith('toolbox-own-')) { toolboxes.toggle(name.slice('toolbox-'.length)); return true; }
   if (sheetActive()) {
     const own = SHEET_COMMANDS[name];
     if (own) return own() !== false;
@@ -2655,6 +4392,7 @@ function command(name: string): boolean {
     flash('A design is one page: use Page Size and Background on the Design ribbon. For several pages, use File > New Slides.');
     return true;
   }
+  if (name.startsWith('shape-fx:')) { void shapeEffect(name); return true; }
   if (name.startsWith('add-ligand:')) {
     if (editor.addLigand(name.slice('add-ligand:'.length))) return true;
     flash('Select one metal first, then add the ligand to it.');
@@ -2664,8 +4402,95 @@ function command(name: string): boolean {
     const [, id, index] = name.split(':');
     return contextBond !== null && editor.fuseRing(contextBond, id, Number(index));
   }
+  if (name.startsWith('layout-') && ws.active.mode === 'slides') { setLayout(name.slice('layout-'.length)); return true; }
   const run = COMMANDS[name];
   return !!run && run() !== false;
+}
+
+/** Where the last right-click menu on the page opened (a gallery picked from it opens there). */
+let rightClickAt = { left: 0, bottom: 0 };
+
+/** The design shapes picked (the ones Shape Styles and Shape Effects change). */
+function pickedGeo(): Shape[] {
+  return [...editor.sel.shapes].map((id) => doc.shapes.get(id)).filter((x): x is Shape => x?.kind === 'geo' && !x.diagram);
+}
+
+/** Where a ribbon button's drop-down goes: under the button showing, or under the tabs. */
+function dropAnchor(cmd: string): HTMLElement {
+  const b = [...document.querySelectorAll<HTMLElement>(`[data-cmd="${cmd}"]`)].find((x) => x.offsetParent);
+  return b ?? document.querySelector<HTMLElement>('#ribbon .rb-tabs')!;
+}
+
+/** Shape Styles: the gallery of ready-made looks for the shapes picked, in the deck's colours. */
+function shapeStyles(at?: { left: number; bottom: number }): void {
+  if (!pickedGeo().length) { flash('Select a shape first (Insert > Shapes).'); return; }
+  const m = deckNow()?.master;
+  const colours = styleColours(m?.textColor ?? '#333333', m?.accent ?? '#2f6fb0', m?.accent2 ?? '#c0504d');
+  showStyleGallery(at ?? dropAnchor('shape-styles'), colours, (look, c) => {
+    const shapes = pickedGeo();
+    finishTyping();
+    const { textColor, ...patch } = stylePatch(look, c);
+    doc.edit('Shape style', () => {
+      for (const s of shapes) {
+        const text = s.text && { ...s.text, runs: s.text.runs.map((r) => ({ ...r, color: textColor })) };
+        doc.updateShape(s.id, { ...patch, ...(text ? { text } : {}) });
+      }
+    });
+    editor.changed();
+  });
+}
+
+/** Shape Effects: shadow, reflection, glow, soft edges and bevel, from a menu under the button (or at the pointer). */
+function shapeEffects(at?: { x: number; y: number }): void {
+  if (!pickedGeo().length) { flash('Select a shape first (Insert > Shapes).'); return; }
+  const r = dropAnchor('shape-effects').getBoundingClientRect();
+  showContextMenu(at?.x ?? r.left, at?.y ?? r.bottom, effectsMenu(), { run: (cmd) => void command(cmd), key: () => undefined });
+}
+
+/** One of the Shape Effects menu's choices, for every shape picked. */
+async function shapeEffect(cmd: string): Promise<boolean> {
+  const shapes = pickedGeo();
+  if (!shapes.length) { flash('Select a shape first (Insert > Shapes).'); return false; }
+  finishTyping();
+  if (cmd === 'shape-fx:glow:options') {
+    const g = shapes[0].glow ?? { color: shapes[0].fillColor ?? shapes[0].color ?? '#ffc000', size: 8, transparency: 0.4 };
+    const v = await ask('Glow', [
+      { name: 'color', label: 'Colour', value: g.color, type: 'color' },
+      { name: 'size', label: 'Size (pt)', value: String(g.size), type: 'number' },
+      { name: 'clear', label: 'Transparency (%)', value: String(Math.round(g.transparency * 100)), type: 'number' },
+    ], { ok: 'Apply' });
+    if (!v) return false;
+    const size = Math.max(0, Math.min(150, Number(v.size) || 0));
+    const glow = size > 0 ? { color: v.color, size, transparency: Math.max(0, Math.min(1, (Number(v.clear) || 0) / 100)) } : undefined;
+    doc.edit('Glow', () => { for (const s of shapes) doc.updateShape(s.id, { glow }); });
+    editor.changed();
+    return true;
+  }
+  const label = { shadow: 'Shadow', reflection: 'Reflection', glow: 'Glow', soft: 'Soft edges', bevel: 'Bevel' }[cmd.split(':')[1]] ?? 'Shape effect';
+  doc.edit(label, () => { for (const s of shapes) { const p = effectPatch(cmd, s); if (p) doc.updateShape(s.id, p); } });
+  editor.changed();
+  return true;
+}
+
+/** Shape Fill > Picture: a picture from a file fills the shapes picked, stretched to each. */
+async function shapePictureFill(): Promise<void> {
+  const shapes = pickedGeo();
+  if (!shapes.length) { flash('Select a shape first (Insert > Shapes).'); return; }
+  const p = await pickPicture();
+  if (!p) return;
+  if (!/^image\/(png|jpeg|gif)$/.test(p.mime)) { flash('A shape can be filled with a PNG, JPEG or GIF picture.'); return; }
+  finishTyping();
+  const picFill = { src: dataUrl(p.bytes, p.mime), px: imageSize(p.bytes, p.mime) ?? { w: 100, h: 100 } };
+  doc.edit('Picture fill', () => { for (const s of shapes) doc.updateShape(s.id, { picFill, filled: true }); });
+  editor.changed();
+}
+
+/** Shape Fill > No Picture: back to the shapes' own fill colour. */
+function shapeNoPictureFill(): void {
+  const shapes = pickedGeo().filter((s) => s.picFill);
+  if (!shapes.length) { flash('None of the shapes picked has a picture fill.'); return; }
+  doc.edit('Picture fill', () => { for (const s of shapes) doc.updateShape(s.id, { picFill: undefined }); });
+  editor.changed();
 }
 
 /** Picture Style (right-click on a picture): a ready-made frame, corners and shadow for the pictures picked. */
@@ -2677,36 +4502,63 @@ function setPictureStyle(look: PictureLook | undefined): boolean {
 }
 
 /** Slide commands that don't apply to a design's single page. */
-const SLIDE_ONLY = new Set(['new-slide', 'duplicate-slide', 'delete-slide', 'size-wide', 'size-standard', 'slide-master', 'slide-templates',
-  'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation']);
+const SLIDE_ONLY = new Set(['compare-slides', 'section-menu', 'new-slide', 'duplicate-slide', 'delete-slide', 'cut-slides', 'copy-slides', 'paste-slides', 'paste-slides-keep', 'hide-slide', 'reuse-slides', 'size-wide', 'size-standard', 'size-custom', 'slide-master', 'slide-templates',
+  'edit-layouts', 'view-sorter', 'add-section', 'rename-section', 'remove-section', 'remove-section-slides', 'remove-all-sections', 'section-up', 'section-down', 'collapse-sections', 'expand-sections',
+  'slide-transitions', 'slide-animations', 'animation-pane', 'preview-slide', 'remove-animation', 'insert-slide-zoom', 'insert-summary-zoom', 'action-settings', 'insert-video', 'insert-audio',
+  'reading-view', 'rehearse-timings', 'record-show', 'set-up-show', 'custom-shows', 'custom-show-menu', 'use-timings', 'play-narrations', 'header-footer', 'insert-date-time', 'insert-slide-number', 'view-slide-ruler', 'view-gridlines', 'view-guides', 'grid-settings', 'add-vertical-guide', 'add-horizontal-guide', 'view-outline', 'view-notes-page', 'notes-master', 'handout-master']);
 
 /** The animation commands: an effect for the selected objects (the right-click menu's Animation). */
-const ANIM_COMMANDS: { cmd: string; label: string }[] = [false, true].flatMap((exit) => EFFECTS.map((e) => ({
+const ANIM_COMMANDS: { cmd: string; label: string }[] = [false, true].flatMap((exit) => EFFECTS.filter((e) => !(exit && e.emph)).map((e) => ({
   cmd: `animate-${e.id}${exit ? '-out' : ''}`, label: animName(newAnim({ kind: 'shape', id: 0 }, e.id, exit)),
 })));
 
 const COMMANDS: Record<string, () => unknown> = {
   new: () => { finishTyping(); ws.newDrawing(); },
+  'check-accessibility': () => { finishTyping(); if (accessibility.open) accessibility.refresh(); else accessibility.show(document.querySelector<HTMLElement>('[data-cmd="check-accessibility"]:not([hidden])')); },
+  'alt-text': () => { finishTyping(); void drawingAltText(); },
   'new-slides': () => { finishTyping(); ws.newSlides(); },
   'new-design': () => newDesign(),
   'design-size': () => designSize(),
   'connector-tool': () => { finishTyping(); editor.setTool('connector'); },
   'connector-elbow-tool': () => { finishTyping(); editor.setTool('connector-elbow'); },
+  'shape-styles': () => shapeStyles(),
+  'view-slide-ruler': () => { slideLook.ruler = !slideLook.ruler; showRulers(); storeSettings(); },
+  'view-gridlines': () => { slideLook.grid = !slideLook.grid; showRulers(); storeSettings(); renderer.repaintAll(); editor.requestScene(); },
+  'view-guides': () => toggleGuides(),
+  'grid-settings': () => void gridSettings(),
+  'add-vertical-guide': () => addGuide('x'),
+  'add-horizontal-guide': () => addGuide('y'),
+  'shape-styles-here': () => shapeStyles(rightClickAt),
+  'shape-effects': () => shapeEffects(),
+  'shape-picture-fill': () => void shapePictureFill(),
+  'shape-no-picture-fill': () => shapeNoPictureFill(),
   'slide-shapes': () => {
-    const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="slide-shapes"]:not([hidden])');
-    const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#ribbon .rb-tabs')!;
-    shapeMenu.show(anchor, 'Click a shape, then click or drag on the slide. Type in it once placed.', (id) => { finishTyping(); editor.setTool(`geo:${id}`); });
+    shapeMenu.show(dropAnchor('slide-shapes'), 'Click a shape, then click or drag on the slide. Type in it once placed.', (id) => { finishTyping(); editor.setTool(`geo:${id}`); });
   },
-  'design-shapes': () => { if (ws.active.mode === 'design') lib.focusSearch(); else flash('Shapes are in Design mode: use File > New Design.'); },
+  'slide-icons': () => {
+    const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="slide-icons"]:not([hidden])');
+    const anchor = b && b.offsetParent ? b : document.querySelector<HTMLElement>('#ribbon .rb-tabs')!;
+    shapeMenu.show(anchor, 'Click an icon, then click or drag on the slide. Change its colour in the Style panel.', (id) => { finishTyping(); editor.setTool(`geo:${id}`); }, 'icons');
+  },
+  'design-shapes': () => { if (ws.active.mode === 'design') { lib.showTab('shapes'); lib.focusSearch(); } else flash('Shapes are in Design mode: use File > New Design.'); },
+  'design-icons': () => { if (ws.active.mode === 'design') { lib.showTab('icons'); lib.focusSearch(); } else flash('Icons are in Design, Slides and Document modes.'); },
+  // the Insert menu's Shapes and Icons, in whichever mode is showing (Documents have their own)
+  'insert-shapes': () => (ws.active.mode === 'design' ? COMMANDS['design-shapes']() : ws.active.mode === 'slides' ? COMMANDS['slide-shapes']() : flash('Shapes go on slides, designs and documents.')),
+  'insert-icons': () => (ws.active.mode === 'design' ? COMMANDS['design-icons']() : ws.active.mode === 'slides' ? COMMANDS['slide-icons']() : flash('Icons go on slides, designs and documents.')),
   'shape-front': () => editor.setShapeLayer('front') || flash('Select the shapes to bring to the front.'),
   'shape-back': () => editor.setShapeLayer('back') || flash('Select the shapes to send to the back.'),
   'shape-forward': () => editor.setShapeLayer('forward') || flash('Select the shapes to bring forward.'),
   'shape-backward': () => editor.setShapeLayer('backward') || flash('Select the shapes to send backward.'),
   'new-sheet': () => { finishTyping(); ws.newSheet(); },
   'new-document': () => { finishTyping(); ws.newDocument(); },
+  'new-from-template': () => { void newFromTemplate(); },
   open: () => ws.open(),
   save: () => { finishTyping(); return ws.save(focusTab()); },
   'save-as': () => { finishTyping(); return ws.saveAs(focusTab()); },
+  autosave: () => { finishTyping(); return keeper.toggleAutoSave(focusTab()); },
+  'version-history': () => { finishTyping(); return keeper.historyCommand(focusTab()); },
+  'recover-work': () => keeper.recoverCommand(),
+  'keep-options': () => settingsWindow.open('autosave'),
   'save-workspace': () => saveWorkspace(false),
   'save-workspace-as': () => saveWorkspace(true),
   'open-workspace': () => openWorkspace(),
@@ -2720,18 +4572,59 @@ const COMMANDS: Record<string, () => unknown> = {
   undo: () => undo(),
   redo: () => redo(),
   'insert-picture': () => insertPicture(),
+  'insert-video': () => void insertMedia(false),
+  'insert-slide-zoom': () => void insertZoom(false),
+  'insert-summary-zoom': () => void insertZoom(true),
+  'action-settings': () => void actionSettings(),
+  'insert-audio': () => void insertMedia(true),
+  'media-playback': () => { const id = [...editor.sel.shapes].find((x) => doc.shapes.get(x)?.video); if (id === undefined) { flash('Click a video or sound first.'); return; } void editMediaShape(id); },
   'insert-table': () => { void insertTable(); },
+  'insert-chart': () => { void insertChart(); },
+  'edit-chart': () => { const id = [...editor.sel.shapes].find((x) => doc.shapes.get(x)?.chart); if (id === undefined) { flash('Click a chart first.'); return; } void editChartShape(id); },
   crop: () => cropPicture(),
+  'picture-format': () => { void formatPicture(); },
   'text-box': () => { editor.setTool('text'); flash('Click to type, or drag across to make a text box that wraps.'); },
+  'format-painter': () => formatPainter(),
+  'insert-symbol': () => symbolWindow.open(),
   'new-slide': () => newSlide(),
-  'duplicate-slide': () => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(slideList.pickedList()); } },
-  'delete-slide': () => removeSlides(slideList.pickedList()),
+  'duplicate-slide': () => { const d = deckNow(); if (d) { finishTyping(); d.duplicate(pickedSlides()); } },
+  'delete-slide': () => removeSlides(pickedSlides()),
+  'cut-slides': () => copySlides(pickedSlides(), true),
+  'copy-slides': () => copySlides(pickedSlides(), false),
+  'paste-slides': () => pasteSlides(),
+  'paste-slides-keep': () => pasteSlides(true),
+  'hide-slide': () => hideSlides(),
+  'selection-pane': () => { selectionPane = !selectionPane; showLayers(); },
+  'reuse-slides': () => reuseSlides(),
+  'compare-slides': () => compareSlides(),
+  'insert-equation': () => insertEquation(),
+  'insert-link': () => insertLink(),
+  'remove-link': () => removeLinks(),
+  'open-link': () => openLink(),
+  'insert-bookmark': () => { flash('Bookmarks are for documents: they name a place in the text for links to go to.'); return false; },
+  'edit-equation': () => { const id = [...editor.sel.shapes].find((x) => doc.shapes.get(x)?.math); if (id === undefined) { flash('Click an equation first (or double-click it).'); return; } void editEquationShape(id); },
   'next-slide': () => { const d = deckNow(); if (!d) return false; goSlide(d.index + 1); },
   'prev-slide': () => { const d = deckNow(); if (!d) return false; goSlide(d.index - 1); },
-  ...Object.fromEntries(LAYOUTS.map((l) => [`layout-${l.id}`, () => setLayout(l.id)])),
   'size-wide': () => setSlideSize(WIDE),
   'size-standard': () => setSlideSize(STANDARD),
+  'size-custom': () => customSlideSize(),
+  'edit-layouts': () => editSlideLayouts(),
+  'section-menu': () => {
+    const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="section-menu"]');
+    const r = b?.getBoundingClientRect();
+    const d = deckNow();
+    const items: MenuItem[] = d?.sections.length ? [{ cmd: 'add-section' }, null, ...sectionItems()] : [{ cmd: 'add-section' }];
+    showContextMenu(r ? r.left : 200, r ? r.bottom + 2 : 120, items, { run: (cmd) => void command(cmd), key: commandKey });
+  },
+  'view-normal': () => setSlideView('normal'),
+  'view-outline': () => setSlideView(outlineView.shown ? 'normal' : 'outline'),
+  'view-notes-page': () => setSlideView(notesView.shown ? 'normal' : 'notes'),
+  'notes-master': () => void editPageMaster('notes'),
+  'handout-master': () => void editPageMaster('handout'),
+  'view-sorter': () => setSlideView('sorter'),
+  ...Object.fromEntries(['add-section', 'rename-section', 'remove-section', 'remove-section-slides', 'remove-all-sections', 'section-up', 'section-down', 'collapse-sections', 'expand-sections'].map((c) => [c, () => sectionCommand(c)])),
   'slide-master': () => slideMaster(),
+  'format-background': () => backgroundDialog(),
   'slide-templates': () => slideTemplates(),
   'slide-transitions': () => animUi?.showTab('transitions'),
   'slide-animations': () => animUi?.showTab('animations'),
@@ -2746,10 +4639,36 @@ const COMMANDS: Record<string, () => unknown> = {
   'delete-comment': () => { if (ws.active.mode !== 'slides') return false; slideCmts?.remove(); },
   'delete-all-comments': () => { if (ws.active.mode !== 'slides') return false; slideCmts?.removeAll(); },
   'show-comments': () => { if (ws.active.mode !== 'slides' || !slideCmts) return false; slideCmts.show(!slideCmts.shown); },
-  'drawing-style': () => drawingStyleDialog(),
+  'drawing-style': () => settingsWindow.open('style'),
   present: () => present(false),
   'present-current': () => present(true),
   'presenter-view': () => present(false, true),
+  'reading-view': () => present(true, false, { windowed: true }),
+  'rehearse-timings': () => present(false, false, { rehearse: true }),
+  'record-show': () => present(false, false, { rehearse: true, record: true }),
+  'set-up-show': () => void setUpShowCmd(),
+  'custom-shows': () => void customShowsCmd(),
+  'custom-show-menu': () => {
+    const b = document.querySelector<HTMLElement>('#ribbon [data-cmd="custom-show-menu"]');
+    customShowMenu(b && b.offsetParent ? b : document.querySelector<HTMLElement>('#ribbon .rb-tabs')!);
+  },
+  'use-timings': () => {
+    const d = deckNow();
+    if (!d) return;
+    const s = d.settings.show ?? defaultShow();
+    d.setSettings({ ...d.settings, show: { ...s, manual: s.manual ? undefined : true } }, s.manual ? 'Use timings' : 'Advance manually');
+    showSlideState();
+  },
+  'play-narrations': () => {
+    const d = deckNow();
+    if (!d) return;
+    const s = d.settings.show ?? defaultShow();
+    d.setSettings({ ...d.settings, show: { ...s, noNarration: s.noNarration ? undefined : true } }, s.noNarration ? 'Play narrations' : 'Show without narration');
+    showSlideState();
+  },
+  'header-footer': () => void headerFooter(),
+  'insert-date-time': () => void headerFooter(),
+  'insert-slide-number': () => void headerFooter(),
   cut: () => cut(),
   copy: () => copy(),
   paste: () => paste(),
@@ -2778,8 +4697,10 @@ const COMMANDS: Record<string, () => unknown> = {
   'align-bottom': () => align('bottom'),
   'distribute-h': () => editor.distribute('h') || flash('Select three or more structures, captions, arrows or shapes to space them evenly.'),
   'distribute-v': () => editor.distribute('v') || flash('Select three or more structures, captions, arrows or shapes to space them evenly.'),
-  'flip-h': () => editor.flip('h') || flash('Select something to flip.'),
-  'flip-v': () => editor.flip('v') || flash('Select something to flip.'),
+  'flip-h': () => flipped(editor.flip('h')),
+  'flip-v': () => flipped(editor.flip('v')),
+  'flip-h-keep': () => flipped(editor.flip('h', true)),
+  'flip-v-keep': () => flipped(editor.flip('v', true)),
   'rotate-cw': () => editor.rotateBy(90) || flash('Select something to rotate.'),
   'rotate-ccw': () => editor.rotateBy(-90) || flash('Select something to rotate.'),
   'rotate-180': () => editor.rotateBy(180) || flash('Select something to rotate.'),
@@ -2800,6 +4721,12 @@ const COMMANDS: Record<string, () => unknown> = {
   'dev-tools': () => { showDevTools(!devTools); storeSettings(); },
   'show-stereo': () => previewStereo(!renderer.previewStereo),
   'scroll-bars': () => { showScrollBars(!scrollbars.shown); storeSettings(); },
+  'collapse-ribbon': () => { setRibbonCollapsed(!ribbonCollapsed()); storeSettings(); },
+  'title-bar-in-menu': () => { void placeTitleBar(titleBarPlace() === 'app' ? 'system' : 'app'); storeSettings(); },
+  'page-setup': () => void pageSetup(),
+  'text-bar-docked': () => { placeTextBar('docked'); storeSettings(); },
+  'text-bar-floating': () => { placeTextBar('floating'); storeSettings(); },
+  'text-bar-hidden': () => { placeTextBar('hidden'); storeSettings(); },
   'group-tips': () => { showGroupTips(!labelTips.enabled); storeSettings(); },
   'dark-page': () => { showDark(!dark.on); storeSettings(); },
   'alignment-guides': () => {
@@ -2810,23 +4737,32 @@ const COMMANDS: Record<string, () => unknown> = {
     storeSettings();
     flash(guidesOn[m] ? 'Alignment guides on: moved things snap into line with structures, text and shapes (hold Alt to move freely).' : 'Alignment guides off.');
   },
-  'dark-colours': () => darkColours(),
+  'dark-colours': () => settingsWindow.open('dark'),
   'zoom-in': () => editor.zoomBy(1.25),
   'zoom-out': () => editor.zoomBy(0.8),
   'zoom-fit': () => editor.fit(),
   // 100%: a point on the page is a point on the screen (96 pixels to the inch)
   'zoom-actual': () => editor.zoomTo(96 / 72),
-  hotkeys: () => hotkeysDialog.open(),
-  'typing-spelling': () => typingDialog.open(),
-  'mode-colours': () => modeDialog.open(),
-  'edit-palettes': () => editPalettes(),
-  preferences: () => void openPreferences(),
+  hotkeys: () => settingsWindow.open('hotkeys'),
+  'typing-spelling': () => settingsWindow.open('typing'),
+  'mode-colours': () => settingsWindow.open('mode-colours'),
+  'edit-palettes': () => settingsWindow.open('palettes'),
+  preferences: () => settingsWindow.open('general'),
   'check-updates': () => void updates.check(),
   help: () => openHelp(),
-  'user-guide': () => openWebPage(GUIDE_URL),
+  'user-guide': () => void guide.open(),
+  'help-here': () => { const at = guideSpot(menuMode(), editor.tool.kind); void guide.open(at.page, at.anchor); },
   'send-feedback': () => feedback.open(),
+  about: () => void appVersion().then((v) => ask('About Chem Illustrator', [], {
+    noCancel: true,
+    note: `${STAGE_NOTE} Version ${v === 'web' ? 'for the browser' : v} (${STAGE.toLowerCase()}). Free software under the GNU General Public License, version 3: `
+      + 'see the licence and the source on GitHub (github.com/nathanohare/Chem-Illustrator). ChemDraw is a trademark of Revvity Signals; '
+      + 'Chem Illustrator is not made by or affiliated with Revvity Signals.',
+  })),
   'report-problem': () => feedback.open('problem'),
   'command-search': () => commandSearch.open(),
+  'next-region': () => cycleRegion(1),
+  'prev-region': () => cycleRegion(-1),
   'toolbox-main': () => toolboxes.toggle('main'),
   'toolbox-structure': () => toolboxes.toggle('structure'),
   'toolbox-arrange': () => toolboxes.toggle('arrange'),
@@ -2835,8 +4771,12 @@ const COMMANDS: Record<string, () => unknown> = {
   'toolbox-highlight': () => toolboxes.toggle('highlight'),
   'toolbox-custom': () => toolboxes.toggle('custom'),
   // the panel taken out as a toolbox folds up to its title bar; at the right it folds to a strip
-  'fold-side': () => toolboxes.setSideCollapsed(ws.active.mode, !sideIsFolded()),
+  'fold-side': () => foldSide(!sideIsFolded()),
   'customize-toolbox': () => openCustomToolbox(),
+  'customize-ribbon': () => ribbonEditor.open(RIBBON_OF_MODE[ws.active.mode]),
+  'export-settings': () => void exportSettings(),
+  'import-settings': () => void importSettingsFile(),
+  'reset-toolboxes': () => { toolboxes.reset(); flash('Toolboxes reset: Drawing Tools docked at the left, the others hidden, all open and locked.', 6000); },
   'lock-toolboxes': () => { toolboxes.setLocked(!toolboxState.locked); flash(toolboxState.locked ? 'Toolboxes locked.' : 'Toolboxes unlocked: drag one by its title to an edge of the drawing to dock it, or anywhere else to float.', 6000); },
   'add-frame': () => editor.addFrame() || flash('Select what to frame: structures, text, arrows or shapes.'),
   'fill-rings': () => flash(editor.fillRings(), 6000),
@@ -2894,11 +4834,23 @@ const COMMANDS: Record<string, () => unknown> = {
     const n = editor.detachSelection();
     flash(n ? `${n === 1 ? 'It stays' : `${n} things stay`} put when the structure moves now.` : 'Nothing selected is stuck to a structure.');
   },
+  'orient-like': async () => {
+    const n = await orientLikeFirst();
+    if (n === null) flash('Select two or more structures. Each is turned to match the first one (top left), keeping its configuration.', 6000);
+    else if (n === 0) flash('Nothing to turn: the structures already match the first one, or share too little with it.');
+  },
+  'clean-up-reaction-orient': async () => {
+    await orientLikeFirst(true);
+    if (!editor.cleanUpReaction()) flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000);
+  },
   'clean-up-reaction': () => editor.cleanUpReaction() || flash('No reaction to tidy: draw starting materials, an arrow and products (the arrow pointing from one to the other), or the scheme is already tidy.', 6000),
   'arrange-scheme': () => arrangeDialog.open(),
   'catalytic-cycle': () => void insertCycle(),
   'ts-brackets': () => { if (!editor.tsBrackets()) flash('Select the transition state first (draw it with partial bonds: P over a bond).'); },
   'energy-diagram': () => void energyDiagram(null),
+  'insert-diagram': () => void smartDiagram(null),
+  'edit-diagram': () => { const id = editor.selectedDiagram(); if (id === null) flash('Select a diagram first.'); else void smartDiagram(id); },
+  'diagram-to-shapes': () => editor.ungroupSelectedDiagram() || flash('Select a diagram first.'),
   'edit-energy': () => { const id = editor.selectedEnergy(); if (id === null) flash('Select an energy diagram first.'); else void energyDiagram(id); },
   'animate-reaction': () => animateDialog.open(),
   'animate-step': () => {
@@ -2907,12 +4859,16 @@ const COMMANDS: Record<string, () => unknown> = {
     animateDialog.open({ arrow });
   },
   'number-compounds': () => void numberCompounds(),
-  'scheme-settings': () => void schemeSettings(),
+  'scheme-settings': () => settingsWindow.open('schemes'),
   'attach-descriptors': () => void attachDescriptors(),
   'pubchem-lookup': () => void lookUpChosen(),
   'add-id-label': () => void addTiedText('label'),
   'lock-structures': () => toggleStructureLock(),
   'add-caption': () => void addTiedText('caption'),
+  'link-text': () => linkText() || flash('Select the text to link (and the structure to link it to; else it goes to the nearest).'),
+  'unlink-text': () => unlinkText() || flash('Select linked text, or a structure with text linked to it.'),
+  group: () => editor.group() || flash('Select two or more things to group: structures, text, arrows or shapes.'),
+  ungroup: () => editor.ungroup() || flash('Select a group to take apart.'),
   'bring-front': () => editor.setBondLayer(true) || flash('Select the bond to bring to the front (where bonds cross, the one behind has a gap).'),
   'send-back': () => editor.setBondLayer(false) || flash('Select the bond to send to the back (where bonds cross, the one behind has a gap).'),
   'save-template': () => void saveTemplate(),
@@ -2951,44 +4907,223 @@ for (const [i, a] of ANIM_COMMANDS.entries()) {
 }
 
 // The menus: click a name to open its menu; with one open, pointing at another name opens that.
-const menus = [...document.querySelectorAll<HTMLDivElement>('.menu-wrap')].map((w) => ({
+// A submenu opens when pointed at, clicked or entered with the right arrow key, and sits on the
+// screen beside its item (fixed, so a menu that scrolls doesn't cut it off).
+const menus = [...document.querySelectorAll<HTMLDivElement>('header > .menu-wrap')].map((w) => ({
   btn: w.querySelector<HTMLButtonElement>(':scope > button')!,
-  list: w.querySelector<HTMLDivElement>('.menu')!,
+  list: w.querySelector<HTMLDivElement>(':scope > .menu')!,
 }));
 type Menu = (typeof menus)[number];
 let openMenu: Menu | null = null;
+/** The items arrow keys move through in one menu or submenu: not hidden, not greyed out. */
+const menuItems = (list: HTMLElement) =>
+  [...list.querySelectorAll<HTMLButtonElement>(':scope > button, :scope > .submenu > button, :scope > .recent-files > button')]
+    .filter((b) => !b.hidden && !b.disabled && b.getClientRects().length > 0);
+function closeSubs(inside: HTMLElement): void {
+  for (const sub of inside.querySelectorAll<HTMLElement>('.menu.sub')) {
+    sub.hidden = true;
+    sub.parentElement!.querySelector(':scope > button')!.setAttribute('aria-expanded', 'false');
+  }
+}
+function openSub(item: HTMLButtonElement, focus: boolean): void {
+  const list = item.parentElement!.parentElement as HTMLElement;
+  closeSubs(list);
+  const sub = item.nextElementSibling as HTMLElement;
+  sub.hidden = false;
+  item.setAttribute('aria-expanded', 'true');
+  const r = item.getBoundingClientRect(), w = sub.offsetWidth, h = sub.offsetHeight;
+  const left = r.right + w + 4 <= innerWidth ? r.right + 2 : Math.max(4, r.left - w - 2);
+  sub.style.left = `${left}px`;
+  sub.style.top = `${Math.max(4, Math.min(r.top - 5, innerHeight - h - 4))}px`;
+  if (focus) menuItems(sub)[0]?.focus();
+}
 function showMenu(m: Menu | null, focus = true): void {
   openMenu = m;
   for (const x of menus) {
+    if (x !== m) closeSubs(x.list);
     x.list.hidden = x !== m;
     x.btn.setAttribute('aria-expanded', String(x === m));
   }
-  if (m && focus) m.list.querySelector<HTMLButtonElement>('button:not([hidden])')?.focus();
+  if (!m) return;
+  refreshHistory();
+  m.list.style.setProperty('--menu-top', `${m.btn.getBoundingClientRect().bottom}px`);
+  if (focus) menuItems(m.list)[0]?.focus();
 }
 for (const m of menus) {
   m.btn.addEventListener('click', () => showMenu(openMenu === m ? null : m));
   m.btn.addEventListener('pointerenter', () => { if (openMenu && openMenu !== m) showMenu(m, false); });
+  m.list.addEventListener('scroll', () => closeSubs(m.list));
+  m.list.addEventListener('pointerover', (e) => {
+    const item = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
+    if (!item || item.disabled) return;
+    if (item.classList.contains('has-sub')) { if (item.getAttribute('aria-expanded') !== 'true') openSub(item, false); }
+    else closeSubs(item.parentElement!.closest('.menu')!);
+  });
   m.list.addEventListener('click', (e) => {
-    const recent = (e.target as HTMLElement).closest<HTMLButtonElement>('button')?.dataset.recent;
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
+    if (!b || b.disabled) return;
+    if (b.classList.contains('has-sub')) { openSub(b, false); return; }
+    const recent = b.dataset.recent;
     if (recent !== undefined) { showMenu(null); void openRecent(recent); return; }
-    const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button')?.dataset.cmd;
+    const cmd = b.dataset.cmd;
     if (!cmd) return;
     showMenu(null);
     command(cmd);
   });
   m.list.addEventListener('keydown', (e) => {
-    const items = [...m.list.querySelectorAll<HTMLButtonElement>('button:not([hidden])')];
-    const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    const here = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>('.menu') ?? m.list;
+    const items = menuItems(here);
+    const now = document.activeElement as HTMLButtonElement;
+    const i = items.indexOf(now);
     const j = menus.indexOf(m);
-    if (e.key === 'Escape') { showMenu(null); m.btn.focus(); }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+    const parentItem = here === m.list ? null : here.parentElement!.querySelector<HTMLButtonElement>(':scope > button');
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      if (parentItem) { closeSubs(parentItem.parentElement!.parentElement as HTMLElement); parentItem.focus(); }
+      else { showMenu(null); m.btn.focus(); }
+    }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length]?.focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus(); }
+    else if (e.key === 'ArrowRight' && now.classList.contains('has-sub')) { e.preventDefault(); openSub(now, true); }
+    else if (e.key === 'ArrowLeft' && parentItem) {
+      e.preventDefault();
+      closeSubs(parentItem.parentElement!.parentElement as HTMLElement);
+      parentItem.focus();
+    }
     else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
       e.preventDefault();
       showMenu(menus[(j + (e.key === 'ArrowRight' ? 1 : -1) + menus.length) % menus.length]);
     }
   });
 }
+addEventListener('resize', () => { if (openMenu) showMenu(null); });
+
+// ---------------------------------------------------------------- the keyboard round the window
+
+// F10, or Alt pressed and let go on its own, goes to the menu bar (and back); there the arrow
+// keys move along it and Down opens a menu. Alt with a menu's underlined letter opens that menu,
+// as in Office. Ctrl+F6 moves on round the window's parts (the keys can be changed).
+const MNEMONICS = new Map<string, Menu>();
+for (const m of menus) {
+  const letter = m.btn.getAttribute('aria-keyshortcuts')?.match(/^Alt\+(\w)$/)?.[1];
+  if (letter) MNEMONICS.set(letter.toUpperCase(), m);
+  m.btn.addEventListener('keydown', (e) => {
+    const j = menus.indexOf(m);
+    const go = (k: number) => { e.preventDefault(); const n = menus[(k + menus.length) % menus.length]; if (openMenu) showMenu(n); else n.btn.focus(); };
+    if (e.key === 'ArrowRight') go(j + 1);
+    else if (e.key === 'ArrowLeft') go(j - 1);
+    else if (e.key === 'ArrowDown') { e.preventDefault(); showMenu(m); }
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(menus.length - 1);
+    else if (e.key === 'Escape' && !openMenu) { e.preventDefault(); leaveMenuBar(); }
+  });
+}
+/** Where the keys were before going to the menu bar, to go back to. */
+let beforeMenus: HTMLElement | null = null;
+function enterMenuBar(): void {
+  const a = document.activeElement as HTMLElement | null;
+  if (!a?.closest('header')) beforeMenus = a;
+  menus[0].btn.focus();
+}
+function leaveMenuBar(): void {
+  showMenu(null);
+  document.body.classList.remove('show-mnemonics');
+  if (beforeMenus?.isConnected && beforeMenus !== document.body) beforeMenus.focus();
+  else focusWork();
+  beforeMenus = null;
+}
+const inMenuBar = () => !!(document.activeElement as HTMLElement | null)?.closest('header > .menu-wrap');
+
+/** The keys to the drawing, sheet or document showing. */
+function focusWork(): void {
+  if (sheetActive()) sheetMode.focus();
+  else if (docActive()) docMode.focus();
+  else $('#overlay').focus();
+}
+
+/**
+ * The parts of the window that Ctrl+F6 goes round, in order: each finds what takes the keys in
+ * it (null when that part isn't showing).
+ */
+const REGIONS: { inside: string; first: () => HTMLElement | null }[] = [
+  { inside: 'header', first: () => menus[0].btn },
+  { inside: '#tabs', first: () => $('#tabs').querySelector<HTMLElement>('[aria-selected="true"]') ?? $('#tabs').querySelector<HTMLElement>('[role="tab"], button') },
+  { inside: '.ribbon', first: () => [...document.querySelectorAll<HTMLElement>('.ribbon')].find(onScreenEl)?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], button:not([disabled])') ?? null },
+  { inside: '#tools', first: () => onScreenEl($('#tools')) ? $('#tools').querySelector<HTMLElement>('button.tool.active') ?? $('#tools').querySelector<HTMLElement>('button.tool') : null },
+  { inside: '#work', first: () => { focusWork(); return document.activeElement as HTMLElement; } },
+  { inside: '#side-content', first: () => onScreenEl($('#side-content')) ? [...$('#side-content').querySelectorAll<HTMLElement>('button:not([disabled]), input, select, [tabindex="0"]')].find(onScreenEl) ?? null : null },
+];
+function onScreenEl(el: Element): boolean { return el.getClientRects().length > 0; }
+
+/** Move the keys to the next (or previous) part of the window. */
+function cycleRegion(step: 1 | -1): void {
+  showMenu(null);
+  const a = document.activeElement as HTMLElement | null;
+  let at = a ? REGIONS.findIndex((r) => a.closest(r.inside)) : -1;
+  if (at < 0) at = step > 0 ? -1 : REGIONS.length;
+  for (let k = 1; k <= REGIONS.length; k++) {
+    const r = REGIONS[(at + step * k + REGIONS.length * 2) % REGIONS.length];
+    const el = r.first();
+    if (!el || !onScreenEl(el)) continue;
+    if (document.activeElement !== el) el.focus();
+    if (document.activeElement === el || el.contains(document.activeElement)) return;
+  }
+}
+
+let altAlone = false;
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Alt') { altAlone = !e.repeat && !e.ctrlKey && !e.metaKey && !e.shiftKey; if (altAlone) document.body.classList.add('show-mnemonics'); return; }
+  altAlone = false;
+  // Ctrl+F6 works from anywhere, a text box too
+  const chord = chordOf(e);
+  const step = chord && !(e.target as HTMLElement | null)?.closest?.('dialog')
+    ? keymap.keysFor('command', 'command next-region').includes(chord) ? 1 : keymap.keysFor('command', 'command prev-region').includes(chord) ? -1 : 0 : 0;
+  if (step) { e.preventDefault(); e.stopImmediatePropagation(); cycleRegion(step); return; }
+  if (isTyping(e.target) || (e.target as HTMLElement | null)?.closest?.('dialog')) return;
+  if (e.key === 'F10' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+    e.preventDefault();
+    if (inMenuBar() || openMenu) leaveMenuBar();
+    else { document.body.classList.add('show-mnemonics'); enterMenuBar(); }
+    return;
+  }
+  // Alt and a menu's letter (by the key's place, so it works whatever the keyboard writes)
+  if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && /^Key[A-Z]$/.test(e.code)) {
+    const m = MNEMONICS.get(e.code.slice(3));
+    if (m) { e.preventDefault(); e.stopImmediatePropagation(); if (!inMenuBar()) beforeMenus = document.activeElement as HTMLElement | null; showMenu(m); }
+  }
+}, true);
+window.addEventListener('keyup', (e) => {
+  if (e.key !== 'Alt') return;
+  const alone = altAlone;
+  altAlone = false;
+  if (!alone) { if (!inMenuBar()) document.body.classList.remove('show-mnemonics'); return; }
+  if (isTyping(e.target) || (e.target as HTMLElement | null)?.closest?.('dialog')) { document.body.classList.remove('show-mnemonics'); return; }
+  e.preventDefault();
+  if (inMenuBar() || openMenu) leaveMenuBar();
+  else enterMenuBar();
+});
+window.addEventListener('pointerdown', () => { altAlone = false; }, true);
+window.addEventListener('blur', () => { altAlone = false; document.body.classList.remove('show-mnemonics'); });
+document.addEventListener('focusin', () => { if (!inMenuBar() && !openMenu) document.body.classList.remove('show-mnemonics'); });
+
+/** The mode the menus serve: drawing a structure for a cell or a document counts as Drawing. */
+function menuMode(): string { return drawingOnTop() ? 'drawing' : ws.active.mode; }
+
+/**
+ * Every mode has the same menus; an item that only works in some modes (data-modes, or the
+ * data-item-modes of its menu) is greyed out in the others, so the menus never change shape.
+ */
+function tickMenuModes(): void {
+  const mode = menuMode();
+  for (const el of document.querySelectorAll<HTMLElement>('header .menu > button, header .menu > .submenu, header .menu.sub > button')) {
+    const modes = el.dataset.modes ?? el.closest<HTMLElement>('[data-item-modes]')?.dataset.itemModes;
+    if (!modes) continue;
+    const on = modes.split(' ').includes(mode);
+    const b = el instanceof HTMLButtonElement ? el : el.querySelector<HTMLButtonElement>(':scope > button');
+    if (b) b.disabled = !on;
+  }
+}
+tickMenuModes();
 document.addEventListener('pointerdown', (e) => {
   if (openMenu && !(e.target as HTMLElement).closest('.menu-wrap')) showMenu(null);
 });
@@ -3059,7 +5194,9 @@ function layoutSplit(): void {
   const opts = ws.tabs.filter((t) => t.mode === 'drawing').map((t) => new Option(t.name.replace(/\.(cdxml|cdx)$/i, ''), String(t.id), false, t === st.drawing));
   opts.push(new Option('New drawing', 'new'));
   splitPick.replaceChildren(...opts);
-  $('#split-insert').textContent = st.main.mode === 'document' ? 'Insert into Document' : st.main.mode === 'sheet' ? 'Insert into Cell' : 'Insert into Slide';
+  $('#split-insert').textContent = st.main.mode === 'document' ? 'Insert into Document' : st.main.mode === 'sheet' ? 'Insert into Cell' : st.main.mode === 'design' ? 'Insert into Design' : 'Insert into Slide';
+  // while a figure's or cell's structure is drawn, Done puts that in; the drawing beside waits
+  $<HTMLButtonElement>('#split-insert').disabled = !!cellEdit;
   if (live) $('#split-empty').hidden = true;
   else drawSplitSnap(st.drawing);
 }
@@ -3130,7 +5267,7 @@ function setSplitSide(drawing: boolean): void {
 /** Beside slides: work on the drawing (true; the slide becomes a picture) or on the slide. */
 function focusSlideDrawing(on: boolean): void {
   const st = splitState();
-  if (!st || st.main.mode !== 'slides') return;
+  if (!st || !st.main.deck) return;
   if (on === (ws.active === st.drawing)) return;
   if (on) {
     // the slide as it looks now, kept as a picture on its side
@@ -3153,7 +5290,7 @@ function toggleSplit(): void {
   if (splitState()) { closeSplit(); return; }
   const t = ws.active;
   if (t.mode === 'drawing') {
-    flash('Split view puts a drawing beside a document, sheet or slides: show one of those (or start one with the + tabs) and choose View > Split View there.', 8000);
+    flash('Split view puts a drawing beside a document, sheet, slides or design: show one of those (or start one with the + tabs) and choose View > Split View there.', 8000);
     return;
   }
   finishTyping();
@@ -3165,7 +5302,7 @@ function toggleSplit(): void {
   if (ws.pane) paneEntered(true);
   else layoutSplit();
   mainResized();
-  flash(`${drawing.name} is beside the ${t.mode === 'document' ? 'document' : t.mode === 'sheet' ? 'sheet' : 'slides'}. Click a side to work on it; the bar above the drawing picks another drawing and puts structures in.`, 7000);
+  flash(`${drawing.name} is beside the ${t.mode === 'document' ? 'document' : t.mode === 'sheet' ? 'sheet' : t.mode === 'design' ? 'design' : 'slides'}. Click a side to work on it; the bar above the drawing picks another drawing and puts structures in.`, 7000);
 }
 
 function closeSplit(): void {
@@ -3225,7 +5362,7 @@ splitPick.addEventListener('change', () => {
 /** The bar's Insert: the selected structures (or the whole drawing) into the document, cell or slide. */
 $('#split-insert').addEventListener('click', () => {
   const st = splitState();
-  if (!st) return;
+  if (!st || cellEdit) return;
   editor.closeCaption();
   const live = !!ws.pane || ws.active === st.drawing;
   const part = extractDrawing(ws.docOf(st.drawing), live && editor.hasSelection() ? editor.sel : null);
@@ -3290,7 +5427,7 @@ applySplitWidth();
 
 // ---------------------------------------------------------------- settings and the Hotkeys window
 
-/** The colour Structure > Highlight uses: the one last chosen in the Style panel (a soft yellow at first). */
+/** The colour Chemistry > Highlight and Fill > Highlight uses: the one last chosen in the Style panel (a soft yellow at first). */
 let highlightColour = '#ffe680';
 /** The look new highlights take: the one last chosen in the Style panel. */
 let highlightStyle: HighlightStyle | undefined;
@@ -3318,12 +5455,12 @@ function applyHighlightLook(look: HighlightLookPreset): void {
   if (look.colour) highlightColour = look.colour;
 }
 
-/** Structure > Highlight Look…: pick a look for the selection. */
+/** Chemistry > Highlight and Fill > Highlight Look…: pick a look for the selection. */
 async function chooseHighlightLook(): Promise<void> {
   const looks = allLooks();
   const got = await ask('Highlight look', [
     { name: 'look', label: 'Look', value: '0', options: looks.map((l, i) => ({ value: String(i), label: i >= BUILT_IN_LOOKS.length ? `${l.name} (yours)` : l.name })) },
-  ], { ok: 'Use', note: 'The ready-made looks keep the highlight\'s colour; your own looks have their colour too. Save the look of a highlight you have set up with Structure > Save Highlight Look.' });
+  ], { ok: 'Use', note: 'The ready-made looks keep the highlight\'s colour; your own looks have their colour too. Save the look of a highlight you have set up with Chemistry > Highlight and Fill > Save Highlight Look.' });
   const look = got && looks[Number(got.look)];
   if (look) applyHighlightLook(look);
 }
@@ -3335,14 +5472,14 @@ function selectedHighlight(): { colour: string; style: HighlightStyle } | null {
   return null;
 }
 
-/** Structure > Save Highlight Look…: keep the selected highlight's look under a name. */
+/** Chemistry > Highlight and Fill > Save Highlight Look…: keep the selected highlight's look under a name. */
 async function saveHighlightLook(): Promise<void> {
   const h = selectedHighlight();
   if (!h) { flash('Select a highlight that looks the way you want first.'); return; }
   const got = await ask('Save highlight look', [
     { name: 'name', label: 'Name', value: '', placeholder: 'for example Reacting bonds' },
     { name: 'colour', label: 'Keep its colour too', value: 'true', type: 'checkbox' },
-  ], { ok: 'Save', note: 'It is offered in Structure > Highlight Look, in the Style panel and in the Highlight toolbox, in every drawing.' });
+  ], { ok: 'Save', note: 'It is offered in Chemistry > Highlight and Fill > Highlight Look, in the Style panel and in the Highlight toolbox, in every drawing.' });
   const name = got?.name.trim();
   if (!got || !name) return;
   const look: HighlightLookPreset = { name, ...(got.colour === 'true' ? { colour: h.colour } : {}), style: tidyStyle(h.style) ?? {} };
@@ -3352,9 +5489,9 @@ async function saveHighlightLook(): Promise<void> {
   flash(`Saved the look “${name}”.`);
 }
 
-/** Structure > Delete Highlight Look…: forget one of your own looks. */
+/** Chemistry > Highlight and Fill > Delete Highlight Look…: forget one of your own looks. */
 async function deleteHighlightLook(): Promise<void> {
-  if (!ownLooks.length) { flash('You have no saved highlight looks yet (Structure > Save Highlight Look).'); return; }
+  if (!ownLooks.length) { flash('You have no saved highlight looks yet (Chemistry > Highlight and Fill > Save Highlight Look).'); return; }
   const got = await ask('Delete highlight look', [{ name: 'look', label: 'Look', value: ownLooks[0].name, options: ownLooks.map((l) => ({ value: l.name, label: l.name })) }], { ok: 'Delete' });
   if (!got) return;
   ownLooks = ownLooks.filter((l) => l.name !== got.look);
@@ -3368,7 +5505,7 @@ function looksChanged(): void {
   stylePanel.refresh(true);
 }
 
-/** Tick the chosen way of writing terminal methyls in the Structure menu. */
+/** Tick the chosen way of writing terminal methyls in the Chemistry menu. */
 function tickMethylStyle(): void {
   $('[data-cmd="methyls-ch3"]')?.setAttribute('aria-checked', String(editor.options.methylStyle === 'CH3'));
   $('[data-cmd="methyls-me"]')?.setAttribute('aria-checked', String(editor.options.methylStyle === 'Me'));
@@ -3383,8 +5520,10 @@ function chooseMethylStyle(style: MethylStyle): void {
   flash(n ? `${n} terminal methyl${n > 1 ? 's' : ''} now written ${how}.` : `Show Terminal Methyls will write them as ${how}.`, 5000);
 }
 
-/** Ask before a command with nothing selected changes every structure on the page (Edit > Preferences). */
+/** Ask before a command with nothing selected changes every structure on the page (Edit > Settings). */
 let askWholeDrawing = true;
+/** Where linked text goes (Edit > Settings). */
+let linkSide: Settings['linkSide'] = 'keep';
 
 /**
  * Show Terminal Methyls: on the selection, or with nothing selected on every structure, after
@@ -3394,7 +5533,7 @@ async function toggleTerminalMethyls(): Promise<void> {
   const doc = editor.doc;
   if (!editor.sel.atoms.size && askWholeDrawing && doc.fragments().length > 1) {
     const r = await ask('Every structure on the page?', [
-      { name: 'again', label: 'Don\u2019t ask again (Edit > Preferences)', type: 'checkbox', value: 'false' },
+      { name: 'again', label: 'Don\u2019t ask again (Edit > Settings)', type: 'checkbox', value: 'false' },
     ], { ok: 'Change every structure', note: 'Nothing is selected, so this shows or hides the terminal methyls on every structure on the page. To change only some, cancel and select them first.' });
     if (!r) return;
     if (r.again === 'true') { askWholeDrawing = false; storeSettings(); }
@@ -3411,6 +5550,8 @@ function showHelicity(on: boolean): void {
 
 // File > Recent (desktop app): files and workspaces opened or saved lately
 let recentFiles: string[] = [];
+/** Characters typed from Insert > Symbol lately, newest first (saved in the settings). */
+let recentSymbols: string[] = [];
 function rememberFile(path: string): void {
   recentFiles = addRecent(recentFiles, path);
   renderRecent();
@@ -3490,18 +5631,20 @@ async function openWorkspace(): Promise<void> {
   if (f && f.ref.kind === 'path') await ws.openWorkspace(new TextDecoder().decode(f.bytes), f.ref.path);
 }
 
-// Newer versions of the desktop app (File > Check for Updates…, Edit > Preferences)
+// Newer versions of the desktop app (File > Check for Updates…, Edit > Settings)
 let updateCheck = true;
+let updateChannel: UpdateChannel = 'latest';
 let skipVersion: string | null = null;
 const updates = new UpdateUI({
   unsaved: () => ws.tabs.filter((t) => t.dirty).map((t) => t.name),
   skipped: () => skipVersion,
   skip: (v) => { skipVersion = v; storeSettings(); },
+  channel: () => updateChannel,
 });
 for (const el of document.querySelectorAll<HTMLElement>('.desktop-only')) el.hidden = !canUpdate;
 let versionText = canUpdate ? '' : 'Web version';
 void Promise.all([appVersion(), portableInfo()]).then(([v, portable]) => {
-  versionText = canUpdate ? `Version ${v}${portable ? ' (portable)' : ''}` : 'Web version';
+  versionText = canUpdate ? `Version ${v} ${STAGE.toLowerCase()}${portable ? ' (portable)' : ''}` : `Web version (${STAGE.toLowerCase()})`;
   if (portable && !portable.writable) flash(`This portable copy can’t write to its “Chem Illustrator Data” folder (a locked or read-only drive), so settings are kept on this computer instead.`, 8000);
   const el = document.querySelector('#app-version');
   if (el) el.textContent = versionText;
@@ -3518,30 +5661,167 @@ const feedback = new FeedbackDialog({
   }),
 });
 
-/** Edit > Preferences: drawing choices that are set once rather than per structure. */
-async function openPreferences(): Promise<void> {
-  const r = await ask('Preferences', [
-    { name: 'methyl', label: 'Terminal methyls written as', value: editor.options.methylStyle, options: [{ value: 'Me', label: 'Me' }, { value: 'CH3', label: 'CH3' }] },
-    { name: 'axial', label: 'Axial chirality written as', value: axialStyle.helicity ? 'PM' : 'RaSa', options: [{ value: 'RaSa', label: 'Ra / Sa' }, { value: 'PM', label: 'P / M (helicity)' }] },
-    { name: 'charges', label: 'Charges from the + and − keys', value: editor.options.circledCharges ? 'circled' : 'plain', options: [{ value: 'plain', label: 'Plain sign (N+)' }, { value: 'circled', label: 'In a circle (⊕, ⊖)' }] },
-    { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
-    ...(canUpdate ? [{ name: 'updates', label: 'Check for a newer version when the app starts', type: 'checkbox' as const, value: String(updateCheck) }] : []),
-    { name: 'pubchem', label: 'Look up names the name reader can\'t read on PubChem (sends the name typed to PubChem, a free NIH database)', type: 'checkbox', value: String(pubchemNames) },
-    { name: 'reviewer', label: 'Your name on tracked changes in documents', value: reviewAuthor() },
-  ], { ok: 'Save', note: 'Charges already drawn keep their look; the circle tools on the Object toolbox always draw a circled charge. Show Terminal Methyls writes them this way; methyls already written out in the selection (or the whole drawing, with nothing selected) change too. Axial chirality labels (biaryls, allenes) follow the choice at once; Ra is the same as M, and Sa as P.' });
+// ---------------------------------------------------------------- opening files from outside
+
+const platform = !isTauri() ? 'web' as const : /Windows/.test(navigator.userAgent) ? 'windows' as const : isMac ? 'mac' as const : 'linux' as const;
+const fileTypesHost = {
+  platform,
+  get: () => invoke<string[]>('file_types_get'),
+  set: (types: string[]) => invoke<void>('file_types_set', { types }),
+  openDefaults: () => invoke<void>('file_types_defaults'),
+  objects: {
+    get: () => invoke<boolean>('ole_registered'),
+    set: async (on: boolean) => { await invoke<void>('ole_register', { on }); setWordObjects(on); },
+  },
+  flash: (msg: string) => flash(msg, 7000),
+};
+let fileTypesOffered = false;
+let wordObjectsOffered = false;
+
+/** A drawing Word, PowerPoint or Excel asked to edit here (src-tauri/src/ole.rs). */
+interface EmbeddedEdit { id: number; cdxml: string; app: string; doc: string }
+/** Tabs editing drawings for other programs, by tab (a Save As to a file still ends the editing when the tab closes). */
+const embeddedTabs = new Map<Tab, number>();
+const embeddedTab = (id: number): Tab | undefined => [...embeddedTabs].find(([, i]) => i === id)?.[0];
+
+async function openEmbedded(e: EmbeddedEdit): Promise<void> {
+  const ref = { kind: 'embedded' as const, id: e.id, app: e.app, doc: e.doc };
+  const from = e.doc || e.app || 'another program';
+  const name = `Drawing in ${from}`;
+  let t: Tab | null;
+  if (e.cdxml.trim()) t = await ws.openAs(new TextEncoder().encode(e.cdxml), 'drawing.cdxml', { name, ref, dirty: false, stamp: null });
+  else {
+    // a new drawing (Insert ▸ Object in Word)
+    t = ws.newDrawing();
+    t.ref = ref;
+    t.name = name;
+    renderTabs();
+  }
+  if (!t) { void invoke('ole_close', { id: e.id }).catch(() => {}); return; }
+  embeddedTabs.set(t, e.id);
+  flash(`Editing the drawing from ${from}. Save (Ctrl+S) puts it back there; close this tab when you're done.`, 9000);
+}
+
+/**
+ * Windows: drawings in Word, PowerPoint and Excel that open here when double-clicked. The first
+ * time the app starts it registers them (a portable copy leaves the computer alone); after that it
+ * keeps the registration pointing at this copy of the app. Settings ▸ File Types turns it off.
+ */
+async function startWordObjects(): Promise<void> {
+  if (platform !== 'windows') return;
+  const { listen } = await import('@tauri-apps/api/event');
+  setEmbeddedWriter(async (ref, cdxml) => {
+    const block = packFormats([['CDXML', new TextEncoder().encode(cdxml)], ['EMF', embeddedPicture(readCdxml(cdxml).doc, cdxml)]]);
+    await invoke('ole_save', block, { headers: { 'ole-id': String(ref.id) } });
+  });
+  await listen<EmbeddedEdit>('ole-edit', (e) => void openEmbedded(e.payload));
+  await listen<number>('ole-show', (e) => { const t = embeddedTab(e.payload); if (t) ws.activate(t); });
+  // the document was closed in Word: the drawing stays here as an unsaved drawing
+  await listen<number>('ole-closed', (e) => {
+    const t = embeddedTab(e.payload);
+    if (!t) return;
+    embeddedTabs.delete(t);
+    if (t.ref.kind === 'embedded') {
+      flash(`${t.ref.doc || t.ref.app} was closed, so this drawing can't go back into it. It stays here; save it as a file to keep it.`, 9000);
+      t.ref = { kind: 'none' };
+      t.name = withExtension(t.name, 'cdxml');
+      renderTabs();
+    }
+  });
+  for (const e of await invoke<EmbeddedEdit[]>('ole_pending').catch(() => [])) await openEmbedded(e);
+  let on = await invoke<boolean>('ole_registered').catch(() => false);
+  if (on) await invoke('ole_register', { on: true }).catch(() => {});
+  else if (!wordObjectsOffered && !(await portableInfo())) {
+    on = await invoke('ole_register', { on: true }).then(() => true, () => false);
+  }
+  if (!wordObjectsOffered) { wordObjectsOffered = true; storeSettings(); }
+  setWordObjects(on);
+}
+
+/** The files the desktop app was opened with (double-clicked, or Open with), and any opened while it runs. */
+async function openOutsideFiles(): Promise<void> {
+  if (!isTauri()) return;
+  const { listen } = await import('@tauri-apps/api/event');
+  // listening first, so no file is missed between asking and listening
+  await listen<string[]>('open-files', (e) => { for (const p of e.payload) void openRecent(p); });
+  for (const p of await invoke<string[]>('launch_files').catch(() => [])) await openRecent(p);
+  // the first time the Windows app starts, it joins the chemistry files' "Open with" lists
+  // (never the default: Settings ▸ File Types explains how); a portable copy leaves the computer alone
+  if (platform === 'windows' && !fileTypesOffered && !(await portableInfo())) {
+    fileTypesOffered = true;
+    const now = await fileTypesHost.get().catch(() => [] as string[]);
+    await fileTypesHost.set([...new Set([...now, ...FILE_TYPES.filter((t) => t.chemistry).map((t) => t.ext)])]).catch(() => {});
+    storeSettings();
+  }
+}
+
+/** Settings ▸ Drawing: how structures are written and drawn, set once rather than per structure. */
+async function drawingPreferences(): Promise<void> {
+  const r = await ask('Drawing', [
+    { name: 'methyl', label: 'Terminal methyls written as', value: editor.options.methylStyle, options: [{ value: 'Me', label: 'Me' }, { value: 'CH3', label: 'CH3' }],
+      help: 'Show Terminal Methyls writes them this way; methyls already written out in the selection (or the whole drawing, with nothing selected) change too.' },
+    { name: 'axial', label: 'Axial chirality written as', value: axialStyle.helicity ? 'PM' : 'RaSa', options: [{ value: 'RaSa', label: 'Ra / Sa' }, { value: 'PM', label: 'P / M (helicity)' }],
+      help: 'Labels on biaryls and allenes follow the choice at once. Ra is the same as M, and Sa as P.' },
+    { name: 'charges', label: 'Charges from the + and − keys', value: editor.options.circledCharges ? 'circled' : 'plain', options: [{ value: 'plain', label: 'Plain sign (N+)' }, { value: 'circled', label: 'In a circle (⊕, ⊖)' }],
+      help: 'Charges already drawn keep their look; the circle tools on the Object toolbox always draw a circled charge.' },
+    { name: 'textAtom', label: 'An atom or group typed with the Text tool beside a bond end (Br, OMe) becomes that atom', type: 'checkbox', value: String(editor.options.textToAtom) },
+    { name: 'supR', label: 'R groups numbered R1, R12… show the number raised (R¹, R¹²)', type: 'checkbox', value: String(labelPrefs.superscriptR),
+      help: 'Longer labels (OR1, CO2R1) and labels from files are left as they are.' },
+    { name: 'reroute', label: 'Mechanism arrows find their own way round again when a change leaves them running into a structure, a label or another arrow', type: 'checkbox', value: String(editor.options.rerouteArrows),
+      help: 'Arrows you bent by hand stay as they are.' },
+  ], { ok: 'Save' });
   if (!r) return;
+  editor.options.circledCharges = r.charges === 'circled';
+  editor.options.textToAtom = r.textAtom === 'true';
+  editor.options.rerouteArrows = r.reroute === 'true';
+  if (labelPrefs.superscriptR !== (r.supR === 'true')) {
+    labelPrefs.superscriptR = r.supR === 'true';
+    doc.allDirty = true;
+    editor.requestScene();
+  }
+  showHelicity(r.axial === 'PM');
+  if (r.methyl !== editor.options.methylStyle) chooseMethylStyle(r.methyl as MethylStyle);
+  else storeSettings();
+}
+
+/** Settings ▸ General: selecting, groups, linked text, and your name on tracked changes. */
+async function generalPreferences(): Promise<void> {
+  const r = await ask('General', [
+    { name: 'groupClick', label: 'Clicking something in a group selects', value: editor.options.groupClick, options: [{ value: 'group', label: 'The whole group' }, { value: 'item', label: 'Just that thing' }] },
+    { name: 'groupOutline', label: 'Outline the rest of a group when part of it is selected', type: 'checkbox', value: String(editor.options.groupOutline) },
+    { name: 'linkSide', label: 'Text linked to a structure goes', value: linkSide, options: [{ value: 'keep', label: 'Where it is' }, { value: 'below', label: 'Below' }, { value: 'above', label: 'Above' }, { value: 'left', label: 'Left' }, { value: 'right', label: 'Right' }] },
+    { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
+    { name: 'reviewer', label: 'Your name on tracked changes in documents', value: reviewAuthor() },
+  ], { ok: 'Save' });
+  if (!r) return;
+  editor.options.groupClick = r.groupClick === 'item' ? 'item' : 'group';
+  editor.options.groupOutline = r.groupOutline === 'true';
+  linkSide = (['below', 'above', 'left', 'right'].includes(r.linkSide) ? r.linkSide : 'keep') as Settings['linkSide'];
   askWholeDrawing = r.ask === 'true';
-  pubchemNames = r.pubchem === 'true';
   setReviewAuthor(r.reviewer ?? '');
+  storeSettings();
+}
+
+/** Settings ▸ Online: what the program asks the internet for. */
+async function onlinePreferences(): Promise<void> {
+  const r = await ask('Online', [
+    { name: 'pubchem', label: 'Look up names the name reader can\'t read on PubChem', type: 'checkbox', value: String(pubchemNames),
+      help: 'Sends the name typed to PubChem, a free NIH database. Names the program can read itself never leave this computer.' },
+    ...(canUpdate ? [{ name: 'updates', label: 'Check for a newer version when the app starts', type: 'checkbox' as const, value: String(updateCheck),
+      help: 'Asks GitHub for the latest release number; nothing about you or your files is sent.' },
+    { name: 'channel', label: 'Updates', options: UPDATE_CHANNELS, value: updateChannel,
+      help: 'Stable versions have been tried out on a real computer before they are offered, so they change less often and have fewer surprises. Latest gets every new feature and fix the day it is made.' }] : []),
+  ], { ok: 'Save' });
+  if (!r) return;
+  pubchemNames = r.pubchem === 'true';
   if (canUpdate) {
     // turning the check back on also forgets a skipped version
     if (r.updates === 'true' && !updateCheck) skipVersion = null;
     updateCheck = r.updates === 'true';
+    // the other channel's versions are new to you: forget a skipped one
+    if ((r.channel === 'stable' || r.channel === 'latest') && r.channel !== updateChannel) { updateChannel = r.channel; skipVersion = null; }
   }
-  editor.options.circledCharges = r.charges === 'circled';
-  showHelicity(r.axial === 'PM');
-  if (r.methyl !== editor.options.methylStyle) chooseMethylStyle(r.methyl as MethylStyle);
-  else storeSettings();
+  storeSettings();
 }
 
 let settingsLoaded = false;
@@ -3552,7 +5832,12 @@ onPalettes(() => storeSettings());
 /** Save the key map and preferences (after the saved ones have been read, so they aren't lost). */
 function storeSettings(): void {
   if (!settingsLoaded) return;
-  const s: Settings = {
+  saveSettings(currentSettings(), (msg) => flash(msg, 10000));
+}
+
+/** Every setting as it is now. */
+function currentSettings(): Settings {
+  return {
     hotkeys: keymap.overrides(),
     keepHotspotOnBond: editor.options.keepHotspotOnBond,
     fixedLength: editor.options.fixedLength,
@@ -3560,8 +5845,17 @@ function storeSettings(): void {
     devTools,
     showRoles: editor.showRoles,
     scrollBars: scrollbars.shown,
+    titleBar: titleBarPlace(),
+    ribbonCollapsed: ribbonCollapsed(),
+    textBar: CaptionEditor.barPlace,
+    page: defaultPage,
+    welcomed,
     groupTips: labelTips.enabled,
     chemTyping: typingPrefs.chemistry,
+    stereoItalic: typingPrefs.stereoItalic,
+    boldNumbers: typingPrefs.boldNumbers,
+    autoLinks: typingPrefs.links,
+    linkCtrlClick: typingPrefs.linkCtrlClick,
     spellCheck: typingPrefs.spelling,
     replacements: typingPrefs.replacements,
     dictionary: typingPrefs.dictionary,
@@ -3574,10 +5868,18 @@ function storeSettings(): void {
     methylStyle: editor.options.methylStyle,
     axialStyle: axialStyle.helicity ? 'PM' : 'RaSa',
     circledCharges: editor.options.circledCharges,
+    textToAtom: editor.options.textToAtom,
+    groupClick: editor.options.groupClick,
+    groupOutline: editor.options.groupOutline,
+    rerouteArrows: editor.options.rerouteArrows,
+    superscriptR: labelPrefs.superscriptR,
+    linkSide,
     slideTemplate,
+    slideThemes,
     askWholeDrawing,
     palettes: getPalettes(),
     toolboxes: toolboxState,
+    ribbons: ribbonPrefs,
     myStyles: ownStyles,
     modeStyles,
     darkPage: dark.on,
@@ -3585,15 +5887,66 @@ function storeSettings(): void {
     darkPalettes: dark.own,
     guides: { ...guidesOn },
     docPins: [...docBoxPrefs.pinned],
+    docRuler: docRulerPrefs.shown,
+    sheetFormulaBar: formulaBarPrefs.shown,
+    slideRuler: slideLook.ruler,
+    slideGrid: slideLook.grid,
+    rulerUnits: rulerPrefs.units,
+    rulerFrom: rulerPrefs.from,
     updateCheck,
+    updateChannel,
     pubchemNames,
+    fileTypesOffered,
+    wordObjectsOffered,
     reviewName: reviewAuthor(),
     skipVersion,
     recentFiles,
+    recentSymbols,
     scheme: { ...schemePrefs },
+    keep: keepPrefs,
     highlightLooks: ownLooks,
+    quickParts: docQuickParts,
+    docDesign: newDocDesign(),
   };
-  saveSettings(s, (msg) => flash(msg, 10000));
+}
+
+// ---------------------------------------------------------------- Edit > Export Settings and Import Settings
+
+/** Save every setting in one file, to keep or to use on another computer. */
+async function exportSettings(say: (text: string) => void = flash): Promise<void> {
+  const target = await saveFileDialog('Chem Illustrator settings.json', SETTINGS_FILE).catch((e) => { say(String(e)); return null; });
+  if (!target) return;
+  await writeFile(target.ref, target.name, exportText(currentSettings()), SETTINGS_FILE).then(
+    () => say(`Saved every setting in ${target.name}. Import it on another computer (Edit > Import Settings) to set that one up the same.`),
+    (e) => say(`Could not save the settings: ${e}`),
+  );
+}
+
+/** Use the settings saved in a file with Export Settings (or the keys from a hotkeys file). */
+async function importSettingsFile(say: (text: string) => void = flash): Promise<void> {
+  const got = await openFileDialog([SETTINGS_FILE]).catch((e) => { say(String(e)); return null; });
+  if (!got) return;
+  const read = importSettings(got.text, currentSettings());
+  if (!read) { say(`${got.name} isn't a Chem Illustrator settings file (use one saved with Export Settings).`); return; }
+  applySettings(read.settings);
+  storeSettings();
+  say(read.only === 'hotkeys' ? `Using the keys from ${got.name}.` : `Using the settings from ${got.name}: keys, toolboxes, preferences, templates, nicknames, styles and palettes. Your recent files stay as they were.`);
+}
+
+/** Settings > Import and Export: both, with a word on what goes in the file. */
+function settingsTransfer(): void {
+  const d = document.createElement('dialog');
+  d.className = 'ask settings-transfer';
+  d.innerHTML = `<h2>Import and Export Settings</h2>
+    <p class="muted">One file holds every setting: hotkeys, toolboxes (and what is in them), preferences, your templates, nicknames, drawing styles, colour palettes, slide themes and highlight looks. Export it to keep a copy, or to set up another computer or a new install the same way; Import uses one. Recent files stay on each computer.</p>
+    <div class="ask-buttons"><button type="button" data-act="export">Export Settings…</button><button type="button" data-act="import">Import Settings…</button><button type="button" class="primary" data-act="close">Close</button></div>
+    <p class="muted small" aria-live="polite"></p>`;
+  const say = (t: string) => { d.querySelector('p.small')!.textContent = t; };
+  d.querySelector('[data-act=export]')!.addEventListener('click', () => void exportSettings(say));
+  d.querySelector('[data-act=import]')!.addEventListener('click', () => void importSettingsFile(say));
+  d.querySelector('[data-act=close]')!.addEventListener('click', () => d.close());
+  d.addEventListener('close', () => d.remove());
+  showDialog(d);
 }
 
 /** The key for a menu command as things are now (in Slides mode PowerPoint's keys come first, in sheets Excel's). */
@@ -3630,8 +5983,7 @@ function refreshKeys(): void {
   const sk = commandKey('command-search');
   $('#btn-search kbd').textContent = sk ?? '';
   $('#btn-search').title = sk ? `Search for a command by name (${sk})` : 'Search for a command by name';
-  tip('#btn-undo', 'Undo', 'undo');
-  tip('#btn-redo', 'Redo', 'redo');
+  refreshHistory();
   tip('#btn-fit', 'Fit drawing to window', 'zoom-fit');
   toolbar.refreshTitles();
 }
@@ -3684,7 +6036,8 @@ const hotkeysDialog = new HotkeysDialog({
   },
 });
 
-void loadSettings().then((s) => {
+/** Use these settings: at start, and when settings are imported (Edit > Import Settings). */
+function applySettings(s: Settings): void {
   editor.options.keepHotspotOnBond = s.keepHotspotOnBond;
   editor.options.fixedLength = s.fixedLength;
   editor.options.fixedAngles = s.fixedAngles;
@@ -3693,11 +6046,18 @@ void loadSettings().then((s) => {
   $('[data-cmd="show-roles"]')?.setAttribute('aria-checked', String(s.showRoles));
   showDevTools(s.devTools);
   showScrollBars(s.scrollBars);
+  void placeTitleBar(s.titleBar);
+  setRibbonCollapsed(s.ribbonCollapsed);
+  defaultPage = s.page;
+  welcomed = s.welcomed;
+  // the drawing open at start (empty and never saved) takes the default page
+  if (!doc.page && !doc.source && !doc.atoms.size && !deckNow()) doc.page = defaultPage && { ...defaultPage };
+  placeTextBar(s.textBar);
   showGroupTips(s.groupTips);
   modeColours = s.modeColours;
   applyModeColours(ws.active.mode, modeColours);
   keymap.setOverrides(s.hotkeys);
-  setTypingPrefs({ chemistry: s.chemTyping, spelling: s.spellCheck, replacements: s.replacements, dictionary: s.dictionary });
+  setTypingPrefs({ chemistry: s.chemTyping, stereoItalic: s.stereoItalic, boldNumbers: s.boldNumbers, links: s.autoLinks, linkCtrlClick: s.linkCtrlClick, spelling: s.spellCheck, replacements: s.replacements, dictionary: s.dictionary });
   ownNicknames = s.nicknames;
   addNicknames(ownNicknames);
   useOwnTemplates(s.templates);
@@ -3707,17 +6067,34 @@ void loadSettings().then((s) => {
   editor.options.methylStyle = s.methylStyle;
   showHelicity(s.axialStyle === 'PM');
   editor.options.circledCharges = s.circledCharges;
+  editor.options.textToAtom = s.textToAtom;
+  editor.options.groupClick = s.groupClick;
+  editor.options.groupOutline = s.groupOutline;
+  editor.options.rerouteArrows = s.rerouteArrows;
+  labelPrefs.superscriptR = s.superscriptR;
+  linkSide = s.linkSide;
   slideTemplate = s.slideTemplate;
+  slideThemes = s.slideThemes;
   askWholeDrawing = s.askWholeDrawing;
   updateCheck = s.updateCheck;
+  updateChannel = s.updateChannel;
   pubchemNames = s.pubchemNames;
+  fileTypesOffered = s.fileTypesOffered;
+  wordObjectsOffered = s.wordObjectsOffered;
   setReviewAuthor(s.reviewName);
+  docQuickParts = s.quickParts;
+  setNewDocDesign(s.docDesign);
   skipVersion = s.skipVersion;
   recentFiles = s.recentFiles;
+  recentSymbols = s.recentSymbols;
+  keepPrefs = s.keep;
+  tickAutoSave();
   ownLooks = s.highlightLooks;
   renderRecent();
   setPalettes(s.palettes);
   toolboxState = s.toolboxes;
+  ribbonPrefs = s.ribbons;
+  applyRibbons();
   ownStyles = s.myStyles;
   modeStyles = s.modeStyles;
   dark.palette = s.darkPalette;
@@ -3725,6 +6102,14 @@ void loadSettings().then((s) => {
   showDark(s.darkPage);
   Object.assign(guidesOn, s.guides);
   docBoxPrefs.pinned = parseDocPins(s.docPins);
+  docRulerPrefs.shown = !!s.docRuler;
+  formulaBarPrefs.shown = s.sheetFormulaBar !== false;
+  sheetMode.showFormulaBar();
+  slideLook.ruler = !!s.slideRuler;
+  slideLook.grid = !!s.slideGrid;
+  rulerPrefs.units = s.rulerUnits;
+  rulerPrefs.from = s.rulerFrom;
+  docMode.showRuler();
   docMode.boxesChanged();
   showGuides();
   // the drawing the app opened with takes your default style, if nothing has been drawn yet
@@ -3738,7 +6123,17 @@ void loadSettings().then((s) => {
   tickToolboxes();
   placeSidePanel();
   tickMethylStyle();
+  refreshKeys();
+}
+
+void loadSettings().then((s) => {
+  applySettings(s);
   settingsLoaded = true;
+  void keeper.start();
+  void openOutsideFiles();
+  void startWordObjects();
+  // (a moment after starting, once a file opened with the app has had time to load)
+  setTimeout(showWelcome, 800);
   // a few seconds after starting, so the check doesn't slow down opening the window
   if (canUpdate && updateCheck) setTimeout(() => void updates.quietCheck(), 4000);
   refreshKeys();
@@ -3779,13 +6174,14 @@ function openHelp(): void {
 }
 
 const nicknames = new NicknameChooser();
+editor.say = (msg) => flash(msg, 6000);
 editor.onNickname = (atomId) => nicknames.open((name) => editor.runAction(`label ${name}`, { kind: 'atom', id: atomId }));
 // / or ? on an atom or bond: select it and show its settings in the Style panel
 editor.onProperties = () => {
   // after the panel has caught up with the new selection
   setTimeout(() => {
     const sec = $('#style-section');
-    if (sec.hidden) return;
+    if (sec.hidden || sec.classList.contains('empty')) return;
     sec.scrollIntoView({ block: 'nearest' });
     sec.querySelector<HTMLElement>('input, select, button')?.focus();
   }, 60);
@@ -3796,9 +6192,16 @@ if (isTauri()) {
   getCurrentWindow().onCloseRequested(async (e) => {
     finishTyping();
     if (!(await ws.closeAll())) e.preventDefault();
+    // closing normally: the recovery copies and lock files aren't needed
+    else await keeper.end();
   }).catch(() => {});
 } else {
-  window.addEventListener('beforeunload', (e) => { finishTyping(); if (ws.anyDirty) e.preventDefault(); });
+  window.addEventListener('beforeunload', (e) => {
+    finishTyping();
+    if (ws.anyDirty) e.preventDefault();
+    // with nothing unsaved the copies can go; otherwise they stay, in case the page is left
+    else void keeper.end();
+  });
 }
 
 /** For the speed tests: a ChemDraw file's text into the drawing showing, timed. */
@@ -3806,7 +6209,7 @@ function openText(text: string, name: string): ReadStats | null {
   const t0 = performance.now();
   try {
     const { doc: loaded, stats } = readCdxml(text);
-    doc.loadFrom(loaded);
+    doc.loadFrom(loaded, true);
     editor.clearSelection();
     editor.lastEdited = null;
     editor.fit();
@@ -3926,7 +6329,7 @@ async function lookUpOnPubChem(smiles: string): Promise<void> {
   scheduleAnalysis(true);
 }
 
-/** Structure > Look Up on PubChem (and the right-click menu): the structure picked, shown in the Analysis panel. */
+/** Chemistry > Look Up > Look Up on PubChem (and the right-click menu): the structure picked, shown in the Analysis panel. */
 async function lookUpChosen(): Promise<void> {
   const f = chosenStructures()[0];
   if (!f) { flash('Select a structure first.'); return; }
@@ -4013,7 +6416,7 @@ async function weigh(atoms: Set<number>): Promise<FragmentResult | null> {
 }
 
 /**
- * Structure > Attach Descriptors (and the Analysis panel's button): the formula and masses under
+ * Chemistry > Attach Descriptors (and the Analysis panel's button): the formula and masses under
  * each structure, tied to it. They follow it, and are worked out again when it changes; the Style
  * panel chooses what they show and where they sit.
  */
@@ -4075,12 +6478,38 @@ function scheduleAnalysis(force = false): void {
   analysisTimer = window.setTimeout(() => runAnalysis(force), 30);
 }
 
+/** The R groups (R1, R2, X, Ar…) written in a structure's labels, alone or inside longer ones (OR1). */
+function rGroupNames(ids: Set<number>): string[] {
+  const out = new Set<string>();
+  for (const id of ids) {
+    const a = doc.atoms.get(id);
+    if (a?.label) for (const t of tokenizeLabel(a.label)) if (t.kind === 'generic') out.add(t.text);
+  }
+  return [...out].sort((p, q) => p.localeCompare(q, undefined, { numeric: true }));
+}
+
+let saidSelection = '';
+/** Tell screen readers what is selected: "Selected C6H5Br, 7 atoms". */
+function saySelection(results: FragmentResult[]): void {
+  const n = editor.sel.atoms.size;
+  const key = n ? [...editor.sel.atoms].sort((a, b) => a - b).join(',') + ':' + doc.version : '';
+  if (key === saidSelection) return;
+  saidSelection = key;
+  if (!n) return;
+  const formulas = results.filter((r) => !r.error && r.formula).map((r) => r.formula);
+  $('#sr-say').textContent = `Selected ${formulas.length ? formulas.join(', ') + ', ' : ''}${n} atom${n === 1 ? '' : 's'}`;
+}
+
+let analysisHadSel = false, clearedAt = -1;
 async function runAnalysis(force: boolean): Promise<void> {
   if (!chem.ready) return;
   // Analyse the selected structures, or else the one last drawn on.
   let roots: number[] = [];
+  // clearing the selection clears the panel, until something is drawn again
+  if (editor.sel.atoms.size) analysisHadSel = true;
+  else if (analysisHadSel) { analysisHadSel = false; clearedAt = doc.version; }
   if (editor.sel.atoms.size) roots = [...editor.sel.atoms];
-  else if (editor.lastEdited !== null && doc.atoms.has(editor.lastEdited)) roots = [editor.lastEdited];
+  else if (editor.lastEdited !== null && doc.atoms.has(editor.lastEdited) && doc.version !== clearedAt) roots = [editor.lastEdited];
   const frags: Set<number>[] = [];
   const seen = new Set<number>();
   for (const r of roots) {
@@ -4131,12 +6560,13 @@ async function runAnalysis(force: boolean): Promise<void> {
   }
   if (seq !== analysisSeq) return;
   lastAnalysis = { results, frags };
-  panel.innerHTML = results.map((r, i) => polymers[i] ? polymerHtml(r, polymers[i]!) : analysisHtml(r, i, adductSel.value, { stereo: r.error ? '' : stereoSummary(frags[i]), unknown: exports[i].unknownLabels, electrons: electronsHtml(countElectrons(doc, frags[i].values().next().value!)), pubchem: r.error || !r.smiles ? '' : pubchemHtml(pubchemStates.get(r.smiles) ?? { kind: 'idle' }, i) })).join('');
+  saySelection(results);
+  panel.innerHTML = results.map((r, i) => polymers[i] ? polymerHtml(r, polymers[i]!) : analysisHtml(r, i, adductSel.value, { stereo: r.error ? '' : stereoSummary(frags[i]), unknown: exports[i].unknownLabels, electrons: electronsHtml(countElectrons(doc, frags[i].values().next().value!)), rGroups: rGroupNames(frags[i]), pubchem: r.error || !r.smiles ? '' : pubchemHtml(pubchemStates.get(r.smiles) ?? { kind: 'idle' }, i) })).join('');
   updatePanels();
 }
 
 /**
- * Structure > Stereo Group: puts the selected stereocentres in an enhanced stereo group (abs, &n
+ * Chemistry > Stereo Group: puts the selected stereocentres in an enhanced stereo group (abs, &n
  * or orn), as in ChemDraw and V3000 molfiles, or takes them out of one.
  */
 async function setStereoGroup(): Promise<void> {
@@ -4170,7 +6600,7 @@ async function setStereoGroup(): Promise<void> {
 }
 
 /**
- * Structure > Polymer or Repeat Brackets: labels the selected brackets n (a polymer's repeat unit)
+ * Chemistry > Polymer or Repeat Brackets: labels the selected brackets n (a polymer's repeat unit)
  * or a number (a group repeated that many times). The atoms between the brackets are the unit.
  */
 async function setRepeatGroup(): Promise<void> {
@@ -4200,7 +6630,7 @@ async function setRepeatGroup(): Promise<void> {
 let rGroupLast = { rows: '', prefix: '', cols: 'formula-mw', extra: 'Yield (%)' };
 
 /**
- * Structure > R-Group Table: a table under a core structure with R groups (R1, R2…) listing what
+ * Chemistry > Polymers and R-Groups > R-Group Table: a table under a core structure with R groups (R1, R2…) listing what
  * each group is in each compound, with each compound's number, formula and mass worked out by
  * putting its groups in place. The result is an ordinary table, so anything in it can be typed over.
  */
@@ -4249,7 +6679,7 @@ async function rGroupTable(): Promise<void> {
 }
 
 /**
- * Structure > Chiral Flag: the boxed Abs, Rel or Rac below the selected structure (or the one
+ * Chemistry > Chiral Flag: the boxed Abs, Rel or Rac below the selected structure (or the one
  * last drawn on), replacing a flag already there.
  */
 async function setChiralFlag(): Promise<void> {
@@ -4278,7 +6708,7 @@ async function setChiralFlag(): Promise<void> {
 }
 
 /**
- * Structure > Show Stereo Labels: shows the R/S and E/Z labels of the selected structures (or of
+ * Chemistry > Show Stereo Labels: shows the R/S and E/Z labels of the selected structures (or of
  * all of them) as part of the drawing, or hides them when they are all showing already.
  */
 function toggleStereoLabels(): void {
@@ -4397,7 +6827,7 @@ function updateWarnings(): void {
   });
 }
 
-/** Structure > Check Structure: go to the next problem after the one selected. */
+/** Chemistry > Check Structure: go to the next problem after the one selected. */
 function checkStructure(): void {
   const list = checks.list();
   if (!list.length) {
@@ -4456,27 +6886,76 @@ registerBundledFonts(() => {
     docMode.fontsChanged();
   }, 50);
 });
+// the icon library loads on its own once the window is up; then anything with icons in it is drawn again
+whenIconsLoaded(() => {
+  // (only a drawing with shapes can hold icons: a big structure opened at start-up isn't drawn twice)
+  if (doc.shapes.size) doc.allDirty = true;
+  editor.changed();
+  docMode.fontsChanged();
+});
+setTimeout(() => void loadIcons().catch(() => flash('The icon library could not be loaded.')), 0);
 applyRibbonIcons();
 
 const stylePanel = new StylePanel($('#style-section'), $('#style-body'), doc, () => editor.sel, () => editor.changed());
-stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
-stylePanel.tie = (ids) => tieCaptions(ids);
-
-/** Tie captions to the structure nearest each, where they sit now (Style panel). */
-function tieCaptions(ids: number[]): void {
-  const m = editor.measure();
-  let n = 0;
-  doc.edit('Tie caption to structure', () => {
+stylePanel.onEditChart = (id) => void editChartShape(id);
+stylePanel.turnable = () => editor.textFirst;
+stylePanel.onEditMedia = (id) => void editMediaShape(id);
+stylePanel.onEditEquation = (id) => void editEquationShape(id);
+stylePanel.onEquationColour = (ids, color) => {
+  doc.edit('Equation colour', () => {
     for (const id of ids) {
-      const c = doc.captions.get(id);
-      if (!c) continue;
-      const f = nearestStructure(doc, m.captionBox(c), m);
-      const a = f && attachWhereItIs(doc, c, f, m, 'caption');
-      if (a) { doc.updateCaption(id, { attach: a }); n++; }
+      const s = doc.shapes.get(id);
+      if (!s?.math) continue;
+      const math = { ...s.math, color };
+      doc.updateShape(id, { math, src: shapeMathPicture(math, measureText) });
     }
   });
   editor.changed();
-  flash(n ? 'Tied: the caption now follows its structure.' : 'There is no structure to tie it to.');
+};
+stylePanel.applyLabel = (id, text) => editor.applyLabel(id, text);
+stylePanel.tie = (ids) => tieCaptions(ids);
+
+/**
+ * Tie captions (text boxes) to a structure: `to` (a selected structure's atoms), or else the one
+ * nearest each. They stay where they are, or go to the side chosen in Edit > Settings.
+ */
+function tieCaptions(ids: number[], to: Set<number> | null = null): void {
+  const m = editor.measure();
+  let n = 0;
+  doc.edit('Link text to structure', () => {
+    for (const id of ids) {
+      const c = doc.captions.get(id);
+      if (!c) continue;
+      const f = to ?? nearestStructure(doc, m.captionBox(c), m);
+      if (!f?.size) continue;
+      const side = linkSide === 'keep' ? undefined : linkSide;
+      const a = side ? { atoms: [...f], side, gap: defaultGap(doc), shift: 0, role: 'caption' as const } : attachWhereItIs(doc, c, f, m, 'caption');
+      if (!a) continue;
+      doc.updateCaption(id, { attach: a, ...(side ? { justify: side === 'right' ? 'left' as const : side === 'left' ? 'right' as const : 'center' as const } : {}) });
+      n++;
+    }
+  });
+  editor.changed();
+  flash(n ? `Linked: the text now moves with its structure. Selecting either one shows the link.` : 'There is no structure to link it to.');
+}
+
+/** Format > Link Text to Structure: the selected text to the selected structure (or the nearest). */
+function linkText(): boolean {
+  const caps = [...editor.sel.captions].filter((id) => doc.captions.has(id));
+  if (!caps.length) return false;
+  const first = [...editor.sel.atoms].find((id) => doc.atoms.has(id));
+  tieCaptions(caps, first === undefined ? null : doc.fragmentOf(first));
+  return true;
+}
+
+/** Format > Unlink Text: the selected text (or the text tied to the selected structures) stays put. */
+function unlinkText(): boolean {
+  const ids = new Set([...editor.sel.captions].filter((id) => doc.captions.get(id)?.attach));
+  for (const c of doc.captions.values()) if (c.attach?.atoms.some((a) => editor.sel.atoms.has(a))) ids.add(c.id);
+  if (!ids.size) return false;
+  doc.edit('Unlink text', () => { for (const id of ids) doc.updateCaption(id, { attach: undefined }); });
+  editor.changed();
+  return true;
 }
 // ---------------------------------------------------------------- right-click menu on the drawing
 
@@ -4534,7 +7013,8 @@ function drawingMenu(): MenuItem[] {
       { cmd: 'paste' }, { cmd: 'paste-smiles' }, { cmd: 'select-all' }, null,
       { cmd: 'undo' }, { cmd: 'redo' }, null,
       ...(ws.active.mode === 'slides' ? [{ cmd: 'new-comment', label: 'New Comment' }, { cmd: 'show-comments', label: 'Show Comments' }, null] : []),
-      { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'connector-tool' }] : []), ...(ws.active.mode === 'slides' ? [{ cmd: 'slide-shapes', label: 'Shape…' }] : [])] },
+      ...(ws.active.mode === 'slides' || design ? [{ cmd: 'format-background', label: 'Format Background…' }, null] : []),
+      { label: 'Insert', items: [{ cmd: 'name-to-structure' }, { cmd: 'periodic-table' }, { cmd: 'insert-picture' }, { cmd: 'text-box' }, { cmd: 'insert-symbol' }, ...(design ? [{ cmd: 'design-shapes', label: 'Shape…' }, { cmd: 'design-icons', label: 'Icon…' }, { cmd: 'connector-tool' }] : []), ...(ws.active.mode === 'slides' ? [{ cmd: 'slide-shapes', label: 'Shape…' }, { cmd: 'slide-icons', label: 'Icon…' }] : [])] },
       { label: 'Scheme', items: [{ cmd: 'clean-up-reaction' }, { cmd: 'arrange-scheme' }, { cmd: 'number-compounds' }, { cmd: 'catalytic-cycle' }, { cmd: 'energy-diagram' }, { cmd: 'ts-brackets' }, null, { cmd: 'animate-reaction' }] },
       { cmd: 'drawing-style' },
       view,
@@ -4546,15 +7026,16 @@ function drawingMenu(): MenuItem[] {
     { cmd: 'distribute-h' }, { cmd: 'distribute-v' },
   ];
   const turn: MenuItem[] = [
-    { cmd: 'flip-h' }, { cmd: 'flip-v' }, null,
+    { cmd: 'flip-h' }, { cmd: 'flip-v' }, { cmd: 'flip-h-keep' }, { cmd: 'flip-v-keep' }, null,
     { cmd: 'rotate-cw' }, { cmd: 'rotate-ccw' }, { cmd: 'rotate-180' }, { cmd: 'rotate-dialog' }, null, { cmd: 'scale' },
   ];
   const order: MenuItem[] = shapes.length
     ? [{ cmd: 'shape-front', label: 'Bring to Front' }, { cmd: 'shape-forward', label: 'Bring Forward' }, { cmd: 'shape-backward', label: 'Send Backward' }, { cmd: 'shape-back', label: 'Send to Back' }]
     : [];
   return [
-    { cmd: 'cut' }, { cmd: 'copy' }, { cmd: 'paste' }, { cmd: 'delete', label: 'Delete' }, null,
+    { cmd: 'cut' }, { cmd: 'copy' }, { cmd: 'paste' }, { cmd: 'delete', label: 'Delete' }, { cmd: 'format-painter' }, null,
     ...(editor.selectedEnergy() !== null ? [{ cmd: 'edit-energy' }, null] : []),
+    ...(editor.selectedDiagram() !== null ? [{ cmd: 'edit-diagram' }, { cmd: 'diagram-to-shapes' }, null] : []),
     ...(atoms ? [{ label: 'Copy As', items: [{ cmd: 'copy-smiles' }, { cmd: 'copy-mol' }, { cmd: 'copy-cdxml' }] }, null] : []),
     ...(atoms ? [
       { cmd: 'clean-up' },
@@ -4580,10 +7061,24 @@ function drawingMenu(): MenuItem[] {
     ...(atoms ? [{ label: 'Label the Structure', items: [{ cmd: 'add-id-label' }, { cmd: 'add-caption' }, { cmd: 'attach-descriptors' }, null, { cmd: 'number-compounds' }] }] : []),
     { cmd: 'scale' },
     ...(atoms || shapes.some((x) => x.kind === 'ring') ? [{ label: 'Highlight and Fill', items: [{ cmd: 'highlight' }, { cmd: 'remove-highlight' }, { cmd: 'highlight-look' }, { cmd: 'select-highlight' }, null, { cmd: 'smooth-highlight' }, { cmd: 'centre-highlight' }, { cmd: 'soft-highlight' }, { cmd: 'outline-highlight' }, { cmd: 'shadow-highlight' }, { cmd: 'glow-highlight' }, { cmd: 'save-highlight-look' }, null, { cmd: 'fill-rings' }, { cmd: 'ring-shadow' }] }] : []),
+    ...(s.captions.size ? [{ cmd: 'link-text' }] : []),
+    ...([...s.captions].some((id) => doc.captions.get(id)?.runs.some((r) => r.link))
+      ? [{ cmd: 'open-link', label: 'Open Link' }, { cmd: 'insert-link', label: 'Edit Link…' }, { cmd: 'remove-link', label: 'Remove Link' }]
+      : s.captions.size ? [{ cmd: 'insert-link', label: 'Link…' }] : []),
+    ...([...s.captions].some((id) => doc.captions.get(id)?.attach) ? [{ cmd: 'unlink-text' }] : []),
+    ...(selectedGroups(doc, s).size ? [{ cmd: 'ungroup' }] : []),
+    ...(s.atoms.size + s.captions.size + s.arrows.size + s.shapes.size > 1 ? [{ cmd: 'group' }] : []),
     { label: 'Align', items: arrange },
     { label: 'Rotate or Flip', items: turn },
     ...(order.length ? [{ label: 'Order', items: order }] : []),
-    ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }, { label: 'Picture Style', items: PICTURE_STYLES.map((p) => ({ cmd: `picture-style-${p.id}`, label: p.name })) }] : []),
+    ...(shapes.some((x) => x.chart) ? [{ cmd: 'edit-chart', label: 'Edit Chart…' }] : []),
+    ...((shapes.length === 1 && shapes[0].kind === 'picture') || (atoms && !shapes.length) ? [{ cmd: 'alt-text', label: 'Alt Text…' }] : []),
+    ...(shapes.some((x) => x.kind === 'geo' && !x.diagram) ? [
+      { cmd: 'shape-styles-here', label: 'Shape Style…' },
+      { label: 'Shape Effects', items: effectsMenu() },
+      { label: 'Shape Fill', items: [{ cmd: 'shape-picture-fill', label: 'Picture…' }, { cmd: 'shape-no-picture-fill', label: 'No Picture' }] },
+    ] : []),
+    ...(shapes.some((x) => x.kind === 'picture') ? [{ cmd: 'crop' }, { cmd: 'picture-format' }, { label: 'Picture Style', items: PICTURE_STYLES.map((p) => ({ cmd: `picture-style-${p.id}`, label: p.name })) }] : []),
     ...(ws.active.mode === 'slides' ? [{ label: 'Animation', items: [
       ...ANIM_COMMANDS.slice(0, EFFECTS.length), null, ...ANIM_COMMANDS.slice(EFFECTS.length), null,
       { cmd: 'remove-animation', label: 'Remove Animation' }, { cmd: 'animation-pane', label: 'Animation Pane' }, { cmd: 'preview-slide', label: 'Preview Slide' },
@@ -4685,12 +7180,19 @@ editor.onContextMenu = (e) => {
   finishTyping();
   const h = editor.contextPick(e);
   contextBond = h?.kind === 'bond' ? h.id : null;
+  rightClickAt = { left: e.clientX, bottom: e.clientY };
   showContextMenu(e.clientX, e.clientY, drawingMenu(), { run: (cmd) => void command(cmd), key: commandKey });
 };
 
 stylePanel.cropWithMouse = () => cropPicture();
+stylePanel.formatPicture = () => void formatPicture();
 stylePanel.removeWhite = (ids) => void removeWhite(ids);
 stylePanel.frames = { add: () => void command('add-frame'), fit: (id) => editor.fitFrame(id) };
+stylePanel.diagram = {
+  edit: (id) => void smartDiagram(id),
+  restyle: (id, patch) => { const d = doc.shapes.get(id)?.diagram; if (d) editor.putDiagramAt({ ...d, ...patch }, pasteCentre(), id); },
+  ungroup: (id) => editor.ungroupSelectedDiagram(id),
+};
 stylePanel.energy = {
   edit: (id) => void energyDiagram(id),
   restyle: (id, patch) => { const d = doc.shapes.get(id)?.energy; if (d) editor.putEnergyDiagram({ ...d, ...patch }, pasteCentre(), id); },
@@ -4698,6 +7200,97 @@ stylePanel.energy = {
 stylePanel.ringFill = () => void command('fill-rings');
 stylePanel.highlightUsed = (c) => { highlightColour = c; };
 stylePanel.highlightStyleUsed = (st) => { highlightStyle = tidyStyle(st); };
+// ---------------------------------------------------------------- Format Painter
+
+/** What the brush holds: the look of some text, of things on a drawing, or the formats of cells. */
+type HeldLook = { kind: 'text'; look: TextLook } | { kind: 'things'; look: ObjectLook } | { kind: 'cells'; block: CellBlock };
+const brush = new Brush<HeldLook>();
+const PAINTER_BUTTONS = '[data-cmd="format-painter"]:not([role="menuitem"]), [data-doc="format-painter"], [data-sh="format-painter"]';
+
+/** Home > Format Painter (every mode): pick up the look of the selection; a double-click keeps the brush. */
+function formatPainter(): void {
+  const where = sheetActive() ? 'sheet' : docActive() ? 'document' : 'drawing';
+  const got = brush.press(where, (): HeldLook | null => {
+    if (where === 'sheet') { const block = sheetMode.pickFormats(); return block && { kind: 'cells', block }; }
+    if (where === 'document') { const look = docMode.pickLook(); return look && { kind: 'text', look }; }
+    const cap = editor.typingCaption;
+    if (cap) return { kind: 'text', look: cap.ed.pickLook() };
+    const look = pickObjectLook(editor.doc, editor.sel);
+    return look && { kind: 'things', look };
+  });
+  if (got === 'picked') flash(where === 'sheet' ? 'Format Painter: click or drag over the cells to give them these formats. Double-click the button to keep painting; Esc stops.' : 'Format Painter: click or drag over what should take this look. Double-click the button to keep painting; Esc stops.', 6000);
+  else if (got === 'sticky') flash('Format Painter stays on: paint as many things as you like, then press Esc or click Format Painter again.', 6000);
+  else if (got === 'nothing') flash(where === 'sheet' ? 'Select the cells whose formats you want to copy, then click Format Painter.' : 'Select what has the look you want to copy (or put the caret in the text), then click Format Painter.');
+  else if (got === 'dropped') flash('Format Painter off.');
+}
+
+/** The text look the brush holds (text picked up, or the text of a caption or shape picked up). */
+function heldText(): TextLook | undefined {
+  const l = brush.look;
+  return l?.kind === 'text' ? l.look : l?.kind === 'things' ? l.look.text : undefined;
+}
+
+/** Paint text being typed in (a document, a caption, a text box or a cell of a table). */
+function paintText(ed: import('./text/editing').TextEditing): void {
+  const look = heldText();
+  if (look && ed.paintLook(look)) brush.used();
+}
+
+/** Paint things clicked or boxed on a drawing, slide or design. A click on empty space puts a one-off brush down. */
+function paintThings(sel: { atoms: Set<number>; bonds: Set<number>; captions: Set<number>; arrows: Set<number>; shapes: Set<number> }): void {
+  const l = brush.look;
+  if (!l || l.kind === 'cells') return;
+  const look: ObjectLook = l.kind === 'things' ? l.look : { text: l.look, colour: { color: l.look.run.color } };
+  const any = sel.atoms.size + sel.bonds.size + sel.captions.size + sel.arrows.size + sel.shapes.size > 0;
+  let n = 0;
+  if (any) editor.doc.edit('Format Painter', () => { n = paintObjects(editor.doc, sel, look); });
+  if (n) { editor.changed(); brush.used(); }
+  else if (!any) brush.used();
+  else flash('That has no look to take from what was picked up (a table or chart keeps its own).');
+}
+
+brush.onChange = () => {
+  const l = brush.look;
+  editor.painter = l && l.kind !== 'cells' ? { things: paintThings, text: paintText } : null;
+  docMode.painter = heldText() ? paintText : null;
+  sheetMode.view.painter = l?.kind === 'cells' ? () => { sheetMode.paintFormats(l.block); brush.used(); } : null;
+  for (const b of document.querySelectorAll(PAINTER_BUTTONS)) b.setAttribute('aria-pressed', String(!!l));
+  editor.requestOverlay();
+};
+
+// Escape puts the brush down (before anything else sees the key; a window's own Escape comes first)
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !brush.held || (e.target as Element | null)?.closest?.('dialog')) return;
+  e.preventDefault();
+  e.stopPropagation();
+  brush.drop();
+  flash('Format Painter off.');
+}, true);
+
+// ---------------------------------------------------------------- Insert > Symbol
+
+const symbolWindow = new SymbolWindow({
+  insert: (ch) => {
+    if (sheetActive()) {
+      if (sheetMode.view.typeText(ch)) return true;
+      flash('Pick a cell to type the symbol into.');
+      return false;
+    }
+    if (docActive()) {
+      if (docMode.insertText(ch)) return true;
+      flash('Symbols can\'t be typed in Read Mode: go back to Print Layout (View).');
+      return false;
+    }
+    const cap = editor.typingCaption;
+    if (cap) cap.ed.type(ch);
+    else editor.typeNew(ch);
+    return true;
+  },
+  recent: () => recentSymbols,
+  used: (ch) => { recentSymbols = addRecentSymbol(recentSymbols, ch); storeSettings(); },
+  warn: (ch) => (ws.active.mode === 'drawing' && !savableChar(ch) ? 'ChemDraw may not show this character in a ChemDraw file (it isn\'t in its usual fonts or the Symbol font).' : ''),
+});
+
 stylePanel.highlightLooks = { list: allLooks, apply: (l) => applyHighlightLook(l), save: () => void saveHighlightLook() };
 
 // ---------------------------------------------------------------- toolboxes (View > Toolboxes)
@@ -4708,7 +7301,7 @@ const toolsNav = $<HTMLElement>('#tools');
 
 /** Every tool on the tool bar (palette items too), by name, for toolboxes. */
 const ALL_TOOLS = new Map<string, { title: string; icon: string }>();
-for (const group of TOOL_GROUPS) {
+for (const group of [...TOOL_GROUPS, OFF_BAR]) {
   for (const item of group) {
     const pal = 'palette' in item ? item : null;
     for (const t of pal ? pal.items : [item as { name: string; title: string }]) {
@@ -4753,10 +7346,6 @@ function toolButton(name: string): HTMLButtonElement | null {
 }
 
 const runFromToolbox = (cmd: string) => { finishTyping(); command(cmd); };
-const sep = () => { const d = document.createElement('div'); d.className = 'tb-sep'; return d; };
-const cmdRow = (body: HTMLElement, cmds: (string | [string, string] | null)[]) => {
-  for (const c of cmds) body.append(!c ? sep() : typeof c === 'string' ? commandButton(c, runFromToolbox) : commandButton(c[0], runFromToolbox, c[1]));
-};
 
 /** What the Colours toolbox's swatches do: colour the lines and text, highlight, or fill. */
 let colourMode: 'line' | 'highlight' | 'fill' = 'line';
@@ -4788,124 +7377,262 @@ function looksList(vertical: boolean): HTMLElement {
   return box;
 }
 
-const TOOLBOX_DEFS: ToolboxDef[] = [
-  { id: 'main', title: 'Drawing Tools', build: (body) => body.append(toolsNav) },
-  {
-    id: 'structure', title: 'Structure',
-    build: (body) => cmdRow(body, ['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'add-id-label', 'add-caption', 'attach-descriptors', 'number-compounds', null, 'contract-label', 'expand-label', 'hapto-bond', 'name-to-structure']),
-  },
-  {
-    id: 'arrange', title: 'Object',
-    build: (body) => cmdRow(body, ['align-left', 'align-hcenter', 'align-right', 'align-top', 'align-vcenter', 'align-bottom', null, 'distribute-h', 'distribute-v', null, 'flip-h', 'flip-v', 'rotate-cw', 'rotate-ccw', null, 'shape-front', 'shape-back']),
-  },
-  {
-    id: 'templates', title: 'Templates',
-    build: (body, vertical) => {
-      // (many templates: the box scrolls rather than run off the window)
-      body.classList.add('tb-grid', 'tb-scroll');
-      body.style.setProperty('--cols', vertical ? '2' : '12');
-      for (const group of TOOL_GROUPS) for (const item of group) {
-        if (!('palette' in item) || !item.palette.startsWith('tpl-') || item.palette === 'tpl-own') continue;
-        // a heading over each palette's buttons, so the families are easy to find
-        const head = document.createElement('div');
-        head.className = 'tb-heading';
-        head.textContent = head.title = item.title;
-        body.append(head);
-        for (const t of item.items) { const b = toolButton(t.name); if (b) body.append(b); }
-      }
-    },
-  },
-  {
-    id: 'colours', title: 'Colours',
-    build: (body, vertical) => {
-      const modes = document.createElement('div');
-      modes.className = 'tb-modes';
-      // in Highlight mode, the saved looks too
-      const looks = looksList(vertical);
-      looks.hidden = colourMode !== 'highlight';
-      for (const [m, label, title] of [['line', 'Colour', 'Colour the lines and text'], ['highlight', 'Highlight', 'A band of colour behind atoms and bonds'], ['fill', 'Fill', 'Fill shapes and ring fills']] as const) {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.textContent = label;
-        b.title = title;
-        b.setAttribute('aria-pressed', String(colourMode === m));
-        b.addEventListener('click', () => { colourMode = m; for (const o of modes.children) o.setAttribute('aria-pressed', String(o === b)); looks.hidden = m !== 'highlight'; });
-        modes.append(b);
-      }
-      const grid = document.createElement('div');
-      grid.className = 'tb-swatches';
-      const swatch = (c: string | undefined) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'tb-swatch';
-        if (c) b.style.background = c; else { b.textContent = '∅'; b.style.fontSize = '11px'; }
-        b.title = c ? c.toUpperCase() : 'None: take the colour, highlight or fill off';
-        b.setAttribute('aria-label', b.title);
-        b.addEventListener('click', () => {
-          if (!editor.colourSelection(c, colourMode)) flash('Select what to colour first.');
-          else if (colourMode === 'highlight' && c) highlightColour = c;
-        });
-        return b;
-      };
-      grid.append(swatch(undefined));
-      for (const c of [...STANDARD_COLOURS, '#ffffff']) grid.append(swatch(c));
-      for (const p of getPalettes()) {
-        if (!p.colors.length) continue;
-        const n = document.createElement('div');
-        n.className = 'tb-swatch-name';
-        n.textContent = p.name;
-        grid.append(n, ...p.colors.map((c) => swatch(c)));
-      }
-      body.append(modes, grid, looks);
-      if (vertical) body.style.maxWidth = '110px';
-    },
-  },
-  {
-    id: 'highlight', title: 'Highlight',
-    build: (body, vertical) => {
-      cmdRow(body, ['highlight', 'remove-highlight', null, ['smooth-highlight', 'Smooth'], ['centre-highlight', 'Centre'], ['soft-highlight', 'Soft'], ['outline-highlight', 'Outline only'], ['shadow-highlight', 'Shadow'], ['glow-highlight', 'Glow'], null, ['save-highlight-look', 'Save look…']]);
-      body.append(looksList(vertical));
-    },
-  },
-  {
-    id: 'custom', title: 'My Toolbox',
-    build: (body) => {
-      for (const k of toolboxState.custom) {
-        const [kind, name] = [k.slice(0, k.indexOf(':')), k.slice(k.indexOf(':') + 1)];
-        const b = kind === 'tool' ? toolButton(name) : commandButton(name, runFromToolbox);
-        if (b) body.append(b);
-      }
-      const edit = commandButton('customize-toolbox', runFromToolbox, toolboxState.custom.length ? '…' : 'Choose what goes here…');
-      edit.title = 'Choose What Is in My Toolbox';
-      body.append(edit);
-    },
-  },
-];
+/** The toolboxes' names, as they come. */
+const BOX_TITLES: Record<string, string> = {
+  main: 'Drawing Tools', structure: 'Structure', arrange: 'Object', templates: 'Templates', colours: 'Colours', highlight: 'Highlight', custom: 'My Toolbox', details: 'Side Panel',
+};
+/** What the toolboxes of buttons come with ("cmd:", "tool:", "pal:", "w:looks", "sep"). */
+const cmds = (list: (string | null)[]) => list.map((c) => (c ? `cmd:${c}` : 'sep'));
+const BOX_ITEMS: Record<string, readonly string[]> = {
+  main: MAIN_ITEMS,
+  structure: cmds(['clean-up', 'add-frame', 'fill-rings', 'highlight', 'remove-highlight', null, 'chain-ends', 'explicit-h', 'aromatic-circles', 'stereo-labels', null, 'add-id-label', 'add-caption', 'attach-descriptors', 'number-compounds', null, 'contract-label', 'expand-label', 'hapto-bond', 'name-to-structure']),
+  arrange: cmds(['align-left', 'align-hcenter', 'align-right', 'align-top', 'align-vcenter', 'align-bottom', null, 'distribute-h', 'distribute-v', null, 'flip-h', 'flip-v', 'rotate-cw', 'rotate-ccw', null, 'shape-front', 'shape-back']),
+  highlight: [...cmds(['highlight', 'remove-highlight', null, 'smooth-highlight', 'centre-highlight', 'soft-highlight', 'outline-highlight', 'shadow-highlight', 'glow-highlight', null, 'save-highlight-look']), 'w:looks'],
+  custom: defaultToolboxes().custom,
+};
+/** Short names on toolbox buttons for commands with no icon. */
+const SHORT_LABEL: Record<string, string> = {
+  'smooth-highlight': 'Smooth', 'centre-highlight': 'Centre', 'soft-highlight': 'Soft', 'outline-highlight': 'Outline only',
+  'shadow-highlight': 'Shadow', 'glow-highlight': 'Glow', 'save-highlight-look': 'Save look…',
+};
 
-// The side panel (Style, Warnings, Analysis; Format in documents, Cell in sheets) is a toolbox,
-// docked at the right to start with. Its arrow goes with it, so it shows even when the title bar is
-// locked away.
-TOOLBOX_DEFS.push({ id: 'details', title: 'Side Panel', build: (body) => { body.before($('#side-fold')); body.append(sideContent); } });
+/** The tools a fly-out palette comes with. */
+const givenTools = (name: string): string[] => PALETTES.get(name)?.items.filter((t) => ALL_TOOLS.has(t.name)).map((t) => t.name) ?? [];
 
-const toolboxes = new Toolboxes(TOOLBOX_DEFS, {
+/** A fly-out's tools on their grid, as Customize Toolboxes has them. */
+function paletteGrid(name: string): Grid {
+  return flyGrid(toolboxState, name, toolboxState.flyouts?.[name] ?? givenTools(name), PALETTES.get(name)?.columns ?? 3);
+}
+
+/** A fly-out palette with the tools Customize Toolboxes gave it, on their grid (null when it has none). */
+function paletteNow(name: string): PaletteDef | null {
+  const base = PALETTES.get(name);
+  if (!base) return null;
+  // (My templates holds what you save, so its tools aren't chosen)
+  if ((!toolboxState.flyouts?.[name] && !toolboxState.flyGrids?.[name]) || name === 'tpl-own') return base.items.length ? base : null;
+  const g = paletteGrid(name);
+  const tool = (n: string) => base.items.find((i) => i.name === n) ?? (ALL_TOOLS.has(n) ? { name: n, title: ALL_TOOLS.get(n)!.title } : null);
+  const cells = g.cells.map((n) => (n && tool(n) ? n : null));
+  const items = cells.filter((n): n is string => !!n).map((n) => tool(n)!);
+  return items.length ? { ...base, items, cells, columns: g.cols } : null;
+}
+
+/** How each toolbox's grid shows now, and what it does when the window is too short for it. */
+const SHOWN = new WeakMap<HTMLElement, { s: Shown; wrap: boolean; across: boolean }>();
+
+/**
+ * A toolbox's buttons, as Customize Toolboxes has them: tools, palettes, commands and the
+ * highlight looks, each in its cell of the toolbox's grid (empty cells kept, so groups stay apart).
+ */
+function buildBox(body: HTMLElement, id: string, vertical: boolean): void {
+  const g = boxGrid(toolboxState, id, BOX_ITEMS[id]);
+  const dock = toolboxState.places[id]?.dock ?? 'float';
+  const s = shownGrid(g, dock);
+  const cells = document.createElement('div');
+  cells.className = 'tb-cells';
+  cells.style.gridTemplateColumns = `repeat(${s.cols}, minmax(34px, auto))`;
+  const make = (k: string): HTMLElement | null => {
+    const name = k.slice(k.indexOf(':') + 1);
+    // the drawing tools' buttons are the tool bar's own (it shows the one in use, and each palette's last pick)
+    if (k.startsWith('tool:')) { const t = ALL_TOOLS.get(name); return id === 'main' ? (t ? toolbar.toolButton({ name, title: t.title }) : null) : toolButton(name); }
+    if (k.startsWith('pal:')) { const p = paletteNow(name); return p && toolbar.paletteButton(p); }
+    if (k.startsWith('cmd:')) return commandButton(name, runFromToolbox, SHORT_LABEL[name]);
+    if (k === 'w:looks') return looksList(vertical);
+    return null;
+  };
+  const fillCells = () => {
+    g.cells.forEach((k, i) => {
+      const b = (k && make(k)) || Object.assign(document.createElement('span'), { className: 'tb-gap' });
+      b.classList.add('tb-cell');
+      b.dataset.cell = String(i);
+      if (k === 'w:looks') b.classList.add('tb-wide');
+      cells.append(b);
+    });
+  };
+  const wrap = overflowOf(toolboxState, id) === 'wrap';
+  SHOWN.set(cells, { s, wrap, across: dock === 'top' || dock === 'bottom' });
+  if (id === 'main') { toolbar.fill((root) => { fillCells(); root.append(cells); }); body.append(toolsNav); }
+  else { fillCells(); body.append(cells); }
+  layCells(cells);
+  if (id !== 'main' && !gridItems(g).length) {
+    const edit = commandButton('customize-toolbox', () => openCustomToolbox(id), 'Choose what goes here…');
+    edit.title = 'Customize Toolboxes: drag tools and commands into this one';
+    body.append(edit);
+  }
+}
+
+/** The toolboxes laid out by the app itself (the rest show buttons chosen in Customize Toolboxes). */
+const SPECIAL_BOXES: Record<string, (body: HTMLElement, vertical: boolean) => void> = {
+  templates: (body, vertical) => {
+    // (many templates: the box scrolls rather than run off the window)
+    body.classList.add('tb-grid', 'tb-scroll');
+    body.style.setProperty('--cols', vertical ? '2' : '12');
+    for (const group of TOOL_GROUPS) for (const item of group) {
+      if (!('palette' in item) || !item.palette.startsWith('tpl-') || item.palette === 'tpl-own') continue;
+      // a heading over each palette's buttons, so the families are easy to find
+      const head = document.createElement('div');
+      head.className = 'tb-heading';
+      head.textContent = head.title = item.title;
+      body.append(head);
+      for (const t of item.items) { const b = toolButton(t.name); if (b) body.append(b); }
+    }
+  },
+  colours: (body, vertical) => {
+    const modes = document.createElement('div');
+    modes.className = 'tb-modes';
+    // in Highlight mode, the saved looks too
+    const looks = looksList(vertical);
+    looks.hidden = colourMode !== 'highlight';
+    for (const [m, label, title] of [['line', 'Colour', 'Colour the lines and text'], ['highlight', 'Highlight', 'A band of colour behind atoms and bonds'], ['fill', 'Fill', 'Fill shapes and ring fills']] as const) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.title = title;
+      b.setAttribute('aria-pressed', String(colourMode === m));
+      b.addEventListener('click', () => { colourMode = m; for (const o of modes.children) o.setAttribute('aria-pressed', String(o === b)); looks.hidden = m !== 'highlight'; });
+      modes.append(b);
+    }
+    const grid = document.createElement('div');
+    grid.className = 'tb-swatches';
+    const swatch = (c: string | undefined) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tb-swatch';
+      if (c) b.style.background = c; else { b.textContent = '∅'; b.style.fontSize = '11px'; }
+      b.title = c ? c.toUpperCase() : 'None: take the colour, highlight or fill off';
+      b.setAttribute('aria-label', b.title);
+      b.addEventListener('click', () => {
+        if (!editor.colourSelection(c, colourMode)) flash('Select what to colour first.');
+        else if (colourMode === 'highlight' && c) highlightColour = c;
+      });
+      return b;
+    };
+    grid.append(swatch(undefined));
+    for (const c of [...STANDARD_COLOURS, '#ffffff']) grid.append(swatch(c));
+    for (const p of getPalettes()) {
+      if (!p.colors.length) continue;
+      const n = document.createElement('div');
+      n.className = 'tb-swatch-name';
+      n.textContent = p.name;
+      grid.append(n, ...p.colors.map((c) => swatch(c)));
+    }
+    body.append(modes, grid, looks);
+    if (vertical) body.style.maxWidth = '110px';
+  },
+  // The side panel (Style, Warnings, Analysis; Format in documents, Cell in sheets) is a toolbox,
+  // docked at the right to start with. Its arrow goes with it, so it shows even when the title bar is
+  // locked away.
+  details: (body) => { body.before($('#side-fold')); body.append(sideContent); },
+};
+
+/** The toolboxes there are now (the drawing tools first, as the others' buttons may come from its bar). */
+function toolboxDefs(): ToolboxDef[] {
+  const ids = boxIds(toolboxState);
+  return ['main', ...ids.filter((id) => id !== 'main')].map((id) => ({
+    id,
+    title: boxTitle(toolboxState, id, BOX_TITLES[id]),
+    build: (body: HTMLElement, vertical: boolean) => (SPECIAL_BOXES[id] && !isEditable(id) ? SPECIAL_BOXES[id](body, vertical) : buildBox(body, id, vertical)),
+  }));
+}
+
+const toolboxes = new Toolboxes(toolboxDefs, {
   get: () => toolboxState,
   set: (st) => { toolboxState = st; tickToolboxes(); storeSettings(); placeSidePanel(); },
   work: () => $('#work'),
-  customize: () => openCustomToolbox(),
+  customize: (id) => openCustomToolbox(id),
   // each mode keeps the side panel folded or open on its own
   folded: (id) => (id === 'details' ? sideIsFolded() : undefined),
   fold: (id) => { if (id !== 'details') return false; command('fold-side'); return true; },
+  say: (text) => flash(text),
+  rendered: () => fitTools(),
 });
+
+/**
+ * Put a toolbox's buttons in their cells on screen: as the grid has them, or wrapped when only
+ * `fit` rows (columns, along the top or bottom) have room. Thin lines go between the rows that have them.
+ */
+function layCells(cells: HTMLElement, fit?: number): void {
+  const info = SHOWN.get(cells);
+  if (!info) return;
+  const { s, across } = info;
+  const full = across ? s.cols : s.rows;
+  const { at, starts } = wrapped(s, Math.min(full, fit ?? full), across);
+  const blocks = starts.length;
+  // the longest block sets how many rows (columns, along the top or bottom) there are
+  const len = Math.max(...starts.map((st, b) => (starts[b + 1] ?? full) - st));
+  cells.style.gridTemplateColumns = `repeat(${across ? len : s.cols * blocks}, minmax(34px, auto))`;
+  cells.style.gridTemplateRows = `repeat(${across ? s.rows * blocks : len}, minmax(32px, auto))`;
+  cells.querySelectorAll('.tb-line').forEach((l) => l.remove());
+  // a line where a block starts is not needed: the blocks stand apart
+  const lineRows = new Set(across ? s.lineRows : s.lineRows.filter((r) => !starts.includes(r)));
+  const lineCols = new Set(across ? s.lineCols.filter((c) => !starts.includes(c)) : s.lineCols);
+  for (const el of cells.querySelectorAll<HTMLElement>(':scope > .tb-cell')) {
+    const i = Number(el.dataset.cell);
+    const p = at[i], o = s.at[i];
+    el.style.gridRow = String(p.r + 1);
+    const room = across ? len - p.c : s.cols - (p.c % s.cols);
+    el.style.gridColumn = el.classList.contains('tb-wide') ? `${p.c + 1} / span ${Math.max(1, room)}` : String(p.c + 1);
+    el.classList.toggle('tb-after-line', lineRows.has(o.r));
+    el.classList.toggle('tb-after-vline', lineCols.has(o.c));
+    el.classList.toggle('tb-block', p.start);
+  }
+  // the lines themselves, across each block of the grid (or down it, turned on its side)
+  const line = (r: number, c: number, span: number, down: boolean) => {
+    const l = document.createElement('div');
+    l.className = 'tb-line' + (down ? ' down' : '');
+    l.style.gridRow = down ? `${r + 1} / span ${span}` : String(r + 1);
+    l.style.gridColumn = down ? String(c + 1) : `${c + 1} / span ${span}`;
+    cells.append(l);
+  };
+  const size = (b: number) => (starts[b + 1] ?? full) - starts[b];
+  for (let b = 0; b < blocks; b++) {
+    if (!across) {
+      for (const r of lineRows) { const k = inBlock(starts, r); if (k.b === b) line(k.i, b * s.cols, s.cols, false); }
+      for (const c of lineCols) line(0, b * s.cols + c, size(b), true);
+    } else {
+      for (const r of lineRows) line(b * s.rows + r, 0, size(b), false);
+      for (const c of lineCols) { const k = inBlock(starts, c); if (k.b === b) line(b * s.rows, k.i, s.rows, true); }
+    }
+  }
+}
+
+/**
+ * A toolbox set to wrap, with too little room for its grid, takes fewer rows and puts the rest in
+ * more columns beside them (or, along the top or bottom, fewer columns and more rows). One set to
+ * scroll scrolls. A dock down a side fades at its foot while there is more below to scroll to.
+ */
+function fitTools(): void {
+  const all = [...document.querySelectorAll<HTMLElement>('.toolbox .tb-cells')].filter((c) => SHOWN.has(c));
+  for (const c of all) layCells(c);
+  for (const c of all) {
+    const { s, wrap, across } = SHOWN.get(c)!;
+    const box = c.closest<HTMLElement>('.toolbox');
+    if (!wrap || !box || box.classList.contains('collapsed')) continue;
+    const dock = box.parentElement!;
+    const floating = box.classList.contains('floating');
+    const over = () => (floating ? box.scrollHeight > box.clientHeight + 1 : across ? c.scrollWidth > dock.clientWidth - 16 : dock.scrollHeight > dock.clientHeight + 1);
+    for (let f = (across ? s.cols : s.rows) - 1; f >= 1 && over(); f--) layCells(c, f);
+  }
+  fadeDocks();
+}
+function fadeDocks(): void {
+  for (const d of document.querySelectorAll<HTMLElement>('.dock-v')) d.classList.toggle('more-below', d.scrollTop + d.clientHeight < d.scrollHeight - 2);
+}
+for (const d of document.querySelectorAll<HTMLElement>('.dock-v')) d.addEventListener('scroll', fadeDocks, { passive: true });
+addEventListener('resize', () => fitTools());
 
 /** Tick the shown toolboxes and the lock in the View menu, and show the lock on its button. */
 function tickToolboxes(): void {
-  for (const id of ['main', 'structure', 'arrange', 'templates', 'colours', 'highlight', 'custom'] as ToolboxId[]) $(`[data-cmd="toolbox-${id}"]`)?.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
+  fillToolboxMenu();
   $('[data-cmd="lock-toolboxes"]')?.setAttribute('aria-checked', String(toolboxState.locked));
   $('[data-cmd="fold-side"]')?.setAttribute('aria-checked', String(sideIsFolded()));
   const lock = $('#btn-lock');
   lock.setAttribute('aria-pressed', String(toolboxState.locked));
   lock.querySelector('.lock-icon')!.innerHTML = lockIcon(toolboxState.locked);
   lock.querySelector('.lock-text')!.textContent = toolboxState.locked ? 'Locked' : 'Unlocked';
+  lock.title = toolboxState.locked
+    ? 'Toolbox layout locked: the toolboxes stay where they are. Click to unlock every toolbox, then drag one by its title to move it. This locks the layout only, never the drawing.'
+    : 'Toolbox layout unlocked: drag a toolbox by its title to an edge to dock it, or anywhere to float it. Click to lock every toolbox where it is.';
 }
 
 /** Show the side panel folded or open as the mode showing has it, and its arrow to match. */
@@ -4919,21 +7646,148 @@ function placeSidePanel(): void {
 }
 $('#side-fold').addEventListener('click', () => command('fold-side'));
 
-/** The side panel is folded away in the mode showing (each mode keeps its own choice). */
+/** Below this window width the side panel folds by itself, so the drawing keeps its room. */
+const NARROW_WINDOW = 1200;
+const narrowWindow = () => innerWidth < NARROW_WINDOW;
+/** The side panel opened by hand while the window is narrow (forgotten when it widens). */
+let narrowOpen = false;
+
+/** The side panel is folded away in the mode showing (each mode keeps its own choice), or the window is narrow. */
 function sideIsFolded(): boolean {
-  return sideFolded(toolboxState, ws.active.mode);
+  return sideFolded(toolboxState, ws.active.mode) || (narrowWindow() && !narrowOpen);
 }
+
+/** Fold or open the side panel. In a narrow window that lasts until it widens; otherwise it is kept for the mode. */
+function foldSide(fold: boolean): void {
+  if (narrowWindow()) {
+    narrowOpen = !fold;
+    if (!fold && sideFolded(toolboxState, ws.active.mode)) { toolboxes.setSideCollapsed(ws.active.mode, false); return; }
+    placeSidePanel();
+    tickToolboxes();
+    return;
+  }
+  toolboxes.setSideCollapsed(ws.active.mode, fold);
+}
+let wasNarrow = narrowWindow();
+addEventListener('resize', () => {
+  const now = narrowWindow();
+  if (now === wasNarrow) return;
+  wasNarrow = now;
+  if (!now) narrowOpen = false;
+  placeSidePanel();
+  tickToolboxes();
+});
 $('#btn-lock').addEventListener('click', () => command('lock-toolboxes'));
 
-function openCustomToolbox(): void {
-  const tools: Pickable[] = [...ALL_TOOLS].map(([name, t]) => ({ key: `tool:${name}`, label: t.title.split(/[.:] /)[0], icon: t.icon }));
-  const groups = [{ name: 'Drawing tools', items: tools }, ...menuCommands().filter((g) => g.items.length).map((g) => ({ name: `${g.menu} menu`, items: g.items.map((c) => ({ key: `cmd:${c.cmd}`, label: c.label })) }))];
-  customizeToolbox(groups, () => toolboxState.custom, (items) => {
-    toolboxState = { ...toolboxState, custom: items, places: { ...toolboxState.places, custom: { ...toolboxState.places.custom, shown: true } } };
-    tickToolboxes();
-    storeSettings();
-    toolboxes.render();
+/** Where View > Toolboxes' entries start (the line above them). */
+let toolboxMenuTop: Element | null = null;
+
+/** View > Toolboxes: a ticked entry for each toolbox there is now, named and in the order Customize Toolboxes has them. */
+function fillToolboxMenu(): void {
+  const first = document.querySelector<HTMLElement>('header .menu [data-cmd^="toolbox-"]');
+  if (!first) return;
+  toolboxMenuTop ??= first.previousElementSibling;
+  const menu = first.parentElement!;
+  const have = new Map([...menu.querySelectorAll<HTMLElement>(':scope > [data-cmd^="toolbox-"]')].map((b) => [b.dataset.cmd!.slice('toolbox-'.length), b]));
+  let at = toolboxMenuTop;
+  for (const id of boxIds(toolboxState)) {
+    if (id === 'details') continue;
+    let b = have.get(id);
+    if (!b) {
+      b = document.createElement('button');
+      b.setAttribute('role', 'menuitemcheckbox');
+      b.dataset.cmd = `toolbox-${id}`;
+      b.title = 'A toolbox of your own (View > Toolboxes > Customize Toolboxes changes it)';
+      b.append(document.createElement('span'));
+    }
+    have.delete(id);
+    b.hidden = false;
+    b.querySelector('span')!.textContent = `Toolbox: ${boxTitle(toolboxState, id, BOX_TITLES[id])}`;
+    b.setAttribute('aria-checked', String(!!toolboxState.places[id]?.shown));
+    if (at) at.after(b); else menu.prepend(b);
+    at = b;
+  }
+  // deleted ones: your own go, the app's wait for Restore
+  for (const [id, b] of have) { if (isOwnBox(id)) b.remove(); else b.hidden = true; }
+}
+
+/** A tool's or command's name and icon in Customize Toolboxes. */
+function describeItem(key: string): Pickable {
+  const name = key.slice(key.indexOf(':') + 1);
+  if (key === 'sep') return { key, label: 'Divider', icon: undefined };
+  if (key === 'w:looks') return { key, label: 'Highlight looks', icon: LOOKS_ICON };
+  if (key.startsWith('tool:')) { const t = ALL_TOOLS.get(name); return { key, label: t ? t.title.split(/[.:] /)[0] : name, icon: t?.icon }; }
+  if (key.startsWith('pal:')) { const p = PALETTES.get(name); return { key, label: p?.title ?? name, icon: p?.items[0] && (ALL_TOOLS.get(p.items[0].name)?.icon) }; }
+  return { key, label: topMenuEntry(name)?.label ?? SHORT_LABEL[name] ?? name, icon: commandIcon(name) };
+}
+const LOOKS_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="7" r="2.2" fill="currentColor" fill-opacity="0.35"/><circle cx="6" cy="12" r="2.2"/><circle cx="6" cy="17" r="2.2" fill="currentColor" fill-opacity="0.6"/><line x1="11" y1="7" x2="20" y2="7"/><line x1="11" y1="12" x2="20" y2="12"/><line x1="11" y1="17" x2="18" y2="17"/></svg>';
+
+/** Everything that can go in a toolbox, for Customize Toolboxes' list. */
+function toolboxCatalogue(): { name: string; items: Pickable[] }[] {
+  const d = (key: string) => describeItem(key);
+  const loose = [...TOOL_GROUPS.flat(), ...OFF_BAR].filter((it): it is ToolDef => !('palette' in it)).map((t) => d(`tool:${t.name}`));
+  const groups: { name: string; items: Pickable[] }[] = [
+    { name: 'Drawing tools', items: loose },
+    { name: 'Fly-out palettes', items: [...PALETTES.keys()].map((p) => d(`pal:${p}`)) },
+    { name: 'Lists', items: [d('w:looks')] },
+  ];
+  for (const p of PALETTES.values()) if (p.palette !== 'tpl-own' || p.items.length > 1) groups.push({ name: p.title, items: p.items.filter((t) => ALL_TOOLS.has(t.name)).map((t) => d(`tool:${t.name}`)) });
+  for (const g of menuCommands()) if (g.items.length) groups.push({ name: `${g.menu} menu`, items: g.items.filter((c) => !c.cmd.startsWith('toolbox-')).map((c) => ({ key: `cmd:${c.cmd}`, label: c.label, icon: commandIcon(c.cmd) })) });
+  return groups;
+}
+
+const toolboxEditor = new ToolboxEditor({
+  get: () => toolboxState,
+  set: (st) => { toolboxState = st; tickToolboxes(); storeSettings(); toolboxes.render(); placeSidePanel(); },
+  catalogue: toolboxCatalogue,
+  describe: describeItem,
+  title: (id) => BOX_TITLES[id] ?? 'My Toolbox',
+  given: (id) => BOX_ITEMS[id] ?? [],
+  palette: (name) => { const p = PALETTES.get(name); return p && name !== 'tpl-own' ? { title: p.title } : null; },
+  flyGrid: paletteGrid,
+  newPlace: () => { const w = $('#work').getBoundingClientRect(); return { x: Math.round(Math.max(w.left + 8, w.right - 300)), y: Math.round(w.top + 40) }; },
+});
+
+// ---------------------------------------------------------------- View > Customize the Ribbon
+
+/** Each ribbon's tabs and groups as you put them (kept in the settings). */
+let ribbonPrefs: RibbonsPrefs = {};
+/** The ribbons as they came (read the first time they are laid out). */
+let ribbonInfo: RibbonInfo[] | null = null;
+const ribbonsNow = () => (ribbonInfo ??= readRibbons());
+/** The ribbon each mode shows (drawings have none: the Slides one is offered). */
+const RIBBON_OF_MODE: Record<string, string> = { slides: 'slides', document: 'doc', sheet: 'sheet', design: 'design', drawing: 'slides' };
+
+/** Lay every ribbon out with your changes. */
+function applyRibbons(): void {
+  // (nothing changed and nothing laid out yet: the ribbons are as they come)
+  if (!ribbonInfo && !Object.keys(ribbonPrefs).length) return;
+  for (const info of ribbonsNow()) applyRibbon(info, ribbonPrefs[info.id], { run: (cmd) => { finishTyping(); command(cmd); } });
+  fitRibbons();
+}
+
+const ribbonEditor = new RibbonEditor({
+  ribbons: ribbonsNow,
+  get: () => ribbonPrefs,
+  set: (p) => { ribbonPrefs = p; applyRibbons(); storeSettings(); },
+  menus: () => menuCommands().filter((g) => g.items.length).map((g) => ({ name: `${g.menu} menu`, items: g.items.filter((c) => !c.cmd.startsWith('toolbox-')).map((c) => ({ key: `cmd:${c.cmd}`, label: c.label, icon: commandIcon(c.cmd) })) })),
+  jiggle: () => toolboxState.jiggle !== false,
+});
+// right-click a ribbon's tabs (or a group's name) to customize it
+for (const [mode, id] of [['slides', '#ribbon'], ['document', '#doc-ribbon'], ['sheet', '#sheet-ribbon'], ['design', '#design-ribbon']] as const) {
+  $(id).addEventListener('contextmenu', (e) => {
+    if (!(e.target as Element).closest('.rb-tabs, .rb-label')) return;
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, [
+      { cmd: 'customize-ribbon', label: 'Customize the Ribbon…' },
+      { cmd: 'collapse-ribbon', label: ribbonCollapsed() ? 'Show the Whole Ribbon' : 'Collapse the Ribbon' },
+    ], { key: (c) => commandKey(c), run: (c) => (c === 'customize-ribbon' ? ribbonEditor.open(RIBBON_OF_MODE[mode]) : command(c)) });
   });
+}
+
+/** View > Toolboxes > Customize Toolboxes, at a toolbox (My Toolbox unless one is named). */
+function openCustomToolbox(id?: string): void {
+  toolboxEditor.open(id);
 }
 
 toolboxes.render();
@@ -4952,6 +7806,18 @@ function ribbonLabel(b: HTMLElement): string {
   return own.length > 2 ? own : tip || own;
 }
 
+/** A command's picture for the search list: the one drawn for it, or the one on its ribbon button. */
+function searchIcon(cmd: string | undefined, b?: HTMLElement): string | undefined {
+  const from = (el: Element | null | undefined) => {
+    if (!el) return undefined;
+    const svg = el.querySelector('svg');
+    if (svg) return svg.outerHTML;
+    const glyph = el.querySelector('.rb-icon')?.textContent?.trim();
+    return glyph && glyph.length <= 2 ? `<span>${glyph.replace(/[<&]/g, '')}</span>` : undefined;
+  };
+  return from(b) ?? (cmd ? commandIcon(cmd) ?? from(document.querySelector(`.ribbon [data-cmd="${cmd}"]`)) : undefined);
+}
+
 function commandItems(): CommandItem[] {
   const out: CommandItem[] = [];
   const runCmd = (cmd: string, label: string) => () => {
@@ -4960,11 +7826,14 @@ function commandItems(): CommandItem[] {
   };
   for (const wrap of document.querySelectorAll<HTMLElement>('header .menu-wrap')) {
     const menu = wrap.querySelector<HTMLElement>(':scope > button')?.textContent?.trim() ?? '';
-    for (const b of wrap.querySelectorAll<HTMLElement>('[data-cmd]')) {
-      if (b.hidden || getComputedStyle(b).display === 'none') continue;
+    for (const b of wrap.querySelectorAll<HTMLButtonElement>('[data-cmd]')) {
+      if (b.hidden || b.disabled || getComputedStyle(b).display === 'none') continue;
+      const sub = b.closest('.submenu')?.querySelector<HTMLButtonElement>(':scope > button');
+      if (sub?.disabled) continue; // a submenu for another mode
       const cmd = b.dataset.cmd!, e = topMenuEntry(cmd);
       const label = e?.label ?? cmd;
-      out.push({ id: `cmd:${cmd}`, label, place: `${menu} menu`, more: b.title, key: commandKey(cmd), checked: e?.checked, run: runCmd(cmd, label) });
+      out.push({ id: `cmd:${cmd}`, label, place: sub ? `${menu} ▸ ${sub.textContent!.trim()}` : `${menu} menu`, more: b.title, key: commandKey(cmd),
+        checked: e?.checked, icon: searchIcon(cmd), run: runCmd(cmd, label) });
     }
   }
   for (const rib of document.querySelectorAll<HTMLElement>('.ribbon')) {
@@ -4982,6 +7851,7 @@ function commandItems(): CommandItem[] {
       out.push({
         id: name, label, place: tab ? `${tab.textContent!.trim()} tab` : `${rib.getAttribute('aria-label')} ribbon`, more: b.dataset.tip ?? b.title,
         key: code ? commandKey(code) : undefined,
+        icon: searchIcon(b.dataset.cmd, b),
         run: () => {
           if (tab && tab.getAttribute('aria-selected') !== 'true') tab.click();
           b.click();
@@ -4992,7 +7862,9 @@ function commandItems(): CommandItem[] {
   if (onScreen($('#tools'))) {
     for (const [name] of ALL_TOOLS) {
       const label = toolNames[name] ?? ALL_TOOLS.get(name)!.title.split(/[.:] /)[0];
+      const icon = ALL_TOOLS.get(name)!.icon;
       out.push({ id: `tool:${name}`, label, place: 'Drawing tools', more: ALL_TOOLS.get(name)!.title, key: keysOf('space', `tool ${name}`)[0],
+        icon: icon.startsWith('<') ? icon : undefined,
         run: () => { editor.setTool(name); if (name === 'element') periodicTable.open(); } });
     }
   }
@@ -5003,6 +7875,23 @@ function commandItems(): CommandItem[] {
   return uniqueCommands(out);
 }
 const commandSearch = new CommandSearch(commandItems);
+const guide = new GuideWindow(openWebPage);
+watchRibbons(() => storeSettings());
+const settingsWindow = new SettingsWindow([
+  { id: 'general', title: 'General', words: 'groups selecting click outline linked text above below ask whole page tracked changes reviewer name', open: generalPreferences },
+  { id: 'drawing', title: 'Drawing', words: 'methyl me ch3 axial chirality ra sa helicity charges circled text tool atom r groups superscript mechanism arrows reroute', open: drawingPreferences },
+  { id: 'style', title: 'Drawing Style', words: 'bond length line width font journal acs rsc wiley elsevier thieme hash spacing margin', open: drawingStyleDialog },
+  { id: 'hotkeys', title: 'Hotkeys', words: 'keys keyboard shortcuts import export reset', open: () => hotkeysDialog.open() },
+  { id: 'typing', title: 'Text and Spelling', words: 'typing spelling dictionary autocorrect replacements chemistry formulas subscripts', open: () => typingDialog.open() },
+  { id: 'palettes', title: 'Colour Palettes', words: 'colours colors palette rows', open: () => editPalettes() },
+  { id: 'mode-colours', title: 'Mode Colours', words: 'tab colours accent window drawing slides sheet document design appearance', open: () => modeDialog.open() },
+  { id: 'dark', title: 'Dark Page', words: 'dark mode night paper ink graphite slate appearance colours', open: darkColours },
+  { id: 'schemes', title: 'Schemes', words: 'scheme arrow gap plus text size reagents conditions boxes', open: schemeSettings },
+  { id: 'autosave', title: 'AutoSave and Recovery', words: 'autosave recovery versions backup copies shared folders onedrive', open: () => keeper.optionsCommand() },
+  { id: 'online', title: 'Online', words: 'pubchem internet names lookup updates check version privacy stable latest channel beta', open: onlinePreferences },
+  { id: 'transfer', title: 'Import and Export', words: 'backup back up copy move settings file new computer install reinstall export import toolboxes hotkeys', open: settingsTransfer },
+  { id: 'files', title: 'File Types', words: 'open with default app explorer finder associations cdxml cdx mol sdf docx pptx xlsx double-click', open: () => fileTypesPage(fileTypesHost) },
+]);
 $('#btn-search').addEventListener('click', () => commandSearch.open());
 placeSidePanel();
 // your palettes show in the Colours toolbox as soon as they change
@@ -5027,11 +7916,76 @@ stylePanel.tables = {
 };
 
 let stereoSeen = -1;
+let outlineSeen = -1;
 // scroll bars over the drawing: they cover what is drawn (or the slide), and the part on screen
 const scrollbars = new Scrollbars(host, renderer, () => {
   const d = ws.active.deck;
   return d ? { x1: 0, y1: 0, x2: d.size.w, y2: d.size.h } : doc.bounds();
 }, () => editor.requestScene());
+
+// ---------------------------------------------------------------- the page in drawings
+
+/** The page new drawings start on (File > Page Setup's default). */
+let defaultPage: Settings['page'] = { name: 'letter', w: 540, h: 720, grow: true };
+
+// ---------------------------------------------------------------- the welcome card
+
+/** The welcome card has been closed for good. */
+let welcomed = false;
+const welcomeCard = $('#welcome');
+/** Show the welcome card on a first, empty drawing; it goes when closed or when drawing starts. */
+function showWelcome(): void {
+  if (welcomed || doc.atoms.size || doc.captions.size || doc.shapes.size || deckNow() || ws.active.mode !== 'drawing') return;
+  welcomeCard.hidden = false;
+  const seen = doc.version;
+  const off = () => {
+    if (welcomeCard.hidden) return;
+    welcomeCard.hidden = true;
+    welcomed = true;
+    storeSettings();
+  };
+  $('#welcome-close').addEventListener('click', () => { off(); $('#overlay').focus({ preventScroll: true }); }, { once: true });
+  welcomeCard.querySelector('[data-cmd="user-guide"]')?.addEventListener('click', (e) => { e.preventDefault(); off(); command('user-guide'); }, { once: true });
+  // drawing anything puts it away
+  const watch = () => { if (welcomeCard.hidden) return; if (doc.version !== seen) off(); else requestAnimationFrame(watch); };
+  requestAnimationFrame(watch);
+}
+
+/** File > Page Setup…: the drawing's paper size and way up, whether it adds pages, and the default for new drawings. */
+async function pageSetup(): Promise<void> {
+  const p = doc.page;
+  const land = !!p && p.w > p.h;
+  const paper = p ? PAPER.find((x) => (Math.abs(x.w - p.w) < 1 && Math.abs(x.h - p.h) < 1) || (Math.abs(x.w - p.h) < 1 && Math.abs(x.h - p.w) < 1)) : undefined;
+  const got = await ask('Page Setup', [
+    { name: 'paper', label: 'Paper', value: !p ? 'none' : paper?.name ?? 'custom', options: [...PAPER.map((x) => ({ value: x.name, label: x.label })), { value: 'custom', label: 'Your own size' }, { value: 'none', label: 'No page (an endless drawing)' }] },
+    { name: 'way', label: 'Way up', value: land ? 'landscape' : 'portrait', options: [{ value: 'portrait', label: 'Portrait' }, { value: 'landscape', label: 'Landscape' }] },
+    { name: 'w', label: 'Your own size: width (in)', value: String(Math.round(((p?.w ?? 540) + 72) / 72 * 100) / 100), type: 'number' },
+    { name: 'h', label: 'Your own size: height (in)', value: String(Math.round(((p?.h ?? 720) + 72) / 72 * 100) / 100), type: 'number' },
+    { name: 'grow', label: 'When the drawing goes past the page', value: !p || p.grow ? 'grow' : 'keep', options: [{ value: 'grow', label: 'Add pages (as ChemDraw does)' }, { value: 'keep', label: 'Keep it on the page when saving' }] },
+    { name: 'dflt', label: 'Use this for new drawings', type: 'checkbox', value: 'false' },
+  ], { ok: 'OK', note: 'Sizes are the paper; the page drawn on is half an inch in from each edge, as in ChemDraw. The page isn\'t drawn on screen (the drawing stays endless); it is saved with the file for ChemDraw.' });
+  if (!got) return;
+  let next: Settings['page'] = null;
+  if (got.paper !== 'none') {
+    const pp = PAPER.find((x) => x.name === got.paper);
+    let w = pp ? pp.w : Math.max(1, Number(got.w) || 8.5) * 72 - 72, h = pp ? pp.h : Math.max(1, Number(got.h) || 11) * 72 - 72;
+    if ((got.way === 'landscape') !== (w > h)) [w, h] = [h, w];
+    next = { w: Math.max(72, w), h: Math.max(72, h), grow: got.grow !== 'keep', ...(pp ? { name: pp.name } : {}) };
+  }
+  doc.page = next;
+  ws.noteChange();
+  if (got.dflt === 'true') { defaultPage = next && { ...next }; storeSettings(); }
+  if (next && !next.grow && !keepOnPage(doc)) flash('The drawing is bigger than the page, so it can\'t all be kept on it. Choose a bigger page, or add pages.', 7000);
+  editor.changed();
+  renderer.repaintAll();
+  editor.requestScene();
+}
+
+/** View > Text Formatting Bar: along the top of the drawing, floating by the text, or hidden. */
+function placeTextBar(where: Settings['textBar']): void {
+  CaptionEditor.barPlace = where;
+  for (const w of ['docked', 'floating', 'hidden']) $(`[data-cmd="text-bar-${w}"]`)?.setAttribute('aria-checked', String(w === where));
+}
 
 function showScrollBars(on: boolean): void {
   scrollbars.shown = on;
@@ -5039,7 +7993,34 @@ function showScrollBars(on: boolean): void {
   scrollbars.update(doc.version);
 }
 
+/** The status bar's zoom box: what the zoom is now, as a percentage of actual size. */
+const zoomPick = $<HTMLSelectElement>('#zoom-pick');
+let zoomShown = -1;
+function showZoom(): void {
+  const pct = Math.round((renderer.view.scale / (96 / 72)) * 100);
+  if (pct === zoomShown) return;
+  zoomShown = pct;
+  const own = zoomPick.querySelector<HTMLOptionElement>('option[value="now"]')!;
+  const listed = [...zoomPick.options].find((o) => o.value === String(pct));
+  own.hidden = !!listed;
+  own.textContent = `${pct}%`;
+  zoomPick.value = listed ? listed.value : 'now';
+}
+zoomPick.addEventListener('change', () => {
+  const v = zoomPick.value;
+  if (v === 'fit') command('zoom-fit');
+  else if (v === 'actual') command('zoom-actual');
+  else if (/^\d+$/.test(v)) editor.zoomTo((Number(v) / 100) * (96 / 72));
+  zoomShown = -1;
+  showZoom();
+  $('#overlay').focus({ preventScroll: true });
+});
+
 editor.onFrame = () => {
+  showZoom();
+  rulers.update();
+  // what is typed on the slide shows in the outline
+  if (outlineView.shown && doc.version !== outlineSeen) { outlineSeen = doc.version; outlineView.rebuild(); }
   layers?.refresh();
   scrollbars.update(doc.version);
   updatePanels();
@@ -5053,6 +8034,8 @@ const slideText = new SlideTextRibbon($('#ribbon'), {
   look: () => editor.textLook(),
   refocus: () => editor.refocusText(),
   nothing: () => flash('Click into some text, or pick a text box or a shape with text, first.'),
+  box: (c) => editor.setTextBox(c),
+  boxLook: () => editor.textBoxLook(),
 });
 CaptionEditor.onState = () => { if (ws.active.mode === 'slides') slideText.refresh(); };
 editor.onChange = () => { if (ws.active.mode === 'slides') slideText.refresh(); animUi?.selectionChanged(); updateStereo(); scheduleAnalysis(); updatePanels(); ws.noteChange(); stylePanel.refresh(); void refreshDescriptors(); scheduleLabelCheck(); };
@@ -5094,7 +8077,15 @@ for (const id of ['#ribbon', '#design-ribbon']) {
     const cmd = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-cmd]')?.dataset.cmd;
     if (cmd) command(cmd);
   });
+  // (ticks in the ribbon too)
+  $(id).addEventListener('change', (e) => {
+    const cmd = (e.target as HTMLElement).closest<HTMLInputElement>('input[type="checkbox"][data-cmd]')?.dataset.cmd;
+    if (cmd) command(cmd);
+  });
 }
+// the Beta mark beside the program's name says what beta means here
+$('#stage-badge').addEventListener('click', () => command('about'));
+
 renderTabs();
 updateTitle();
 
@@ -5108,8 +8099,8 @@ requestAnimationFrame(() => {
 });
 
 // Hooks for the automated speed tests.
-(window as any).__app = { doc, editor, renderer, chem, live, command, addMolfile, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles),
-  pptxBytes: () => { const d = deckNow()!; return writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ layout: s.layout, doc: d.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments })) }, pptxOptions()); } };
+(window as any).__app = { doc, editor, renderer, chem, live, command, addMolfile, keeper, cdxml: (name: string) => writeCdxml(doc, { name, textMeasure: measureText }), openText, stressTest, pasteChemistry, smiles: async (loose = false) => chem.molToSmiles(toMolfile(doc, doc.atoms.keys()).molblock, loose), placePicture, sample: sampleMolecule, ws, slideList, presenter, Doc, keymap, names, sheetMode, sheetChem, docMode, docxBytes: () => writeDocx(docMode.file!.t, docFiles),
+  pptxBytes: () => { const d = deckNow()!; return writePptx({ size: d.size, master: d.master, slides: d.slides.map((s, i) => ({ id: s.id, layout: s.layout, doc: d.docOf(i), notes: s.notes, transition: s.transition, anims: s.anims, comments: s.comments })) }, pptxOptions()); } };
 
 // ---------------------------------------------------------------- desktop self-test
 

@@ -3,7 +3,12 @@
 // self-test used by the automatic Windows build.
 
 mod clipboard;
+mod file_types;
+mod keep;
+mod ole;
+mod open_dialog;
 mod portable;
+mod web;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -127,20 +132,70 @@ fn portable_info() -> serde_json::Value {
     }
 }
 
+/// The Stable channel's list of installers: a copy of the latest.json of a build that has been
+/// tried on a real computer, put on the "stable" release by the Mark Stable workflow
+/// (.github/workflows/stable.yml). The Latest channel reads the endpoint in tauri.conf.json.
+const STABLE_FEED: &str = "https://github.com/nathanohare/Chem-Illustrator/releases/download/stable/stable.json";
+
+/// An updater that reads the chosen channel ("stable" or "latest").
+fn updater_for(app: &tauri::AppHandle, channel: &str, target: Option<&str>) -> Result<tauri_plugin_updater::Updater, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let mut b = app.updater_builder();
+    if channel == "stable" {
+        let url = tauri::Url::parse(STABLE_FEED).map_err(|e| e.to_string())?;
+        b = b.endpoints(vec![url]).map_err(|e| e.to_string())?;
+    }
+    if let Some(t) = target {
+        b = b.target(t);
+    }
+    b.build().map_err(|e| e.to_string())
+}
+
+/// A newer version found by update_check, in the shape the updater's own JavaScript (Update)
+/// takes, so downloading and installing it goes through the updater as before.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateFound {
+    rid: tauri::ResourceId,
+    current_version: String,
+    version: String,
+    date: Option<String>,
+    body: Option<String>,
+    raw_json: serde_json::Value,
+}
+
+/// Help > Check for Updates, and the check when the app starts: ask the chosen channel for a
+/// newer version. Nothing when this is the newest.
+#[tauri::command]
+async fn update_check(webview: tauri::Webview, channel: String, target: Option<String>) -> Result<Option<UpdateFound>, String> {
+    use tauri::Manager;
+    let Some(update) = updater_for(webview.app_handle(), &channel, target.as_deref())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(None);
+    };
+    let date = update.raw_json.get("pub_date").and_then(|d| d.as_str()).map(str::to_owned);
+    Ok(Some(UpdateFound {
+        current_version: update.current_version.clone(),
+        version: update.version.clone(),
+        date,
+        body: update.body.clone(),
+        raw_json: update.raw_json.clone(),
+        rid: webview.resources_table().add(update),
+    }))
+}
+
 /// Help > Check for Updates in a portable copy on Windows: download the newer portable app,
 /// check its signature, put it in place of this one and start it. Reports how far the download
 /// has got (0 to 1, or -1 when the size isn't known).
 #[tauri::command]
-async fn portable_install_update(app: tauri::AppHandle, on_progress: tauri::ipc::Channel<f64>) -> Result<(), String> {
-    use tauri_plugin_updater::UpdaterExt;
+async fn portable_install_update(app: tauri::AppHandle, channel: Option<String>, on_progress: tauri::ipc::Channel<f64>) -> Result<(), String> {
     if !cfg!(windows) || portable::get().is_none() {
         return Err("Only portable copies on Windows update themselves in place.".into());
     }
-    let update = app
-        .updater_builder()
-        .target(portable::UPDATE_TARGET)
-        .build()
-        .map_err(|e| e.to_string())?
+    let update = updater_for(&app, channel.as_deref().unwrap_or("latest"), Some(portable::UPDATE_TARGET))?
         .check()
         .await
         .map_err(|e| e.to_string())?
@@ -205,6 +260,11 @@ mod tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // a file opened (double-clicked) while the app is running goes to this window, not a second app
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            file_types::open_files(app, file_types::files_in(args, Some(std::path::Path::new(&cwd))));
+        }))
+        .manage(file_types::Waiting::default())
         .plugin(tauri_plugin_dialog::init())
         // Help > Check for Updates: fetches the newest release from GitHub, checks its signature
         // against the public key in tauri.conf.json, installs it and restarts the app
@@ -213,6 +273,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             portable::tidy();
+            // the files the app was opened with (double-clicked, or "Open with")
+            file_types::open_files(app.handle(), file_types::files_in(std::env::args(), None));
+            file_types::refresh();
+            // Word and PowerPoint reach the app here to edit drawings embedded in their documents
+            ole::start(app.handle());
             // A self-test that never reports (the page failed to load) still ends.
             if let Some(path) = selftest_path() {
                 let handle = app.handle().clone();
@@ -236,11 +301,41 @@ pub fn run() {
             settings_read,
             settings_write,
             portable_info,
+            update_check,
             portable_install_update,
+            keep::keep_folder,
+            keep::keep_put,
+            keep::keep_get,
+            keep::keep_list,
+            keep::keep_remove,
+            keep::file_stamp,
+            keep::who_am_i,
+            keep::write_lock_file,
+            keep::remove_lock_file,
             clipboard::clipboard_write,
             clipboard::clipboard_read,
-            clipboard::clipboard_formats
+            clipboard::clipboard_formats,
+            open_dialog::open_shared_dialog,
+            file_types::launch_files,
+            file_types::file_types_get,
+            file_types::file_types_set,
+            file_types::file_types_defaults,
+            ole::ole_pending,
+            ole::ole_save,
+            ole::ole_close,
+            ole::ole_registered,
+            ole::ole_register,
+            ole::ole_object_folder,
+            web::web_get
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Chem Illustrator");
+        .build(tauri::generate_context!())
+        .expect("error while running Chem Illustrator")
+        .run(|_app, _event| {
+            // macOS hands over files opened from Finder as an event, not on the command line
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = _event {
+                let files = urls.into_iter().filter_map(|u| u.to_file_path().ok()).map(|p| p.to_string_lossy().into_owned()).collect();
+                file_types::open_files(_app, files);
+            }
+        });
 }

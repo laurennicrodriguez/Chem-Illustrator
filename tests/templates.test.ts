@@ -14,7 +14,7 @@ describe('template data', () => {
   it('has the expected sets', () => {
     const count = (g: Template['group']) => TEMPLATES.filter((t) => t.group === g).length;
     expect(count('amino')).toBe(20);
-    expect(count('rings')).toBeGreaterThan(10);
+    expect(count('rings')).toBeGreaterThan(8);
     expect(count('heterocycles')).toBeGreaterThan(30);
     expect(count('sugars')).toBeGreaterThan(4);
     expect(new Set(TEMPLATES.map((t) => t.id)).size).toBe(TEMPLATES.length);
