@@ -64,6 +64,7 @@ import {
   arrowPoints, bracketHalves, type BracketForm, bracketLip, unionRect,
   shapeOrder, portNear, shapePorts, isCurved, headBend, swapHalf, bezPoints,
 } from '../objects';
+import { addAnchor, anchorsToArrow, convertAnchor, corner, deleteAnchor, dragAnchorPoint, isJoin, nearestOnCurve, smooth, type Anchor } from './pen';
 import { isEmptyText } from '../deck/deck';
 import { crossedBonds, lineAcross } from '../chem/fragments';
 import { imageFor } from '../render/images';
@@ -79,6 +80,8 @@ export type Tool =
   | { kind: 'ring'; size: number; aromatic: boolean }
   | { kind: 'text' }
   | { kind: 'arrow'; style: ArrowStyle }
+  /** The pen: click to place anchors, drag to pull out handles, Enter or a double-click to finish; the result is an arrow along Bézier curves. */
+  | { kind: 'pen'; style: ArrowStyle }
   | { kind: 'shape'; shape: ShapeStyle; from: 'corner' | 'center' }
   | { kind: 'bracket'; bracket: NonNullable<Shape['bracket']>; /** One half only, or a transition state's pair with ‡. */ form?: BracketForm }
   | { kind: 'template'; id: string }
@@ -94,7 +97,7 @@ export type Tool =
 export type SymbolKind = 'LonePair' | 'Electron' | 'CirclePlus' | 'CircleMinus' | 'DeltaPlus' | 'DeltaMinus';
 
 /** How a new arrow looks (everything else is the document's default). */
-export type ArrowStyle = Partial<Pick<Arrow, 'headStyle' | 'tailStyle' | 'headType' | 'line' | 'noGo' | 'equilibrium' | 'sweep' | 'elbow' | 'from' | 'to' | 'bez' | 'pin'>> & {
+export type ArrowStyle = Partial<Pick<Arrow, 'headStyle' | 'tailStyle' | 'headType' | 'line' | 'noGo' | 'equilibrium' | 'sweep' | 'elbow' | 'from' | 'to' | 'bez' | 'pin' | 'bent'>> & {
   /** An S-shaped curved arrow (two bends). */
   s?: boolean;
   /** Two shafts and an open head (⇒). */
@@ -145,6 +148,8 @@ export const TOOLS: Record<string, Tool> = {
   'arrow-fishhook': { kind: 'arrow', style: { sweep: 120 * DEG, headStyle: 'halfLeft' } },
   'arrow-s': { kind: 'arrow', style: { sweep: 120 * DEG, s: true } },
   'arrow-s-fishhook': { kind: 'arrow', style: { sweep: 120 * DEG, s: true, headStyle: 'halfLeft' } },
+  'arrow-pen': { kind: 'pen', style: {} },
+  'arrow-pen-fishhook': { kind: 'pen', style: { headStyle: 'halfLeft' } },
   connector: { kind: 'arrow', style: { connector: true } },
   'connector-elbow': { kind: 'arrow', style: { connector: true, elbow: true } },
   'shape-rect': { kind: 'shape', shape: { kind: 'rect' }, from: 'corner' },
@@ -214,7 +219,7 @@ interface Drag {
   shift: boolean;
   alt: boolean;
   ctrl: boolean;
-  mode: 'none' | 'pan' | 'move' | 'marquee' | 'draw' | 'handle' | 'rotate' | 'text';
+  mode: 'none' | 'pan' | 'move' | 'marquee' | 'draw' | 'handle' | 'rotate' | 'text' | 'pen';
   last: Vec;
   panOrigin?: { ox: number; oy: number };
   /** The arrow or shape handle being dragged. */
@@ -271,6 +276,8 @@ export type HighlightToggle = 'smooth' | 'centre' | 'soft' | 'shadow' | 'glow' |
 
 export class Editor {
   tool: Tool = TOOLS['bond-single'];
+  /** The path being drawn with the pen: its anchors so far. */
+  private pen: { anchors: Anchor[] } | null = null;
   toolName = 'bond-single';
   sel: Selection = emptySel();
   hover: Hit = null;
@@ -468,6 +475,8 @@ export class Editor {
   setTool(name: string): void {
     const t = TOOLS[name] ?? (name.startsWith('geo:') ? geoTool(name.slice(4), this.geoLook) : undefined);
     if (!t) return;
+    // a path being drawn with the pen is finished when another tool is picked
+    if (this.pen && t.kind !== 'pen') this.penFinish();
     this.tool = t;
     this.toolName = name;
     this.onToolChange(name);
@@ -686,7 +695,7 @@ export class Editor {
     const rotating = !!rh && dist(rh, p) <= this.tol(7);
     // Shift+drag from an arrow with an arrow tool branches a new arrow off it (not its handles)
     const branching = e.shiftKey && this.tool.kind === 'arrow';
-    const handle = e.button === 0 && !rotating && !branching && !painting ? this.handleAt(p) : null;
+    const handle = e.button === 0 && !rotating && !branching && !painting && !this.pen ? this.handleAt(p) : null;
     const hit = handle || rotating ? null : this.hitTest(p);
     this.drag = {
       start: p, startScreen: { x: e.clientX - rect.left, y: e.clientY - rect.top }, hit, button: e.button, moved: false,
@@ -694,6 +703,7 @@ export class Editor {
       ...(painting ? { paint: true } : {}),
     };
     if (handle) this.drag.handle = handle;
+    if (e.button === 0 && !handle && !rotating && !painting && this.tool.kind === 'pen') { this.drag.mode = 'pen'; this.penPress(p); }
     // the selection tool on a charge sign: it can be dragged anywhere round its atom
     if (e.button === 0 && !handle && !rotating && !painting && this.tool.kind === 'select') {
       const c = this.chargeSignAt(p);
@@ -839,6 +849,7 @@ export class Editor {
       this.requestScene(e.timeStamp);
       return;
     }
+    if (d.mode === 'pen') { this.penDrag(p, e); d.last = p; this.requestOverlay(e.timeStamp); return; }
     if (d.mode === 'handle') {
       const h = d.handle!;
       if (h.kind === 'arrow') {
@@ -846,6 +857,9 @@ export class Editor {
         if (r) {
           // (a handle drawn off the shaft bends the arrow as if it were on it)
           let patch = dragArrowHandle(r, h.which, h.off ? sub(p, h.off) : p, e.altKey);
+          // anchors of a pen path: a join takes its handles along, a smooth anchor's handles stay in line
+          // (Alt: move one alone; with the pen, Alt on a join pulls handles out of it)
+          if (h.which[0] === 'b' && r.bez) patch = this.anchorDrag(r, Number(h.which.slice(1)), h.off ? sub(p, h.off) : p, e) ?? patch;
           // a half head keeps its barb on the outside of an S's last bend
           if (h.which[0] === 'b' && headBend(r) !== headBend({ ...r, ...patch })) Object.assign(patch, { headStyle: swapHalf(r.headStyle), tailStyle: swapHalf(r.tailStyle) });
           // bent by hand, it keeps that bend from now on (Clean Up Arrow lets it find its own way again)
@@ -895,6 +909,8 @@ export class Editor {
       case 'bond':
       case 'chain':
       case 'ring':
+      case 'pen':
+        return 'none';
       case 'arrow':
       case 'shape':
       case 'bracket':
@@ -925,6 +941,9 @@ export class Editor {
       if (ctx && !d.moved) this.onContextMenu(ctx);
     }
     if (d.mode === 'pan') { this.requestScene(e.timeStamp); return; }
+    if (d.mode === 'pen') { this.requestOverlay(e.timeStamp); return; }
+    // the pen clicked on an anchor: deleted (Alt: made a corner)
+    if (d.mode === 'handle' && !d.moved && this.tool.kind === 'pen' && d.handle) { this.penClickAnchor(d.handle, d.alt); return; }
     if (d.mode === 'handle' || d.mode === 'rotate') {
       if (d.moved) { this.doc.commit(); this.changed(); }
       return;
@@ -2301,6 +2320,133 @@ export class Editor {
     return off <= 0;
   }
 
+  // ------------------------------------------------------------------ pen
+
+  /** The pen pressed at `p`: starts a path, adds an anchor (a second press on the last one finishes), or adds an anchor to a selected pen arrow. */
+  private penPress(p: Vec): void {
+    const pen = this.pen;
+    if (pen) {
+      const last = pen.anchors[pen.anchors.length - 1];
+      if (dist(p, last.p) < this.tol(4)) { if (pen.anchors.length >= 2) this.penFinish(); return; }
+      pen.anchors.push(corner(p));
+      return;
+    }
+    // on the line of a selected pen arrow: a new anchor there, the line's shape unchanged
+    for (const id of this.sel.arrows) {
+      const r = this.doc.arrows.get(id);
+      const near = r?.bez ? nearestOnCurve(r, p) : null;
+      if (!r || !near || near.d > this.tol(5)) continue;
+      const patch = addAnchor(r, p);
+      if (patch) { this.doc.edit('Add anchor', () => this.doc.updateArrow(id, this.bezPatch(r, patch))); this.changed(); }
+      return;
+    }
+    this.pen = { anchors: [corner(p)] };
+  }
+
+  /** The pen dragged with the last anchor down: its handles are pulled out evenly (Alt: the forward one alone; Shift: in 15° steps). */
+  private penDrag(p: Vec, e: PointerEvent): void {
+    const pen = this.pen;
+    if (!pen) return;
+    const i = pen.anchors.length - 1, a = pen.anchors[i];
+    const out = e.shiftKey ? add(a.p, fromAngle(snapAngle(angleOf(sub(p, a.p))), dist(p, a.p))) : p;
+    if (dist(out, a.p) < this.tol(3)) pen.anchors[i] = corner(a.p);
+    else pen.anchors[i] = e.altKey ? { ...a, out } : smooth(a.p, out);
+  }
+
+  /** Backspace while drawing takes back the last anchor (the first one cancels the path). */
+  private penBack(): void {
+    if (!this.pen) return;
+    this.pen.anchors.pop();
+    if (!this.pen.anchors.length) this.pen = null;
+    this.requestOverlay();
+  }
+
+  /** Finish the path: an arrow along its curves, its ends stuck to the lone pair, atom or bond they sit on. Too short a path is dropped. */
+  private penFinish(): void {
+    const pen = this.pen, t = this.tool;
+    this.pen = null;
+    this.requestOverlay();
+    const line = pen && anchorsToArrow(pen.anchors);
+    if (!line) return;
+    const doc = this.doc, m = this.measure();
+    const start = tailEnd(doc, pushEndAt(doc, m, line.tail), line.tail);
+    let end = headEnd(doc, pushEndAt(doc, m, line.head), line.head);
+    if (sameEnd(start, end)) end = { kind: 'point', p: line.head };
+    const pin = pushPins(doc, { tail: line.tail, head: line.head, start, end });
+    const style = t.kind === 'pen' ? t.style : {};
+    // bent by hand: Clean Up Arrow and re-routing leave the curve as drawn
+    doc.edit('Pen arrow', () => this.selectOnly({ kind: 'arrow', id: this.addArrow(line.tail, line.head, { ...style, bez: line.bez, ...(pin ? { pin, bent: true } : {}) }).id }));
+    this.offerArrowText();
+    this.changed();
+  }
+
+  /** What dragging bez point k of an arrow to `p` changes, as a pen path's anchors move; null where the ordinary bend applies. */
+  private anchorDrag(r: Arrow, k: number, p: Vec, e: PointerEvent): Partial<Arrow> | null {
+    if (this.tool.kind === 'pen' && e.altKey && isJoin(k)) {
+      const as = bezPoints(r);
+      const at = as?.[k + 1];
+      return at ? convertAnchor(r, (k + 1) / 3, dist(p, at) < this.tol(3) ? null : p) : null;
+    }
+    return dragAnchorPoint(r, k, p, e.altKey);
+  }
+
+  /** The pen clicked on a handle of the selected arrow: an anchor is deleted (Alt: turned into a corner). */
+  private penClickAnchor(h: Handle, toCorner: boolean): void {
+    const r = h.kind === 'arrow' && h.which[0] === 'b' ? this.doc.arrows.get(h.id) : undefined;
+    const k = Number(h.which.slice(1));
+    if (!r || !r.bez || !isJoin(k)) return;
+    const patch = toCorner ? convertAnchor(r, (k + 1) / 3, null) : deleteAnchor(r, (k + 1) / 3);
+    if (!patch) return;
+    this.doc.edit(toCorner ? 'Corner point' : 'Delete anchor', () => this.doc.updateArrow(r.id, this.bezPatch(r, patch)));
+    this.changed();
+  }
+
+  /** An edit to an arrow's curve, kept as made: a half head stays on the outside of the last bend, and re-routing leaves a pinned arrow be. */
+  private bezPatch(r: Arrow, patch: Partial<Arrow>): Partial<Arrow> {
+    const out = { ...patch, ...(r.pin ? { bent: true } : {}) };
+    if (headBend(r) !== headBend({ ...r, ...patch })) Object.assign(out, { headStyle: swapHalf(r.headStyle), tailStyle: swapHalf(r.tailStyle) });
+    return out;
+  }
+
+  /** The path being drawn: its curves, anchors and handles, and the next curve following the pointer. */
+  private drawPen(ctx: CanvasRenderingContext2D, px: number): void {
+    const pen = this.pen;
+    if (!pen || this.tool.kind !== 'pen') return;
+    const as = pen.anchors;
+    const dragging = this.drag?.mode === 'pen';
+    const to = this.pointer;
+    ctx.save();
+    ctx.lineWidth = Math.max(this.doc.style.lineWidth, 1.2 * px);
+    ctx.strokeStyle = PREVIEW;
+    ctx.beginPath();
+    ctx.moveTo(as[0].p.x, as[0].p.y);
+    for (let i = 1; i < as.length; i++) ctx.bezierCurveTo(as[i - 1].out.x, as[i - 1].out.y, as[i].in.x, as[i].in.y, as[i].p.x, as[i].p.y);
+    ctx.stroke();
+    // the next curve, from the last anchor to where the pointer is (not while its handles are being pulled out)
+    if (!dragging) {
+      const last = as[as.length - 1];
+      ctx.save();
+      ctx.setLineDash([4 * px, 3 * px]);
+      ctx.beginPath();
+      ctx.moveTo(last.p.x, last.p.y);
+      ctx.bezierCurveTo(last.out.x, last.out.y, to.x, to.y, to.x, to.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.lineWidth = px;
+    ctx.fillStyle = '#fff';
+    const k = 3.5 * px;
+    for (const a of as) {
+      for (const h of [a.in, a.out]) {
+        if (dist(h, a.p) < 0.01) continue;
+        ctx.beginPath(); ctx.moveTo(a.p.x, a.p.y); ctx.lineTo(h.x, h.y); ctx.stroke();
+        ctx.beginPath(); ctx.arc(h.x, h.y, k * 0.7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
+    }
+    for (const a of as) { ctx.beginPath(); ctx.rect(a.p.x - k, a.p.y - k, 2 * k, 2 * k); ctx.fill(); ctx.stroke(); }
+    ctx.restore();
+  }
+
   /** Add an arrow from tail to head in the given style; `side` −1 bends a curved arrow the other way. */
   private addArrow(tail: Vec, head: Vec, style: ArrowStyle = {}, side = 1): Arrow {
     const lw = this.doc.style.lineWidth;
@@ -3303,6 +3449,11 @@ export class Editor {
     // on a focused button or menu, Enter, Space and Tab do their usual jobs (unless the mouse
     // is over the drawing: then they are drawing keys, as in ChemDraw)
     if (!this.pointerInside && target && target !== document.body && target !== this.r.overlay && /^(Shift\+)?(Enter|Space|Tab)$/.test(chord)) return;
+    if (this.pen) {
+      if (chord === 'Enter') { e.preventDefault(); this.penFinish(); return; }
+      if (chord === 'Escape') { this.pen = null; this.requestOverlay(); return; }
+      if (chord === 'Backspace' || chord === 'Delete') { e.preventDefault(); this.penBack(); return; }
+    }
     if (chord === 'Escape') {
       this.keyHot = null;
       if (this.cropping !== null) { this.cropping = null; this.requestOverlay(); this.onChange(); return; }
@@ -4711,6 +4862,7 @@ export class Editor {
       }
     }
     this.drawPorts(ctx, px);
+    this.drawPen(ctx, px);
     if (this.guideLines.length && this.drag?.mode === 'move') {
       ctx.save();
       ctx.strokeStyle = '#e8336d';

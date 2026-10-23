@@ -292,6 +292,8 @@ const ARROWS: PaletteDef = {
     { name: 'arrow-fishhook', title: 'Curved half-headed arrow (one electron). Snaps between atoms and bonds like the curved arrow; hold Alt to draw freely' },
     { name: 'arrow-s', title: 'S-shaped curved arrow (two bends), for electrons that have to go round something. Snaps like the curved arrow; hold Alt to draw freely' },
     { name: 'arrow-s-fishhook', title: 'S-shaped half-headed arrow (one electron, two bends). Snaps like the curved arrow; hold Alt to draw freely' },
+    { name: 'arrow-pen', title: 'Pen arrow. Click to place anchors, drag to pull out curve handles, Enter or double-click to finish. Its ends stick to the atom, bond or lone pair they start and end on. On a selected pen arrow: click its line to add an anchor, click an anchor to delete it, Alt+click to make it a corner, Alt+drag to pull handles out' },
+    { name: 'arrow-pen-fishhook', title: 'Pen half-headed arrow (one electron). Click to place anchors, drag to pull out curve handles, Enter or double-click to finish' },
   ],
 };
 
