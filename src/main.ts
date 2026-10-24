@@ -12,7 +12,7 @@ import './app.css';
 import type { MethylStyle } from './chem/hydrogens';
 import { STANDARD_COLOURS, usedColours } from './colours';
 import { ICONS } from './icons';
-import { Toolboxes, lockIcon, sideFolded, commandButton, defaultToolboxes, menuCommands, boxIds, boxGrid, boxTitle, flyGrid, isEditable, isOwnBox, overflowOf, type Pickable, type ToolboxDef, type ToolboxState } from './ui/toolboxes';
+import { Toolboxes, lockIcon, sideFolded, commandButton, defaultToolboxes, menuCommands, boxIds, boxGrid, boxTitle, flyGrid, isEditable, withoutGoneItems, isOwnBox, overflowOf, type Pickable, type ToolboxDef, type ToolboxState } from './ui/toolboxes';
 import { gridItems, inBlock, shownGrid, wrapped, type Grid, type Shown } from './ui/toolbox-grid';
 import { ToolboxEditor } from './ui/toolbox-editor';
 import { RibbonEditor } from './ui/ribbon-editor';
@@ -6110,7 +6110,7 @@ function applySettings(s: Settings): void {
   ownLooks = s.highlightLooks;
   renderRecent();
   setPalettes(s.palettes);
-  toolboxState = s.toolboxes;
+  toolboxState = withoutRetired(s.toolboxes);
   ribbonPrefs = s.ribbons;
   applyRibbons();
   ownStyles = s.myStyles;
@@ -7348,6 +7348,13 @@ function pickTool(name: string): void {
 }
 
 /** A tool's button in a toolbox: picks the tool, and shows when it is the one in use. */
+/** Saved toolboxes without the tools and palettes taken off the tool bar since (they left empty cells). */
+function withoutRetired(st: ToolboxState): ToolboxState {
+  const isTool = (n: string) => ALL_TOOLS.has(n) || ownTemplates().some((t) => `tpl-${t.id}` === n);
+  const item = (k: string) => (k.startsWith('tool:') ? isTool(k.slice(5)) : k.startsWith('pal:') ? PALETTES.has(k.slice(4)) : true);
+  return withoutGoneItems(st, item, (pal, n) => PALETTES.has(pal) && (pal === 'tpl-own' || isTool(n)));
+}
+
 function toolButton(name: string): HTMLButtonElement | null {
   const t = ALL_TOOLS.get(name);
   if (!t) return null;

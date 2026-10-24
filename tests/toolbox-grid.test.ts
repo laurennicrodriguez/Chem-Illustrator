@@ -1,8 +1,8 @@
 // Toolboxes on grids of fixed cells (Customize Toolboxes): laying out the old lists, resizing,
 // putting buttons in cells, turning and wrapping on screen, and reading the settings.
 import { describe, expect, it } from 'vitest';
-import { added, cutOff, emptied, inBlock, listToGrid, nextFree, parseGrid, placed, resized, shownGrid, withLine, wrapped, wrapStarts } from '../src/ui/toolbox-grid';
-import { boxGrid, defaultToolboxes, flyGrid, overflowOf, parseToolboxes, withFlyGrid, withFlyout, withGrid, withItemsReset, withNewBox, withoutBox } from '../src/ui/toolboxes';
+import { added, cutOff, emptied, inBlock, listToGrid, nextFree, parseGrid, placed, resized, shownGrid, withLine, withoutGone, wrapped, wrapStarts } from '../src/ui/toolbox-grid';
+import { boxGrid, defaultToolboxes, flyGrid, overflowOf, parseToolboxes, withFlyGrid, withFlyout, withGrid, withItemsReset, withNewBox, withoutBox, withoutGoneItems } from '../src/ui/toolboxes';
 
 describe('toolbox grids', () => {
   it('lays a list out as it showed: each group on new rows, with a line above it', () => {
@@ -139,5 +139,36 @@ describe('toolbox grids in the settings', () => {
     expect(overflowOf(defaultToolboxes(), 'arrange')).toBe('scroll');
     // a grid for a toolbox that isn't there, or can't be laid out, is dropped
     expect(parseToolboxes({ grids: { nowhere: { cols: 1, rows: 1, cells: ['cmd:x'] }, templates: { cols: 1, rows: 1, cells: [] } } }).grids).toBeUndefined();
+  });
+
+  it('closes up the cells of palettes and tools the app no longer has, leaving no empty rows', () => {
+    // two blocks: a, gone1, b | gone2, gone3, c, gone4 (gone ones: palettes taken off the bar)
+    const g = { cols: 2, rows: 5, cells: ['a', 'pal:gone1', 'b', null, 'pal:gone2', 'pal:gone3', 'c', 'pal:gone4', null, null], lines: [2] };
+    const out = withoutGone(g, (k) => !k.startsWith('pal:gone'));
+    expect(out.cells).toEqual(['a', 'b', 'c', null, null, null]);
+    expect([out.rows, out.lines]).toEqual([3, [1]]);
+    // nothing gone: the same grid; a gap left on purpose stays
+    expect(withoutGone(g, () => true)).toBe(g);
+    const gap = withoutGone({ cols: 2, rows: 2, cells: ['a', null, 'x', 'b'] }, (k) => k !== 'x');
+    expect(gap.cells).toEqual(['a', null, 'b', null]);
+  });
+
+  it('takes retired palettes and templates out of saved toolboxes and fly-outs', () => {
+    const st = {
+      ...defaultToolboxes(),
+      items: { main: ['tool:select', 'pal:tpl-fused', 'sep', 'pal:tpl-rings'] },
+      grids: { main: { cols: 2, rows: 2, cells: ['pal:tpl-conformers', 'pal:tpl-fused', 'pal:tpl-bicyclics', 'pal:tpl-own'] } },
+      flyouts: { 'tpl-fused': ['tpl-twistane'], 'tpl-conformers': ['tpl-chair', 'tpl-envelope'] },
+      flyGrids: { 'tpl-bicyclics': { cols: 1, rows: 1, cells: ['tpl-twistane'] } },
+    };
+    const pals = new Set(['tpl-rings', 'tpl-conformers', 'tpl-own']);
+    const tools = new Set(['select', 'tpl-chair']);
+    const item = (k: string) => (k.startsWith('pal:') ? pals.has(k.slice(4)) : k.startsWith('tool:') ? tools.has(k.slice(5)) : true);
+    const out = withoutGoneItems(st, item, (p, n) => pals.has(p) && tools.has(n));
+    expect(out.items!.main).toEqual(['tool:select', 'sep', 'pal:tpl-rings']);
+    expect(out.grids!.main.cells).toEqual(['pal:tpl-conformers', 'pal:tpl-own']);
+    // a fly-out of a palette that is gone goes; one that keeps some tools loses the hidden ones
+    expect(out.flyouts).toEqual({ 'tpl-conformers': ['tpl-chair'] });
+    expect(out.flyGrids).toEqual({});
   });
 });

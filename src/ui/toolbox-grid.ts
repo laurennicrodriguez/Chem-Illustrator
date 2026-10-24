@@ -70,6 +70,31 @@ export function resized(g: Grid, cols: number, rows: number): Grid {
   return lines?.length ? { ...n, lines } : n;
 }
 
+/**
+ * The grid without the buttons `keep` turns away (ones the app no longer has): within each block
+ * of rows between lines, the buttons after one close up into its cell, and rows left empty by
+ * that go. Cells left empty on purpose stay where they are relative to their neighbours.
+ */
+export function withoutGone(g: Grid, keep: (k: string) => boolean): Grid {
+  if (g.cells.every((k) => !k || keep(k))) return g;
+  const starts = [0, ...(g.lines ?? []).filter((r) => r > 0 && r < g.rows).sort((a, b) => a - b), g.rows];
+  const cells: (string | null)[] = [];
+  const lines: number[] = [];
+  const emptyRows = (row: (string | null)[]) => { let n = 0; for (let r = row.length / g.cols - 1; r >= 0 && row.slice(r * g.cols, (r + 1) * g.cols).every((k) => !k); r--) n++; return n; };
+  for (let i = 0; i + 1 < starts.length; i++) {
+    if (starts[i] === starts[i + 1]) continue;
+    const block = g.cells.slice(starts[i] * g.cols, starts[i + 1] * g.cols);
+    const kept = block.filter((k) => !k || keep(k));
+    const after = [...kept, ...Array(block.length - kept.length).fill(null)];
+    // only the rows that emptied go (a block that was empty at its end stays so)
+    const drop = Math.min(emptyRows(after) - emptyRows(block), block.length / g.cols - 1);
+    if (cells.length) lines.push(cells.length / g.cols);
+    cells.push(...after.slice(0, after.length - drop * g.cols));
+  }
+  const rows = cells.length / g.cols;
+  return { cols: g.cols, rows, cells, ...(lines.length ? { lines } : {}) };
+}
+
 /** The buttons a new size would cut off. */
 export function cutOff(g: Grid, cols: number, rows: number): string[] {
   const out: string[] = [];
