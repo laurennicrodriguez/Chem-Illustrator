@@ -2584,3 +2584,34 @@ dialog.show-setup { width: min(94vw, 600px); }
 .tbe-row-ic .tbe-glyph { font-size: 14px; }
 .tbe-grid.preview .tbe-wig { animation: none; }
 .rbe-group-row[hidden], .rbe-tab-row[hidden] { display: none; }
+
+/* ------------------------------------------------------------------ touch mode (src/ui/touch-ui.ts) */
+
+/* tablets: room for a fingertip on every button, and no page zoom, text selection or callout from a press */
+html.touch-ui body { touch-action: pan-x pan-y; -webkit-touch-callout: none; }
+html.touch-ui header, html.touch-ui .ribbon, html.touch-ui .dock, html.touch-ui .toolbox, html.touch-ui .menu, html.touch-ui #tabs, html.touch-ui .atom-pad { -webkit-user-select: none; user-select: none; }
+html.touch-ui header > .menu-wrap > button, html.touch-ui header > button:not(.stage-badge), html.touch-ui header > select { height: 36px; padding: 0 12px; }
+html.touch-ui .menu button { padding: 10px 12px; font-size: 15px; }
+html.touch-ui .menu { min-width: 280px; }
+html.touch-ui .tool { width: 44px; height: 42px; }
+html.touch-ui .tool-group { grid-template-columns: repeat(2, 44px); gap: 4px; }
+html.touch-ui .tool-group > .tb-cmd.tb-icon, html.touch-ui .tb-cmd.tb-icon { width: 42px; height: 42px; }
+html.touch-ui .tb-cells > .tb-gap { width: 44px; height: 42px; }
+html.touch-ui .toolbox.vertical .tb-body:has(> .tb-cmd) { width: 90px; }
+html.touch-ui .ribbon button { padding: 6px 8px; line-height: 20px; font-size: 13px; }
+html.touch-ui .ribbon button.rb-big { min-width: 56px; padding: 6px 6px; }
+html.touch-ui .tb-fold, html.touch-ui .tb-lock { width: 30px; height: 30px; font-size: 16px; }
+html.touch-ui #side-fold { width: 36px; height: 36px; font-size: 22px; }
+html.touch-ui .tb-swatch { width: 28px; height: 28px; }
+html.touch-ui .tb-swatches { grid-template-columns: repeat(10, 28px); gap: 5px; }
+html.touch-ui .toolbox.vertical .tb-swatches { grid-template-columns: repeat(4, 28px); }
+
+/* the atom keypad: along the bottom left of the drawing, clear of the navigator at the right */
+.atom-pad { position: absolute; left: 10px; bottom: 10px; z-index: 6; max-width: calc(100% - 250px); display: flex; flex-direction: column; gap: 4px; padding: 6px 30px 6px 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16); }
+.atom-pad[hidden] { display: none; }
+.pad-row { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.pad-row button { flex: none; min-width: 44px; height: 42px; padding: 0 6px; font: 600 16px Arial, 'Liberation Sans', sans-serif; border-color: var(--line); background: var(--panel); border-radius: 8px; touch-action: manipulation; }
+.pad-row button:active { background: var(--accent-soft); border-color: var(--accent); }
+.pad-row button[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.pad-close { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; padding: 0; border: 0; background: none; color: var(--muted); font-size: 18px; line-height: 1; }
+html.touch-ui #flash { bottom: 150px; }

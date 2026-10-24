@@ -223,6 +223,26 @@ Boxes, ovals, frames and pictures have square handles on their corners and sides
 - **Ctrl+wheel** zooms.
 - **Middle-drag** or **right-drag** pans the drawing.
 
+## Pen and touch (tablets)
+
+On a tablet or touch screen (an iPad with Apple Pencil, a Surface pen), **View > Touch Mode** makes the buttons, menus and toolboxes big enough for a fingertip. It is **Automatic** to start with: it comes on by itself on a touch screen, or the first time a pen or finger touches the window.
+
+- **The pen** works like the mouse with every tool.
+- **Two fingers** pan and pinch-zoom the drawing. Once you have used the pen, **one finger** pans too, so a resting palm never draws.
+- **Hold** the pen or a finger still for half a second for the right-click menu. **Two quick taps** are a double-click.
+- **The atom keypad** along the bottom of the drawing gives the keys a keyboard would: element labels, charges, a new bond, double and triple bonds, wedges, rings, Undo and Redo. A key acts on the atom or bond you last drew, or the one selected. Hide it with its ×, or show it again with **View > Touch Mode > Atom Keypad**.
+
+### Sketching with the pen
+
+Pick the **Sketch** tool (the pen and squiggle in the toolbox, or ✎ on the keypad) and draw freehand. When the pen lifts:
+
+- a **line** becomes a bond, and a **zig-zag** a chain (one bond for each straight stretch). Lines start and end on atoms they touch; a line drawn **along a bond** makes it double (again: triple);
+- a **loop with corners** becomes a ring with that many atoms, and a **circle** a benzene ring. Drawn over a bond, the ring is fused there. A **circle inside a ring** makes it aromatic;
+- a **scribble** (back and forth) erases the atoms and bonds under it;
+- small **letters** label the atom they are written on (C, N, O, S, P, F, Cl, Br, I, H, B), or make a new atom in empty space; **+** and **−** charge the nearest atom.
+
+To sketch with the pen whatever tool is picked (a finger or mouse still uses the tool), turn on **View > Touch Mode > Pen Always Sketches**.
+
 ## What the mouse pointer means
 
 The pointer changes to show what a click or drag will do.

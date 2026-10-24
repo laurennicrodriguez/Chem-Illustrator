@@ -2,6 +2,7 @@
 // pan. The editor changes the document and asks for a repaint; hover and drawing previews
 // only repaint the overlay layer.
 
+import { Sketcher } from './sketch';
 import { installPenAndTouch } from './touch';
 import { Doc, Atom, Bond, BondDisplay, PARTIAL, Arrow, Shape, Caption, isMetalAtom, applyBase, captionBase, stripBase, type StepRoles, type Justify, type HighlightStyle, type Entity } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
@@ -93,7 +94,9 @@ export type Tool =
   /** Puts the element picked in the periodic table on atoms (or new atoms in empty space). */
   | { kind: 'element' }
   /** Mass fragmentation: a line dragged across bonds (or a click on one) breaks them, and each piece gets its formula and mass. */
-  | { kind: 'fragment' };
+  | { kind: 'fragment' }
+  /** Freehand with the pen: lines become bonds, loops rings, letters labels, a scribble erases (sketch.ts). */
+  | { kind: 'sketch' };
 
 /** Marks put on atoms for mechanisms: a lone pair, a radical's dot, a circled charge, or δ+ / δ−. */
 export type SymbolKind = 'LonePair' | 'Electron' | 'CirclePlus' | 'CircleMinus' | 'DeltaPlus' | 'DeltaMinus';
@@ -116,6 +119,7 @@ export const TOOLS: Record<string, Tool> = {
   eraser: { kind: 'eraser' },
   element: { kind: 'element' },
   fragment: { kind: 'fragment' },
+  sketch: { kind: 'sketch' },
   'bond-single': { kind: 'bond', order: 1, display: 'solid' },
   'bond-double': { kind: 'bond', order: 2, display: 'solid' },
   'bond-triple': { kind: 'bond', order: 3, display: 'solid' },
@@ -221,7 +225,7 @@ interface Drag {
   shift: boolean;
   alt: boolean;
   ctrl: boolean;
-  mode: 'none' | 'pan' | 'move' | 'marquee' | 'draw' | 'handle' | 'rotate' | 'text' | 'pen';
+  mode: 'none' | 'pan' | 'move' | 'marquee' | 'draw' | 'handle' | 'rotate' | 'text' | 'pen' | 'sketch';
   last: Vec;
   panOrigin?: { ox: number; oy: number };
   /** The arrow or shape handle being dragged. */
@@ -298,6 +302,8 @@ export class Editor {
   showRoles = true;
 
   options = {
+    /** The pen sketches whatever tool is picked (View > Touch Mode > Pen Always Sketches). */
+    penSketch: false,
     /** After 1 or 0 on the atom under the mouse, the highlight stays there (ChemDraw). */
     keepHotspotOnBond: true,
     /** New bonds are one bond length long, unless Alt is held (Ctrl+L). */
@@ -373,7 +379,21 @@ export class Editor {
    */
   painter: { things: (sel: Selection) => void; text: (ed: TextEditing) => void } | null = null;
 
+  /** Reads the pen's strokes as bonds, rings, letters and erasing (the Sketch tool). */
+  readonly sketcher: Sketcher;
+
   constructor(public doc: Doc, public r: Renderer, public host: HTMLElement) {
+    const self = this;
+    this.sketcher = new Sketcher({
+      // the drawing showing now (the editor moves between tabs' drawings)
+      get doc() { return self.doc; },
+      label: (id, text) => { this.runAction(`label ${text}`, { kind: 'atom', id }); },
+      atomKey: (id, act) => { this.atomKey(id, act); },
+      setHot: (id) => { this.lastEdited = id; if (this.doc.atoms.has(id)) this.setKeyHot({ kind: 'atom', id }); },
+      done: () => this.changed(),
+      repaint: () => this.requestOverlay(),
+      say: (msg) => this.say(msg),
+    });
     const el = r.overlay;
     // tablets: fingers pan and pinch, a long press opens the menu (before the editor's own listeners)
     installPenAndTouch({ overlay: el, view: r.view, requestScene: (ts) => this.requestScene(ts) });
@@ -485,6 +505,8 @@ export class Editor {
     if (!t) return;
     // a path being drawn with the pen is finished when another tool is picked
     if (this.pen && t.kind !== 'pen') this.penFinish();
+    // letters still being written are read before the tool changes
+    if (t.kind !== 'sketch') this.sketcher.flush();
     this.tool = t;
     this.toolName = name;
     this.onToolChange(name);
@@ -694,6 +716,13 @@ export class Editor {
       return;
     }
     this.closeCaption();
+    // the Sketch tool (or the pen, when it always sketches): ink, read when the pen lifts
+    if (e.button === 0 && !this.painter && (this.tool.kind === 'sketch' || this.options.penSketch && e.pointerType === 'pen')) {
+      this.r.overlay.setPointerCapture(e.pointerId);
+      const p = this.docPoint(e), rect = this.r.overlay.getBoundingClientRect();
+      this.drag = { start: p, startScreen: { x: e.clientX - rect.left, y: e.clientY - rect.top }, hit: null, button: 0, moved: false, shift: e.shiftKey, alt: e.altKey, ctrl: false, mode: 'sketch', last: p, path: [p] };
+      return;
+    }
     this.keyHot = null;
     this.r.overlay.setPointerCapture(e.pointerId);
     const p = this.docPoint(e);
@@ -762,6 +791,14 @@ export class Editor {
       if (slot?.id !== this.helperHover?.id || slot?.side !== this.helperHover?.side) this.helperHover = slot;
       this.showPointer(e.ctrlKey || e.metaKey);
       if (slot) this.r.overlay.style.cursor = 'pointer';
+      this.requestOverlay(e.timeStamp);
+      return;
+    }
+    if (d.mode === 'sketch') {
+      // every point the pen reported, for smooth ink
+      for (const c of e.getCoalescedEvents?.() ?? [e]) d.path!.push(this.docPoint(c));
+      d.moved = true;
+      d.last = d.path![d.path!.length - 1];
       this.requestOverlay(e.timeStamp);
       return;
     }
@@ -924,6 +961,8 @@ export class Editor {
       case 'template':
       case 'fragment':
         return 'draw';
+      case 'sketch':
+        return 'none';
       case 'text':
         // dragging across empty space makes a text box that wide
         return d.hit && d.hit.kind === 'caption' ? 'move' : d.hit ? 'none' : 'draw';
@@ -936,6 +975,12 @@ export class Editor {
     if (!d) return;
     if (d.moved) this.showPointer(e.ctrlKey || e.metaKey);
     const p = this.docPoint(e);
+    if (d.mode === 'sketch') {
+      // a cancelled stroke (two fingers came down, or a long press) is not ink
+      if (e.type !== 'pointercancel') { d.path!.push(p); this.sketcher.stroke(d.path!); }
+      this.requestOverlay(e.timeStamp);
+      return;
+    }
     if (d.mode === 'text') {
       this.captionEd?.pointerUp();
       if (this.painter && this.captionEd) this.painter.text(this.captionEd.ed);
@@ -3542,6 +3587,24 @@ export class Editor {
     return false;
   }
 
+  /**
+   * A key on the on-screen keypad (touch screens): the same action as the hotkey, on the atom or
+   * bond last drawn or highlighted, else on the one atom or bond selected. False when there is
+   * nothing it applies to.
+   */
+  keypad(atomAction: string | null, bondAction: string | null): boolean {
+    let hs = this.hotspot();
+    if (!hs || (hs.kind !== 'atom' && hs.kind !== 'bond')) {
+      const atoms = [...this.sel.atoms], bonds = [...this.sel.bonds];
+      if (atoms.length === 1 && bonds.length === 0) hs = { kind: 'atom', id: atoms[0] };
+      else if (bonds.length === 1 && atoms.length <= 2) hs = { kind: 'bond', id: bonds[0] };
+      else if (atoms.length && atomAction?.startsWith('label ')) hs = { kind: 'atom', id: atoms[0] };
+    }
+    if (hs?.kind === 'atom' && atomAction) return this.runAction(atomAction, hs);
+    if (hs?.kind === 'bond' && bondAction) return this.runAction(bondAction, hs);
+    return false;
+  }
+
   undo(): void {
     if (this.doc.undo()) { this.selectApplied(); this.afterUndo(); }
   }
@@ -4926,8 +4989,27 @@ export class Editor {
         this.drawPreview(ctx, d);
       }
     }
+    this.drawInk(ctx, px);
     this.drawArrowHelpers(ctx, px, mk.box);
     this.captionEd?.draw(ctx);
+  }
+
+  /** The pen's ink: the stroke being drawn, and letters waiting to be read. */
+  private drawInk(ctx: CanvasRenderingContext2D, px: number): void {
+    const strokes = [...this.sketcher.pending];
+    if (this.drag?.mode === 'sketch' && this.drag.path) strokes.push(this.drag.path);
+    if (!strokes.length) return;
+    ctx.save();
+    ctx.strokeStyle = this.dark ? 'rgba(120, 170, 255, 0.9)' : 'rgba(30, 90, 216, 0.8)';
+    ctx.lineWidth = 2 * px;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (const s of strokes) {
+      ctx.beginPath();
+      s.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   /** While drawing a connector (or dragging its end), the connection points of the shape under the pointer. */

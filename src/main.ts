@@ -162,6 +162,7 @@ import { fileTypesPage, FILE_TYPES } from './ui/file-types-page';
 import { watchRibbons, fitRibbons, setRibbonCollapsed, ribbonCollapsed } from './ui/ribbon-fit';
 import { placeTitleBar, titleBarPlace } from './ui/title-bar';
 import { canScaleUi, setUiScale, stepUiScale, uiScale, UI_SCALES } from './ui/ui-scale';
+import { installTouchUi, keypadShowing, markSketch, setTouchMode, showKeypad, touchMode, touchOn } from './ui/touch-ui';
 import { FeedbackDialog } from './ui/feedback-dialog';
 import { addRecent, removeRecent, recentLabel } from './recent';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
@@ -403,6 +404,7 @@ const TOOL_GROUPS: ToolbarItem[][] = [
     BRACKETS,
     SHAPES,
     { name: 'fragment', title: 'Mass fragmentation: drag a line across bonds (or click a bond) to break them and label each piece with its formula and mass' },
+    { name: 'sketch', title: 'Sketch (for a pen): draw freehand. Lines become bonds, a loop with corners a ring, a circle benzene (inside a ring: aromatic), letters label atoms (C N O S P F Cl Br I H, + −), a scribble erases' },
   ],
   [
     { name: 'ring-3', title: 'Cyclopropane' },
@@ -474,6 +476,7 @@ const toolbar = new Toolbar($<HTMLDivElement>('#tools'), TOOL_GROUPS, (name) => 
 }, (name, size) => TOOL_PALETTE.get(name)?.icon?.(name, size));
 
 const HINTS: Record<string, string> = {
+  sketch: 'Draw freehand: a line is a bond, a zig-zag a chain, over a bond doubles it; a loop with corners is a ring, a circle benzene; write C, N, O, Cl, Br, + or − on an atom; scribble to erase.',
   connector: 'Drag from one shape\'s blue dot to another\'s: the connector sticks to both and follows them when they move.',
   'connector-elbow': 'Drag from one shape\'s blue dot to another\'s: the connector bends square and follows the shapes when they move.',
   select: 'Click to select (Shift or Ctrl+click adds), drag to box-select or move. Ctrl+drag copies; Shift keeps a drag straight. Double-click selects a whole structure. Delete removes.',
@@ -521,6 +524,7 @@ const GEO_HINT = 'Click on the page to put the shape down, or drag to draw it at
 
 editor.onToolChange = (name) => {
   toolbar.setActive(name);
+  markSketch(name === 'sketch');
   for (const b of document.querySelectorAll<HTMLElement>('.tb-tool')) b.classList.toggle('active', b.dataset.tool === name);
   designLib?.setActive(name);
   if (name.startsWith('geo:')) { $('#hint').textContent = GEO_HINT; return; }
@@ -529,6 +533,15 @@ editor.onToolChange = (name) => {
     : t.kind === 'shape' ? SHAPE_HINT : t.kind === 'bracket' ? BRACKET_HINT : t.kind === 'template' ? TEMPLATE_HINT : BOND_HINT);
 };
 editor.setTool('bond-single');
+
+// tablets: bigger buttons, long-press menus, double taps and the atom keypad (View > Touch Mode)
+installTouchUi({
+  canvasHost: host,
+  keypad: (atom, bond) => editor.keypad(atom, bond),
+  command: (cmd) => { command(cmd); },
+  say: (msg) => flash(msg),
+  changed: (on) => $('[data-cmd="atom-keypad"]')?.setAttribute('aria-checked', String(on && keypadShowing())),
+}, 'auto');
 
 // ---------------------------------------------------------------- top bar actions
 
@@ -4290,7 +4303,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'export-settings', 'import-settings', 'customize-ribbon', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'reset-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'navigation-settings', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'title-bar-in-menu', 'collapse-ribbon', 'ui-scale-in', 'ui-scale-out', 'ui-scale-reset', ...UI_SCALES.map((v) => `ui-scale-${Math.round(v * 100)}`), 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
+  'drawing-style', 'navigation-settings', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'title-bar-in-menu', 'collapse-ribbon', 'ui-scale-in', 'ui-scale-out', 'ui-scale-reset', ...UI_SCALES.map((v) => `ui-scale-${Math.round(v * 100)}`), 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'touch-mode-auto', 'touch-mode-on', 'touch-mode-off', 'atom-keypad', 'pen-sketch', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
 
 // ---------------------------------------------------------------- accessibility (Review > Check Accessibility, Alt Text…)
@@ -4779,6 +4792,16 @@ const COMMANDS: Record<string, () => unknown> = {
   'text-bar-floating': () => { placeTextBar('floating'); storeSettings(); },
   'text-bar-hidden': () => { placeTextBar('hidden'); storeSettings(); },
   'group-tips': () => { showGroupTips(!labelTips.enabled); storeSettings(); },
+  'touch-mode-auto': () => { setTouchMode('auto'); storeSettings(); },
+  'touch-mode-on': () => { setTouchMode('on'); storeSettings(); },
+  'touch-mode-off': () => { setTouchMode('off'); storeSettings(); },
+  'atom-keypad': () => {
+    if (!touchOn()) { flash('The atom keypad is part of Touch Mode: View > Touch Mode > On.'); return; }
+    showKeypad(!keypadShowing());
+    $('[data-cmd="atom-keypad"]')?.setAttribute('aria-checked', String(keypadShowing()));
+  },
+  'tool-sketch': () => { editor.setTool(editor.toolName === 'sketch' ? 'bond-single' : 'sketch'); },
+  'pen-sketch': () => { editor.options.penSketch = !editor.options.penSketch; $('[data-cmd="pen-sketch"]')?.setAttribute('aria-checked', String(editor.options.penSketch)); storeSettings(); },
   'dark-page': () => { showDark(!dark.on); storeSettings(); },
   'alignment-guides': () => {
     const m = guideMode();
@@ -5915,6 +5938,8 @@ function currentSettings(): Settings {
     page: defaultPage,
     welcomed,
     groupTips: labelTips.enabled,
+    touchMode: touchMode(),
+    penSketch: editor.options.penSketch,
     chemTyping: typingPrefs.chemistry,
     stereoItalic: typingPrefs.stereoItalic,
     boldNumbers: typingPrefs.boldNumbers,
@@ -6123,6 +6148,9 @@ function applySettings(s: Settings): void {
   if (!doc.page && !doc.source && !doc.atoms.size && !deckNow()) doc.page = defaultPage && { ...defaultPage };
   placeTextBar(s.textBar);
   showGroupTips(s.groupTips);
+  setTouchMode(s.touchMode);
+  editor.options.penSketch = s.penSketch;
+  $('[data-cmd="pen-sketch"]')?.setAttribute('aria-checked', String(s.penSketch));
   modeColours = s.modeColours;
   applyModeColours(ws.active.mode, modeColours);
   keymap.setOverrides(s.hotkeys);
