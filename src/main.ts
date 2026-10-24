@@ -7997,10 +7997,13 @@ stylePanel.tables = {
 let stereoSeen = -1;
 let outlineSeen = -1;
 // scroll bars over the drawing: they cover what is drawn (or the slide), and the part on screen
-const scrollbars = new Scrollbars(host, renderer, () => {
+const scrollArea = () => {
   const d = ws.active.deck;
   return d ? { x1: 0, y1: 0, x2: d.size.w, y2: d.size.h } : doc.bounds();
-}, () => editor.requestScene());
+};
+const scrollbars = new Scrollbars(host, renderer, scrollArea, () => editor.requestScene());
+// the wheel stops where the bars end, at the edge of the drawing, rather than going on for ever
+editor.scrollArea = scrollArea;
 
 // ---------------------------------------------------------------- finding your way round (Settings ▸ Navigation)
 

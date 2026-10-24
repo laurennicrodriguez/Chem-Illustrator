@@ -21,14 +21,48 @@ export function thumbFor(range: [number, number], seen: [number, number], track:
   return { start: Math.max(0, Math.min(room, start)), size };
 }
 
-/** What the bars cover: the drawing (with half a screen of room round it) and the part on screen. */
+/** The room left round the drawing at the scroll bars' ends, and where the wheel stops: a quarter of the window. */
+export const EDGE_ROOM = 0.25;
+
+/** What the bars cover: the drawing (with a quarter of a screen of room round it) and the part on screen. */
 export function scrollRange(content: Rect | null, seen: Rect): Rect {
   const w = seen.x2 - seen.x1, h = seen.y2 - seen.y1;
   // with nothing drawn, a screen either way, so there is somewhere to go
   const c = content
-    ? { x1: content.x1 - w / 2, y1: content.y1 - h / 2, x2: content.x2 + w / 2, y2: content.y2 + h / 2 }
+    ? { x1: content.x1 - w * EDGE_ROOM, y1: content.y1 - h * EDGE_ROOM, x2: content.x2 + w * EDGE_ROOM, y2: content.y2 + h * EDGE_ROOM }
     : { x1: seen.x1 - w, y1: seen.y1 - h, x2: seen.x2 + w, y2: seen.y2 + h };
   return { x1: Math.min(c.x1, seen.x1), y1: Math.min(c.y1, seen.y1), x2: Math.max(c.x2, seen.x2), y2: Math.max(c.y2, seen.y2) };
+}
+
+/**
+ * Where the left (or top) of what is on screen may go along one axis, given where it is now:
+ * between `lo` and `hi`. A view already past an end (after a zoom or a drag) may come back but
+ * not go further out. Points.
+ */
+export function clampPan(now: number, want: number, lo: number, hi: number): number {
+  return Math.min(Math.max(want, Math.min(now, lo)), Math.max(now, hi));
+}
+
+/** The ends for one axis: a drawing bigger than the window scrolls until its edge (with room) shows; a smaller one stays on screen. */
+function panEnds(c1: number, c2: number, screen: number): [number, number] {
+  const m = screen * EDGE_ROOM;
+  const a = c1 - m, b = c2 + m - screen;
+  return [Math.min(a, b), Math.max(a, b)];
+}
+
+/**
+ * Keep the view's offsets (ox, oy) inside the drawing's edges after a scroll that started at
+ * `from`, so scrolling stops at the edge (with a quarter of a screen of room) rather than going
+ * on for ever. Nothing drawn, nothing to stop at.
+ */
+export function stopAtEdge(r: ScrollView, content: Rect | null, from: { ox: number; oy: number }): void {
+  if (!content || !r.width || !r.height) return;
+  const s = r.view.scale;
+  const w = r.width / s, h = r.height / s;
+  const x = clampPan(-from.ox / s, -r.view.ox / s, ...panEnds(content.x1, content.x2, w));
+  const y = clampPan(-from.oy / s, -r.view.oy / s, ...panEnds(content.y1, content.y2, h));
+  r.view.ox = -x * s;
+  r.view.oy = -y * s;
 }
 
 export class Scrollbars {
@@ -139,8 +173,10 @@ export class Scrollbars {
   /** Move what is on screen by `d` points along an axis. */
   private scrollBy(axis: 'h' | 'v', d: number): void {
     if (!d) return;
+    const from = { ox: this.r.view.ox, oy: this.r.view.oy };
     if (axis === 'h') this.r.view.ox -= d * this.r.view.scale;
     else this.r.view.oy -= d * this.r.view.scale;
+    stopAtEdge(this.r, this.content(), from);
     this.moved();
   }
 }
