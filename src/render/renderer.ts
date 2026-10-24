@@ -13,6 +13,7 @@ import { crossingGapsCached } from '../chem/crossing';
 import { FADE, tint } from '../colours';
 import { Vec, Rect, sub, add, mul, norm, perp, len, dot, exitParam, passParam, angleOf, arcCenter, fromAngle, turnedCorners, DEG } from '../geom';
 import { doubleBondGap, wedgeWidth } from '../style';
+import { joinWideEnds, type WideEnd, type EndJoin } from './bond-joins';
 import { chargeInk, labelBonds, labelSpec, layoutLabel, LabelLayout, labelLook } from '../chem/labels';
 import type { StructureChecks } from '../chem/warnings';
 import { isGenericLabel } from '../chem/labels';
@@ -849,6 +850,82 @@ export class Renderer {
     });
   }
 
+  /**
+   * A bond drawn as a filled band (a bold bond, a bold double bond's main line, or a wedge):
+   * its ends and its half width at each end. Null for other bonds, and for a bold bond with gaps
+   * where other bonds cross it (that one is stroked, piece by piece).
+   */
+  private band(doc: Doc, b: Bond, p: Atom, q: Atom): { s: Vec; e: Vec; hs: number; he: number } | null {
+    if (b.spokes || b.display === 'dative') return null;
+    const single = b.order === 1 || b.order === PARTIAL;
+    const k = b.s ?? 1, ds = doc.style;
+    let hs: number, he: number;
+    if (single && b.display === 'wedge') {
+      hs = (ds.lineWidth * k) / 2;
+      he = (wedgeWidth({ ...ds, boldWidth: ds.boldWidth * k })) / 2;
+    } else if (b.display === 'bold' && (single || (b.order === 2 && this.bondInfo(doc, b).side !== 0))) {
+      hs = he = (ds.boldWidth * k) / 2;
+      if (crossingGapsCached(doc, b, ds.marginWidth * k + ds.lineWidth).length) return null;
+    } else return null;
+    const [s, e] = this.bondEnds(doc, p, q);
+    return len(sub(e, s)) < 0.01 ? null : { s, e, hs, he };
+  }
+
+  /**
+   * How a band's end at an atom meets the other bands there (bold bonds and wedges' wide ends),
+   * or null when it meets none and keeps its square end.
+   */
+  private bandJoin(doc: Doc, atom: Atom, bondId: number): EndJoin | null {
+    const ends: WideEnd[] = [];
+    for (const bid of doc.adj.get(atom.id) ?? []) {
+      const b = doc.bonds.get(bid);
+      if (!b) continue;
+      const p = doc.atoms.get(b.a1), q = doc.atoms.get(b.a2);
+      if (!p || !q) continue;
+      const band = this.band(doc, b, p, q);
+      if (!band) continue;
+      const here = atom.id === b.a1;
+      // a wedge's narrow end, or an end stopped short by a label, joins nothing
+      if (b.display === 'wedge' && here) continue;
+      const at = here ? band.s : band.e, far = here ? band.e : band.s;
+      const h = here ? band.hs : band.he, hf = here ? band.he : band.hs;
+      if (Math.abs(at.x - atom.x) > 1e-6 || Math.abs(at.y - atom.y) > 1e-6) continue;
+      const u = norm(sub(far, at)), n = perp(u);
+      ends.push({ id: bid, at, u, h, farPlus: add(far, mul(n, hf)), farMinus: sub(far, mul(n, hf)) });
+    }
+    if (ends.length < 2 || !ends.some((x) => x.id === bondId)) return null;
+    return joinWideEnds(ends).get(bondId) ?? null;
+  }
+
+  /** A band's outline, its ends mitred into the bands they meet, into the batch's fills. */
+  private fillBand(doc: Doc, b: Bond, p: Atom, q: Atom, fills: Path2D): boolean {
+    const band = this.band(doc, b, p, q);
+    if (!band) return false;
+    const { s, e, hs, he } = band;
+    const nrm = perp(norm(sub(e, s)));
+    // at s, "plus" is the +nrm side; at e (looking back along the bond) it is the -nrm side
+    const js = this.bandJoin(doc, p, b.id), je = this.bandJoin(doc, q, b.id);
+    // a joined end also takes in the atom, so where three bands meet none leaves a hole between them
+    const pts = [
+      js?.plus ?? add(s, mul(nrm, hs)),
+      je?.minus ?? add(e, mul(nrm, he)),
+      ...(je ? [e] : []),
+      je?.plus ?? sub(e, mul(nrm, he)),
+      js?.minus ?? sub(s, mul(nrm, hs)),
+      ...(js ? [s] : []),
+    ];
+    for (const poly of [pts, ...(js?.fill ?? []), ...(je?.fill ?? [])]) {
+      // all one way round, so where bands overlap at a join (non-zero fill) they don't cancel
+      let area = 0;
+      poly.forEach((v, i) => { const w = poly[(i + 1) % poly.length]; area += v.x * w.y - w.x * v.y; });
+      const ring = area < 0 ? [...poly].reverse() : poly;
+      fills.moveTo(ring[0].x, ring[0].y);
+      for (const v of ring.slice(1)) fills.lineTo(v.x, v.y);
+      fills.closePath();
+    }
+    return true;
+  }
+
   private bondPaths(doc: Doc, b: Bond, p: Atom, q: Atom, bb: BondBatch): void {
     const { thin, bold, dashed, fills } = bb;
     const k = b.s ?? 1;
@@ -934,19 +1011,10 @@ export class Renderer {
           fills.closePath();
           break;
         }
-        case 'bold': line(bold, s, e); break;
+        // a band (narrow at a1 and wide at a2 for a wedge), mitred into bold bands it meets
+        case 'bold': if (!this.fillBand(doc, b, p, q, fills)) line(bold, s, e); break;
         case 'dash': line(dashed, s, e); break;
-        case 'wedge': {
-          // narrow at a1, wide at a2
-          const w = wedgeWidth(st) / 2;
-          const ww = st.lineWidth / 2;
-          fills.moveTo(s.x + nrm.x * ww, s.y + nrm.y * ww);
-          fills.lineTo(e.x + nrm.x * w, e.y + nrm.y * w);
-          fills.lineTo(e.x - nrm.x * w, e.y - nrm.y * w);
-          fills.lineTo(s.x - nrm.x * ww, s.y - nrm.y * ww);
-          fills.closePath();
-          break;
-        }
+        case 'wedge': this.fillBand(doc, b, p, q, fills); break;
         case 'hashWedge': {
           const w = wedgeWidth(st) / 2;
           const n = Math.min(MAX_HASHES, Math.max(2, Math.floor(l / st.hashSpacing)));
@@ -1007,7 +1075,7 @@ export class Renderer {
     const qLabelled = this.atomInfo(doc, q).boxes.length > 0;
     const t1 = pLabelled ? 0 : Math.min(gap * info.trim1 + gap * 0.15, l * 0.3);
     const t2 = qLabelled ? 0 : Math.min(gap * info.trim2 + gap * 0.15, l * 0.3);
-    line(main, s, e);
+    if (main !== bold || !this.fillBand(doc, b, p, q, fills)) line(main, s, e);
     offLine(second, add(add(s, off), mul(dir, t1)), sub(add(e, off), mul(dir, t2)));
   }
 
@@ -1264,9 +1332,9 @@ export class Renderer {
       if (r.sweep) { this.arcArrow(ctx, r, tail, head); return; }
       const dir = mul(d, 1 / l);
       const hl = Math.min(r.headLength, l * 0.6);
-      const into = shaftInto(hl, r.headType, ctx.lineWidth);
-      const back = headStyle === 'none' ? 0 : into;
-      const tback = tailStyle === 'none' ? 0 : into;
+      const into = (style: Arrow['headStyle']) => style === 'none' ? 0 : shaftInto(hl, r.headType, ctx.lineWidth, isHalf(style) ? r.headWidth : undefined);
+      const back = into(headStyle);
+      const tback = into(tailStyle);
       ctx.setLineDash(r.line === 'dashed' ? [lw * 4, lw * 3] : []);
       ctx.beginPath();
       const s = add(tail, mul(dir, tback)), e = sub(head, mul(dir, back));
@@ -1363,10 +1431,10 @@ export class Renderer {
     const hDir = aim(head, a1 - s * back), tDir = aim(tail, a0 + s * back);
     // the line follows the arc to where the head starts, then runs straight along the head's
     // middle into it, so it can't show beside or past the head's point
-    const into = shaftInto(r.headLength, r.headType, ctx.lineWidth);
+    const into = (style: Arrow['headStyle']) => shaftInto(r.headLength, r.headType, ctx.lineWidth, isHalf(style) ? r.headWidth : undefined);
     const hasHead = r.headStyle !== 'none', hasTail = r.tailStyle !== 'none';
-    const start = hasTail ? sub(tail, mul(tDir, into)) : tail;
-    const end = hasHead ? sub(head, mul(hDir, into)) : head;
+    const start = hasTail ? sub(tail, mul(tDir, into(r.tailStyle))) : tail;
+    const end = hasHead ? sub(head, mul(hDir, into(r.headStyle))) : head;
     ctx.lineJoin = 'round';
     ctx.setLineDash(r.line === 'dashed' ? [ctx.lineWidth * 4, ctx.lineWidth * 3] : []);
     ctx.beginPath();
@@ -1393,9 +1461,9 @@ export class Renderer {
     const tH = hasHead ? bezHeadBack(pts, reach, false) : n;
     const tT = hasTail ? bezHeadBack(pts, reach, true) : 0;
     const hDir = norm(sub(r.head, bezPathAt(pts, tH))), tDir = norm(sub(r.tail, bezPathAt(pts, tT)));
-    const into = shaftInto(r.headLength, r.headType, ctx.lineWidth);
-    const start = hasTail ? sub(r.tail, mul(tDir, into)) : r.tail;
-    const end = hasHead ? sub(r.head, mul(hDir, into)) : r.head;
+    const into = (style: Arrow['headStyle']) => shaftInto(r.headLength, r.headType, ctx.lineWidth, isHalf(style) ? r.headWidth : undefined);
+    const start = hasTail ? sub(r.tail, mul(tDir, into(r.tailStyle))) : r.tail;
+    const end = hasHead ? sub(r.head, mul(hDir, into(r.headStyle))) : r.head;
     const path = bezSlice(pts, tT, tH);
     ctx.lineJoin = 'round';
     ctx.setLineDash(r.line === 'dashed' ? [ctx.lineWidth * 4, ctx.lineWidth * 3] : []);
@@ -1421,12 +1489,44 @@ export class Renderer {
     const inner = sub(tip, mul(dir, hl * 0.75));
     const left = add(base, mul(n, -hw)), right = add(base, mul(n, hw));
     const toLeft = style === 'full' || style === 'halfLeft', toRight = style === 'full' || style === 'halfRight';
+    const half = toLeft !== toRight;
     ctx.beginPath();
     if (r.headType === 'angle') {
-      // an open head: just the barbs
+      // an open head: just the barbs. A half head is filled as one outline with the end of the
+      // line, so the barb turns into the line with a sharp point and no notch.
+      if (half) {
+        const w = ctx.lineWidth / 2;
+        const off = mul(n, toLeft ? w : -w), barb = toLeft ? left : right;
+        const point = add(tip, off), back = mul(dir, Math.min(openHalfNotch(hl, hw, ctx.lineWidth) + ctx.lineWidth, hl));
+        // the barb's outer edge runs to the point; its inner edge stops at the line's edge
+        let bn = perp(norm(sub(point, barb)));
+        if (dot(bn, off) > 0) bn = mul(bn, -1);
+        const bo = add(barb, mul(bn, w)), bi = sub(barb, mul(bn, w)), along = sub(point, bo);
+        const edge = sub(tip, off);
+        const den = along.x * dir.y - along.y * dir.x;
+        const t = Math.abs(den) > 1e-9 ? ((edge.x - bi.x) * dir.y - (edge.y - bi.y) * dir.x) / den : 1;
+        const notch = add(bi, mul(along, t));
+        [sub(point, back), point, bo, bi, notch, sub(edge, back)].forEach((v, i) => (i ? ctx.lineTo(v.x, v.y) : ctx.moveTo(v.x, v.y)));
+        ctx.closePath();
+        ctx.fill();
+        return;
+      }
       if (toLeft) { ctx.moveTo(left.x, left.y); ctx.lineTo(tip.x, tip.y); } else ctx.moveTo(tip.x, tip.y);
       if (toRight) ctx.lineTo(right.x, right.y);
       ctx.stroke();
+      return;
+    }
+    if (half) {
+      // a half head's straight side carries on the line's edge on the side without a barb, so
+      // the line runs into it with no step
+      const off = mul(n, ((toLeft ? 1 : -1) * ctx.lineWidth) / 2);
+      const t = add(tip, off), i = add(inner, off), barb = toLeft ? left : right;
+      ctx.moveTo(t.x, t.y);
+      ctx.lineTo(barb.x, barb.y);
+      ctx.lineTo(inner.x, inner.y);
+      ctx.lineTo(i.x, i.y);
+      ctx.closePath();
+      if (r.headType === 'hollow') ctx.stroke(); else ctx.fill();
       return;
     }
     ctx.moveTo(tip.x, tip.y);
@@ -2223,13 +2323,27 @@ export function turnAt(ctx: CanvasRenderingContext2D, at: Vec, deg: number): voi
   ctx.translate(-at.x, -at.y);
 }
 
+const isHalf = (style: Arrow['headStyle']): boolean => style === 'halfLeft' || style === 'halfRight';
+
 /**
  * How far before a head's point its arrow's line stops: inside a filled or outlined head (so the
  * line's square end can't show past the point), and just short of the point for an open head,
  * whose two barbs meet there.
  */
-export function shaftInto(headLength: number, headType: Arrow['headType'], lineWidth: number): number {
-  return headType === 'angle' ? Math.min(lineWidth, headLength * 0.5) : headLength * 0.7;
+export function shaftInto(headLength: number, headType: Arrow['headType'], lineWidth: number, halfWidth?: number): number {
+  if (headType !== 'angle') return headLength * 0.7;
+  // an open half head: the line stops where the barb's inner edge meets it (openHalfNotch)
+  if (halfWidth) return openHalfNotch(headLength, halfWidth, lineWidth);
+  return Math.min(lineWidth, headLength * 0.5);
+}
+
+/**
+ * How far back from its point an open half head's barb (a band as wide as the line, its outer
+ * edge running to the point) meets the line's far edge: lw / tan(θ/2), θ the barb's angle.
+ */
+export function openHalfNotch(headLength: number, headWidth: number, lineWidth: number): number {
+  const half = Math.atan2(headWidth, headLength) / 2;
+  return Math.min(lineWidth / Math.max(Math.tan(half), 1e-3), headLength * 0.9);
 }
 
 /** How far round a curved arrow's arc (radians) its head's base sits from the point. */
