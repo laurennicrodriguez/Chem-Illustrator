@@ -84,7 +84,7 @@ import { editMaster } from './ui/master-dialog';
 import { editDrawingStyle } from './ui/style-dialog';
 import type { DocText } from './document/document';
 import { DARK_PALETTES, darkPaletteNamed, showDarkPage, type DarkPalette } from './dark-page';
-import { applyStyle, restyleContents, styleNamed, type StyleMode } from './drawing-styles';
+import { STYLE_PRESETS, applyStyle, restyleContents, sameLook, styleNamed, type StyleMode } from './drawing-styles';
 import { recordPicture, pictureSvg, pictureCanvas, canvasPng, bitmapScale, EXPORT_MAX_SIDE, EXPORT_MAX_PIXELS } from './render/picture';
 import { pngWithDpi } from './render/emf-read';
 import { whiteToClear } from './render/background';
@@ -566,7 +566,7 @@ async function dropFiles(files: File[], at: { x: number; y: number }): Promise<v
   const inside = at.x >= r.left && at.x <= r.right && at.y >= r.top && at.y <= r.bottom;
   for (const f of files) {
     const bytes = new Uint8Array(await f.arrayBuffer());
-    const mime = /\.(cdxml|cdx|pptx|xlsx|xlsm|xls|ods|docx|csv|tsv|txt|sdf?)$/i.test(f.name) ? null : pictureMime(f.name, bytes);
+    const mime = /\.(cdxml|cdx|cds|pptx|xlsx|xlsm|xls|ods|docx|csv|tsv|txt|sdf?)$/i.test(f.name) ? null : pictureMime(f.name, bytes);
     if (mime && sheetActive()) flash('Pictures can\'t go in a cell yet. Drop sheet files (.xlsx, .csv, .sdf) to open them.');
     else if (mime && docActive()) docMode.dropPicture(bytes, mime);
     else if (mime) placePicture(bytes, mime, inside ? renderer.toDoc(at.x - r.left, at.y - r.top) : null);
@@ -1076,7 +1076,7 @@ setLinkHost({
   },
   async openHere(path) {
     // drawings, documents, slides, sheets and workspaces open in a tab here
-    if (!/\.(cdxml|cdx|docx|pptx|xlsx|xlsm|xls|ods|csv|tsv|sdf|sd)$/i.test(path) && !path.toLowerCase().endsWith(`.${WORKSPACE.extension}`)) return false;
+    if (!/\.(cdxml|cdx|cds|docx|pptx|xlsx|xlsm|xls|ods|csv|tsv|sdf|sd)$/i.test(path) && !path.toLowerCase().endsWith(`.${WORKSPACE.extension}`)) return false;
     if (!isTauri()) return false;
     await openRecent(path);
     return true;
@@ -1829,6 +1829,7 @@ const ws: Workspace = new Workspace(doc, {
   saved: (tab, data, how, was) => keeper.saved(tab, data, how, was),
   autoSaveFailed: (tab, msg) => keeper.autoSaveFailed(tab, msg),
   opened: (tab) => keeper.opened(tab),
+  styleSheet: (tab, style) => void offerStyleSheet(tab, style),
   dropped: (tab) => {
     keeper.dropped(tab);
     // a drawing being edited for Word: Word hears that the editing is over
@@ -3281,6 +3282,35 @@ async function drawingStyleDialog(): Promise<void> {
     editor.changed();
   }
   flash(`Structures are now drawn in ${next.name}${got.forNew ? `, and new ${STYLE_KINDS[mode].plural} will start in it` : ''}.`, 4000);
+}
+
+/**
+ * A ChemDraw style sheet (.cds) was opened: its contents show in their tab, and its settings can
+ * be kept as one of your own drawing styles (and made the style new drawings start in).
+ */
+async function offerStyleSheet(tab: Tab, style: DocStyle): Promise<void> {
+  const known = [...STYLE_PRESETS.map((p) => p.style), ...ownStyles].find((s) => sameLook(s, style));
+  if (known) {
+    flash(`${tab.name} has the same settings as ${known.name}, which is already in Drawing Style.`, 5000);
+    return;
+  }
+  const base = tab.name.replace(/\.cds$/i, '');
+  const got = await ask('Use this style sheet?', [
+    { name: 'name', label: 'Name', value: base },
+    { name: 'forNew', label: 'Start new drawings in it', value: 'false', type: 'checkbox' },
+  ], {
+    ok: 'Add to My Styles',
+    note: `${tab.name} is a ChemDraw style sheet: bond length ${style.bondLength} pt, line width ${style.lineWidth} pt, bold width ${style.boldWidth} pt, `
+      + `${style.labelFont} ${style.labelSize} pt labels. Keep these settings as one of your own drawing styles, to pick in Drawing Style in any mode? `
+      + 'Its contents are open in a tab either way.',
+  });
+  if (!got) return;
+  const st: DocStyle = { ...style, name: got.name.trim() || base };
+  const had = ownStyles.findIndex((s) => s.name === st.name);
+  ownStyles = had >= 0 ? ownStyles.map((s, i) => (i === had ? st : s)) : [...ownStyles, st];
+  if (got.forNew === 'true') modeStyles.drawing = st.name;
+  storeSettings();
+  flash(`${st.name} is now one of your drawing styles${got.forNew === 'true' ? ', and new drawings will start in it' : ''}.`, 4000);
 }
 
 async function slideMaster(): Promise<void> {
@@ -5207,7 +5237,7 @@ function layoutSplit(): void {
   if (ws.pane) editor.paused = !splitDrawing && !cellEdit;
   $('[data-cmd="split-view"]')?.setAttribute('aria-checked', String(!!st));
   if (!st) { $('#split-empty').hidden = true; return; }
-  const opts = ws.tabs.filter((t) => t.mode === 'drawing').map((t) => new Option(t.name.replace(/\.(cdxml|cdx)$/i, ''), String(t.id), false, t === st.drawing));
+  const opts = ws.tabs.filter((t) => t.mode === 'drawing').map((t) => new Option(t.name.replace(/\.(cdxml|cdx|cds)$/i, ''), String(t.id), false, t === st.drawing));
   opts.push(new Option('New drawing', 'new'));
   splitPick.replaceChildren(...opts);
   $('#split-insert').textContent = st.main.mode === 'document' ? 'Insert into Document' : st.main.mode === 'sheet' ? 'Insert into Cell' : st.main.mode === 'design' ? 'Insert into Design' : 'Insert into Slide';

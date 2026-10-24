@@ -8,6 +8,7 @@ import { showDialog } from './dialog-host';
 export const FILE_TYPES: { ext: string; label: string; chemistry: boolean }[] = [
   { ext: 'cdxml', label: 'ChemDraw XML drawings (.cdxml)', chemistry: true },
   { ext: 'cdx', label: 'ChemDraw drawings (.cdx)', chemistry: true },
+  { ext: 'cds', label: 'ChemDraw style sheets (.cds)', chemistry: true },
   { ext: 'mol', label: 'Molfiles (.mol)', chemistry: true },
   { ext: 'sdf', label: 'Structure-data files (.sdf)', chemistry: true },
   { ext: 'docx', label: 'Word documents (.docx)', chemistry: false },
@@ -48,8 +49,8 @@ export async function fileTypesPage(host: FileTypesHost): Promise<void> {
     note(host.platform === 'web'
       ? 'The web version opens files from File ▸ Open, or dropped on the window. The desktop app can be opened from your files directly.'
       : host.platform === 'mac'
-        ? 'Chem Illustrator is offered for .cdxml, .cdx, .mol, .sdf, .docx, .pptx and .xlsx files: right-click a file in Finder and choose Open With. To always open a kind of file here, choose File ▸ Get Info in Finder, pick Chem Illustrator under Open with, and click Change All.'
-        : 'Chem Illustrator is offered for .cdxml, .cdx, .mol, .sdf, .docx, .pptx and .xlsx files in your file manager\'s Open With menu. Your desktop\'s settings (Default Applications) choose which program opens each kind of file.');
+        ? 'Chem Illustrator is offered for .cdxml, .cdx, .cds, .mol, .sdf, .docx, .pptx and .xlsx files: right-click a file in Finder and choose Open With. To always open a kind of file here, choose File ▸ Get Info in Finder, pick Chem Illustrator under Open with, and click Change All.'
+        : 'Chem Illustrator is offered for .cdxml, .cdx, .cds, .mol, .sdf, .docx, .pptx and .xlsx files in your file manager\'s Open With menu. Your desktop\'s settings (Default Applications) choose which program opens each kind of file.');
     const ok = document.createElement('button');
     ok.type = 'submit';
     ok.className = 'primary';

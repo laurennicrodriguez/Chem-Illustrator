@@ -21,6 +21,15 @@
       },
       {
         "ext": [
+          "cds"
+        ],
+        "name": "ChemDraw style sheet",
+        "mimeType": "chemical/x-cdx",
+        "role": "Viewer",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
           "mol"
         ],
         "name": "MDL Molfile",

@@ -8,7 +8,7 @@ Each kind of tab saves to its own file type. **Save** (Ctrl+S) uses the first ty
 
 | Tab | Opens | Saves | Also exports |
 |---|---|---|---|
-| Drawing | .cdxml, .cdx | .cdxml (the default), .cdx | Molfile (.mol), PDF, PNG, TIFF, SVG, EMF, EPS |
+| Drawing | .cdxml, .cdx, .cds | .cdxml (the default), .cdx | Molfile (.mol), PDF, PNG, TIFF, SVG, EMF, EPS |
 | Slides | .pptx | .pptx | PDF (one page per slide), PNG, TIFF, SVG, EMF or EPS of the current slide |
 | Design | .pptx | .pptx (one slide) | PDF, PNG, TIFF, SVG, EMF, EPS |
 | Document | .docx | .docx | PDF |
@@ -21,6 +21,7 @@ Open files with **File ▸ Open…** (Ctrl+O), or drop them onto the window. Pic
 
 - **.cdxml** is the default for drawings. When you save a ChemDraw file you opened, only what you changed is rewritten, so the rest stays exactly as ChemDraw wrote it.
 - **.cdx** is ChemDraw's binary format. It opens and saves, and it is what ChemDraw reads from the clipboard.
+- **.cds** is a ChemDraw style sheet. It opens like a drawing, and the app offers to keep its settings (bond length, line widths, label font) as one of your own drawing styles, so you can pick it in **Drawing Style** in any mode or start new drawings in it. Style sheets open but are never written back to: Save asks for a .cdxml or .cdx file.
 
 ### Structures in Office files
 
@@ -55,7 +56,7 @@ Open files with **File ▸ Open…** (Ctrl+O), or drop them onto the window. Pic
 
 Double-click a file, or right-click it and choose **Open with ▸ Chem Illustrator**, and it opens in a new tab. A file opened while the program is already running goes to the open window rather than starting a second copy.
 
-- **Windows**: the first time it starts, Chem Illustrator adds itself to the **Open with** list of .cdxml, .cdx, .mol and .sdf files, for you only. **Edit ▸ Settings ▸ File Types** chooses which kinds of file it is offered for, including .docx, .pptx and .xlsx. It never makes itself the program that opens a file on a double-click: Windows keeps that choice for you. **Choose Defaults in Windows Settings…** on that page opens Windows' Default apps page, where you can pick Chem Illustrator for each kind of file. A portable copy leaves the computer's file types alone until you tick them yourself. Uninstalling takes it off the lists again.
+- **Windows**: the first time it starts, Chem Illustrator adds itself to the **Open with** list of .cdxml, .cdx, .cds, .mol and .sdf files, for you only. **Edit ▸ Settings ▸ File Types** chooses which kinds of file it is offered for, including .docx, .pptx and .xlsx. It never makes itself the program that opens a file on a double-click: Windows keeps that choice for you. **Choose Defaults in Windows Settings…** on that page opens Windows' Default apps page, where you can pick Chem Illustrator for each kind of file. A portable copy leaves the computer's file types alone until you tick them yourself. Uninstalling takes it off the lists again.
 - **macOS**: right-click a file and choose **Open With ▸ Chem Illustrator**. To open a kind of file here every time, select one in Finder, choose **File ▸ Get Info**, pick Chem Illustrator under **Open with** and click **Change All**.
 - **Linux**: Chem Illustrator is in your file manager's **Open With** list for these files; your desktop's Default Applications settings choose the default.
 

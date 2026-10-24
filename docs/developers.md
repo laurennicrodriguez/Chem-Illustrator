@@ -76,4 +76,4 @@ The pictures in `docs/images/` are taken by `scripts/screenshots.mjs`, which dri
 
 ## What stays out of the repository
 
-Keep ChemDraw files, manuals and other reference documents out of this repository: it is public. The `.gitignore` already refuses `.cdxml`, `.cdx` and `.pdf` files. Test files made for the tests are built by the tests themselves.
+Keep ChemDraw files, manuals and other reference documents out of this repository: it is public. The `.gitignore` already refuses `.cdxml`, `.cdx`, `.cds` and `.pdf` files. Test files made for the tests are built by the tests themselves.

@@ -13,6 +13,7 @@ src/design/icons/mdi.json
 # Never commit drawings or reference documents; keep them outside the repo
 *.cdxml
 *.cdx
+*.cds
 *.pdf
 # except cdxmorph's public example schemes (MIT), the reaction animation's test files
 !tests/morph/*.cdxml
