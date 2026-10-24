@@ -9,8 +9,71 @@ import { Vec, add, sub, mul, norm, perp, dot, angleOf, fromAngle, dist, normAngl
 /** New atoms closer than this fraction of a bond length to an existing atom join it. */
 export const MERGE_FRACTION = 0.25;
 
+/**
+ * Whether what is added to a structure takes that structure's own look (its bond length, line
+ * widths, label size and colour) rather than the drawing style's: so a structure pasted from
+ * elsewhere, drawn with other settings, stays consistent as it is added to (Settings ▸ General).
+ */
+export const matchStructure = { on: true };
+
+/** How many bonds near an atom are measured for its structure's bond length. */
+const NEAR_BONDS = 24;
+
+/** The length of a new bond from `near`: its structure's own bond length (see matchStructure), else the style's. */
 export function bondLength(doc: Doc, near?: Atom): number {
-  return doc.style.bondLength * (near?.s ?? 1);
+  const own = doc.style.bondLength * (near?.s ?? 1);
+  return near && matchStructure.on ? structureBondLength(doc, near) ?? own : own;
+}
+
+/**
+ * The bond length of the structure round an atom: the median of the bonds nearest it (a bond
+ * stretched by hand counts for little). Null when there are none to go by, or the structure is
+ * drawn in perspective (a conformer, whose bonds are foreshortened).
+ */
+export function structureBondLength(doc: Doc, near: Atom): number | null {
+  const lens: number[] = [];
+  const seen = new Set<number>([near.id]);
+  let ring = [near.id];
+  while (ring.length && lens.length < NEAR_BONDS) {
+    const next: number[] = [];
+    for (const id of ring) {
+      for (const bid of doc.adj.get(id) ?? []) {
+        const b = doc.bonds.get(bid)!;
+        const o = b.a1 === id ? b.a2 : b.a1;
+        if (seen.has(o)) continue;
+        seen.add(o);
+        next.push(o);
+        const x = doc.atoms.get(id)!, y = doc.atoms.get(o)!;
+        if (x.xyz || y.xyz || x.depth !== undefined || y.depth !== undefined) return null;
+        if (x.multi || y.multi) continue;
+        const d = dist(x, y);
+        if (d > 0) lens.push(d);
+      }
+    }
+    ring = next;
+  }
+  if (!lens.length) return null;
+  lens.sort((a, b) => a - b);
+  const m = lens.length >> 1;
+  return lens.length % 2 ? lens[m] : (lens[m - 1] + lens[m]) / 2;
+}
+
+/**
+ * What a new atom and bond joined to `from` (an atom, or a bond a ring is fused to) take from
+ * it: its scale and, matching the structure, its colours and its bonds' line width.
+ */
+export function lookFrom(doc: Doc, from: Atom | Bond | undefined): { atom: Partial<Atom>; bond: Partial<Bond> } {
+  if (!from) return { atom: {}, bond: {} };
+  const sc = (v: number | undefined) => (v && v !== 1 ? { s: v } : {});
+  if (!matchStructure.on) return { atom: sc(from.s), bond: sc(from.s) };
+  const isBond = 'a1' in from;
+  // (a hapto bond, to a ring's middle, is no guide to the structure's lines)
+  const bond = isBond ? from : (doc.adj.get(from.id) ?? []).map((id) => doc.bonds.get(id)!).find((b) => !doc.atoms.get(b.a1 === from.id ? b.a2 : b.a1)?.multi);
+  const atom = isBond ? doc.atoms.get(from.a1) : from;
+  return {
+    atom: { ...sc(atom?.s ?? from.s), ...(atom?.color ? { color: atom.color } : {}) },
+    bond: { ...sc(bond ? bond.s : from.s), ...(bond?.color ? { color: bond.color } : {}) },
+  };
 }
 
 /** An existing atom at p (within the merge distance), ignoring `except`. */
@@ -212,6 +275,8 @@ export interface PlaceOptions {
   /** Atom ids already standing at some of the positions (same index as the points). */
   existing?: (number | undefined)[];
   scale?: number;
+  /** The atom or bond the ring is drawn on, whose look its new atoms and bonds take (see lookFrom). */
+  like?: Atom | Bond;
 }
 
 /**
@@ -224,11 +289,13 @@ export function placeRing(doc: Doc, pts: Vec[], opts: PlaceOptions = {}): number
   const tol = L * MERGE_FRACTION;
   const ids: number[] = [];
   const used = new Set<number>();
+  const scaled = opts.scale && opts.scale !== 1 ? { s: opts.scale } : {};
+  const look = opts.like ? lookFrom(doc, opts.like) : { atom: scaled, bond: scaled };
   for (let i = 0; i < n; i++) {
     let id = opts.existing?.[i];
     if (id === undefined) {
       const hit = atomAt(doc, pts[i], tol, used);
-      id = hit ? hit.id : doc.addAtom(pts[i].x, pts[i].y, 6, opts.scale && opts.scale !== 1 ? { s: opts.scale } : {}).id;
+      id = hit ? hit.id : doc.addAtom(pts[i].x, pts[i].y, 6, look.atom).id;
     }
     used.add(id);
     ids.push(id);
@@ -272,7 +339,7 @@ export function placeRing(doc: Doc, pts: Vec[], opts: PlaceOptions = {}): number
       if (dbl[i] && ex.order === 1 && ex.display === 'solid') doc.updateBond(ex.id, { order: 2, dpos: 'auto' });
       continue;
     }
-    doc.addBond(a1, a2, dbl[i] ? 2 : 1, 'solid', opts.scale && opts.scale !== 1 ? { s: opts.scale } : {});
+    doc.addBond(a1, a2, dbl[i] ? 2 : 1, 'solid', look.bond);
   }
   return ids;
 }
@@ -284,11 +351,11 @@ export function placeRing(doc: Doc, pts: Vec[], opts: PlaceOptions = {}): number
 export function bondTo(doc: Doc, from: Atom, p: Vec, order = 1, display: BondDisplay = 'solid', z = 6): Atom {
   const L = bondLength(doc, from);
   const hit = atomAt(doc, p, L * MERGE_FRACTION, new Set([from.id]));
-  const extra = from.s && from.s !== 1 ? { s: from.s } : {};
-  const to = hit ?? doc.addAtom(p.x, p.y, z, extra);
+  const look = lookFrom(doc, from);
+  const to = hit ?? doc.addAtom(p.x, p.y, z, look.atom);
   const ex = doc.bondBetween(from.id, to.id);
   if (ex) doc.updateBond(ex.id, { order, display });
-  else doc.addBond(from.id, to.id, order, display, extra);
+  else doc.addBond(from.id, to.id, order, display, look.bond);
   return to;
 }
 

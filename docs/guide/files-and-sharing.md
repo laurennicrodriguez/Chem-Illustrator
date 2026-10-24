@@ -24,7 +24,7 @@ Open files with **File ▸ Open…** (Ctrl+O), or drop them onto the window. Pic
 
 ### Structures in Office files
 
-- **Word (.docx):** structures show as pictures in Word. Open the file here again and they are editable drawings, even after Word has saved it. ChemDraw drawings embedded in a Word file made elsewhere also open as editable structures.
+- **Word (.docx):** structures show as pictures in Word. Open the file here again and they are editable drawings, even after Word has saved it. ChemDraw drawings embedded in a Word file made elsewhere keep the look they had in Word; double-click one to make it an editable structure.
 - **PowerPoint (.pptx):** the same: pictures in PowerPoint, editable drawings when opened here again. A ChemDraw object embedded in a PowerPoint slide comes in as a picture.
 - **Excel (.xlsx):** structures are pictures with their SMILES in the cell, and become editable drawings again when opened here.
 

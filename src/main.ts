@@ -124,7 +124,7 @@ import type { Item } from './render/vector';
 import { PAPERS, defaultPaper, orient, placeIn, inside, placeSvg, pageSvg } from './print-layout';
 import { printPages } from './ui/print';
 import { dataUrl, fromDataUrl, imageSize, loadImage, onImageReady, pictureMime, showableSrc, webpToPng } from './render/images';
-import { freeRing, fusedRing, placeRing, sprout, ringOnAtom, ringDir } from './chem/chemgeom';
+import { freeRing, matchStructure, fusedRing, placeRing, sprout, ringOnAtom, ringDir } from './chem/chemgeom';
 import { Toolbar, ToolbarItem, PaletteDef, type ToolDef } from './ui/toolbar';
 import { StylePanel, tidyStyle } from './ui/style-panel';
 import { installCombos } from './ui/combo';
@@ -1782,6 +1782,7 @@ const docFiles: DocxDeps = {
 
 /** Opening Word files: ChemDraw objects in them become structures, kept at the size they had. */
 const docRead: DocxReadDeps = {
+  convertChemDraw: false,
   chemdraw: (cdx, style) => docRead.cdxml!(cdxToCdxml(cdx), style),
   cdxml: (text, style) => {
     const d = readCdxml(text).doc;
@@ -4094,6 +4095,11 @@ const docMode = new DocumentMode({
   pickObjectFile: () => pickObjectFile(),
   objectPicture: (name, bytes, icon) => objectPictureOf(name, bytes, icon),
   openObjectFile: (file, changed) => openObjectFile(file, changed),
+  chemdrawDrawing: (cdx, style) => {
+    const contents = docRead.chemdraw!(cdx, style);
+    const size = contents && docRead.drawingSize!(contents, style);
+    return contents && size ? { contents, w: size.w } : null;
+  },
   clipboardObject: nativeClipboard ? () => clipboardObject() : undefined,
   pickReferenceFile: () => pickReferenceFile(),
   preferredChanged: () => storeSettings(),
@@ -5807,6 +5813,10 @@ async function generalPreferences(): Promise<void> {
     { name: 'groupOutline', label: 'Outline the rest of a group when part of it is selected', type: 'checkbox', value: String(editor.options.groupOutline) },
     { name: 'linkSide', label: 'Text linked to a structure goes', value: linkSide, options: [{ value: 'keep', label: 'Where it is' }, { value: 'below', label: 'Below' }, { value: 'above', label: 'Above' }, { value: 'left', label: 'Left' }, { value: 'right', label: 'Right' }] },
     { name: 'ask', label: 'Ask before changing every structure on the page when nothing is selected', type: 'checkbox', value: String(askWholeDrawing) },
+    { name: 'matchStructure', label: 'New bonds match the structure they\'re added to', type: 'checkbox', value: String(matchStructure.on),
+      help: 'Bonds, rings and chains added to a structure take its own bond length, line widths and colours, so a structure drawn with other settings stays consistent. Off: they always take the document\'s drawing settings.' },
+    { name: 'convertChemDraw', label: 'Redraw ChemDraw objects in Word files as they open', type: 'checkbox', value: String(!!docRead.convertChemDraw),
+      help: 'Off: they keep the look they had in Word and become drawings when you edit one. On: each is redrawn here in the document\'s drawing style.' },
     { name: 'reviewer', label: 'Your name on tracked changes in documents', value: reviewAuthor() },
   ], { ok: 'Save' });
   if (!r) return;
@@ -5814,6 +5824,8 @@ async function generalPreferences(): Promise<void> {
   editor.options.groupOutline = r.groupOutline === 'true';
   linkSide = (['below', 'above', 'left', 'right'].includes(r.linkSide) ? r.linkSide : 'keep') as Settings['linkSide'];
   askWholeDrawing = r.ask === 'true';
+  docRead.convertChemDraw = r.convertChemDraw === 'true';
+  matchStructure.on = r.matchStructure === 'true';
   setReviewAuthor(r.reviewer ?? '');
   storeSettings();
 }
@@ -5913,6 +5925,8 @@ function currentSettings(): Settings {
     updateCheck,
     updateChannel,
     pubchemNames,
+    convertChemDraw: !!docRead.convertChemDraw,
+    matchStructure: matchStructure.on,
     fileTypesOffered,
     wordObjectsOffered,
     reviewName: reviewAuthor(),
@@ -6097,6 +6111,8 @@ function applySettings(s: Settings): void {
   updateCheck = s.updateCheck;
   updateChannel = s.updateChannel;
   pubchemNames = s.pubchemNames;
+  docRead.convertChemDraw = s.convertChemDraw;
+  matchStructure.on = s.matchStructure;
   fileTypesOffered = s.fileTypesOffered;
   wordObjectsOffered = s.wordObjectsOffered;
   setReviewAuthor(s.reviewName);

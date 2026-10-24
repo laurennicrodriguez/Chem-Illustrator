@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Doc } from '../src/model';
 import { dist, angleOf, DEG } from '../src/geom';
-import { freeRing, fusedRing, placeRing, sproutDir, sprout, chainPoints, ringOnAtom, ringDir, fuseSide, bondTo } from '../src/chem/chemgeom';
+import { freeRing, fusedRing, placeRing, sproutDir, sprout, chainPoints, ringOnAtom, ringDir, fuseSide, bondTo, bondLength, matchStructure, structureBondLength } from '../src/chem/chemgeom';
 
 const L = 14.4;
 const close = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) < eps;
@@ -181,5 +181,60 @@ describe('undo and redo', () => {
     expect(d.atomsNear({ x: 0, y: 0 }, 1)).toEqual([]);
     d.undo();
     expect(d.atomsNear({ x: 0, y: 0 }, 1).map((a) => a.id)).toEqual([id]);
+  });
+});
+
+describe('adding to a structure drawn with other settings', () => {
+  /** A propane chain drawn at 30 pt bonds, with thick red bonds and a scaled label, in a 14.4 pt document. */
+  function bigChain(d: Doc) {
+    let atoms: ReturnType<Doc['addAtom']>[] = [];
+    d.bulk(() => {
+      atoms = [[0, 0], [26, 15], [52, 0]].map(([x, y]) => d.addAtom(x, y, 6, { s: 1.5, color: '#ff0000' }));
+      d.addBond(atoms[0].id, atoms[1].id, 1, 'solid', { s: 2, color: '#ff0000' });
+      d.addBond(atoms[1].id, atoms[2].id, 1, 'solid', { s: 2, color: '#ff0000' });
+    });
+    return atoms;
+  }
+
+  it('takes the structure\'s bond length, line width and colour by default', () => {
+    const d = new Doc();
+    const [, b, c] = bigChain(d);
+    const len = dist(b, c);
+    expect(bondLength(d, c)).toBeCloseTo(len, 6);
+    let n = c;
+    d.bulk(() => { n = sprout(d, c.id); });
+    expect(dist(n, c)).toBeCloseTo(len, 6);
+    expect(n).toMatchObject({ s: 1.5, color: '#ff0000' });
+    expect(d.bondBetween(c.id, n.id)).toMatchObject({ s: 2, color: '#ff0000' });
+    // a ring on it too
+    let ids: number[] = [];
+    d.bulk(() => { ids = placeRing(d, ringOnAtom(n, ringDir(d, n.id), 6, bondLength(d, n)), { existing: [n.id], scale: n.s, like: n }); });
+    expect(dist(d.atoms.get(ids[1])!, d.atoms.get(ids[2])!)).toBeCloseTo(len, 6);
+    expect(d.bondBetween(ids[1], ids[2])).toMatchObject({ s: 2, color: '#ff0000' });
+  });
+
+  it('goes by the document\'s settings when switched off', () => {
+    matchStructure.on = false;
+    try {
+      const d = new Doc();
+      const [, , c] = bigChain(d);
+      let n = c;
+      d.bulk(() => { n = sprout(d, c.id); });
+      expect(dist(n, c)).toBeCloseTo(d.style.bondLength * 1.5, 6);
+      expect(n.color).toBeUndefined();
+      expect(d.bondBetween(c.id, n.id)).toMatchObject({ s: 1.5 });
+    } finally {
+      matchStructure.on = true;
+    }
+  });
+
+  it('keeps the style\'s length for a lone atom and for structures in perspective', () => {
+    const d = new Doc();
+    let a = null as unknown as ReturnType<Doc['addAtom']>;
+    d.bulk(() => { a = d.addAtom(0, 0); });
+    expect(structureBondLength(d, a)).toBeNull();
+    expect(bondLength(d, a)).toBe(d.style.bondLength);
+    d.bulk(() => { const p = d.addAtom(10, 0, 6, { depth: 1 }); d.addBond(a.id, p.id); });
+    expect(structureBondLength(d, a)).toBeNull();
   });
 });
