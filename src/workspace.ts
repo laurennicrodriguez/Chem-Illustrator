@@ -23,7 +23,7 @@ import { isOds } from './io/ods';
 import { DOC_OPEN_ONLY, documentSaveNote, isOtherDocument } from './io/doc-files';
 import { adoptSaved } from './io/document-file';
 import {
-  FileRef, FileType, CDXML, CDX, PPTX, XLSX, XLSM, SHEET_OPEN_ONLY, CSV, SDF, DOCX, RTF, ODT, TABLE_TEXT_EXTENSIONS, openBytesDialog, saveFileDialog, writeFile, canSaveInPlace, askSaveChanges,
+  FileRef, FileType, CDXML, CDX, CDS, PPTX, XLSX, XLSM, SHEET_OPEN_ONLY, CSV, SDF, DOCX, RTF, ODT, TABLE_TEXT_EXTENSIONS, openBytesDialog, saveFileDialog, writeFile, canSaveInPlace, askSaveChanges,
   showError, withExtension, extensionOf, baseName, readPath, pathExists, stampOf,
 } from './io/files';
 import type { FileStamp } from './keep/recovery';
@@ -113,6 +113,8 @@ export interface WorkspaceHooks {
   autoSaveFailed?(tab: Tab, message: string): void;
   /** A file was opened from disk into this tab. */
   opened?(tab: Tab): void;
+  /** A ChemDraw style sheet (.cds) was opened into this drawing tab: offer its settings as a drawing style. */
+  styleSheet?(tab: Tab, style: DocStyle): void;
   /** A tab is about to close (before asking to save it): finish any typing or structure being drawn. */
   closing?(tab: Tab): void;
   /** A tab was closed. */
@@ -449,7 +451,7 @@ export class Workspace {
   async open(): Promise<void> {
     let f;
     try {
-      f = await openBytesDialog('Drawings, slides, sheets and documents', [CDXML, CDX, PPTX, XLSX, XLSM, DOCX, RTF, ODT, CSV, SDF], ['sd', ...SHEET_OPEN_ONLY, ...DOC_OPEN_ONLY, ...TABLE_TEXT_EXTENSIONS]);
+      f = await openBytesDialog('Drawings, slides, sheets and documents', [CDXML, CDX, CDS, PPTX, XLSX, XLSM, DOCX, RTF, ODT, CSV, SDF], ['sd', ...SHEET_OPEN_ONLY, ...DOC_OPEN_ONLY, ...TABLE_TEXT_EXTENSIONS]);
     } catch (e) {
       await showError('Could not open the file: ' + String(e));
       return;
@@ -482,6 +484,7 @@ export class Workspace {
       else if (ext === 'pptx' || zip) ok = this.openSlides(bytes, name, ref);
       else ok = this.openDrawing(isCdx(bytes) ? cdxToCdxml(bytes) : new TextDecoder().decode(bytes), name, ref);
       if (ok && ref.kind === 'path' && !this.quiet) this.hooks.remember?.(ref.path);
+      if (ok && ext === CDS.extension && this.active.mode === 'drawing' && !this.quiet) this.hooks.styleSheet?.(this.active, { ...this.docOf(this.active).style });
       if (ok && ref.kind !== 'none') {
         const t = this.active;
         t.stamp = await stampOf(ref);

@@ -16,6 +16,7 @@ use tauri::{Emitter, Manager};
 pub const TYPES: &[(&str, &str)] = &[
     ("cdxml", "ChemDraw XML drawing"),
     ("cdx", "ChemDraw drawing"),
+    ("cds", "ChemDraw style sheet"),
     ("mol", "MDL Molfile"),
     ("sdf", "Structure-data file"),
     ("docx", "Word document"),
