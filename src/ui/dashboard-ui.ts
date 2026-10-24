@@ -5,10 +5,11 @@ import { popupMenu } from './sheet-view';
 import type { SheetView } from './sheet-view';
 import type { SheetCharts } from './sheet-chart-ui';
 import { ask, Field } from './ask';
-import { refText, CHART_NAMES, ChartKind } from '../sheet/chart';
+import { refText, readRef, CHART_NAMES, ChartKind } from '../sheet/chart';
 import {
   Dashboard, Tile, TileKind, Source, Aggregate, KpiTile, TableTile, SlicerTile, GalleryTile, TextTile, ChartTile,
   AGGREGATE_NAMES, TILE_NAMES, resolveSource, sourceKey, sourceName, columnOf, newTileId, freeSpot, chartOfColumns,
+  sankeyOfSource, filtered, unfiltered, pickText, type Resolved,
 } from '../sheet/dashboard';
 
 export interface DashUiHost {
@@ -19,7 +20,7 @@ export interface DashUiHost {
 
 type MenuItem = [string, () => void, boolean?] | null;
 /** The kinds of chart a tile takes (the newer kinds need their own data: bin widths, sizes, raw repeat runs). */
-export const DASH_CHART_KINDS: ChartKind[] = ['scatter', 'line', 'column', 'bar', 'area', 'pie'];
+export const DASH_CHART_KINDS: ChartKind[] = ['scatter', 'line', 'column', 'bar', 'area', 'pie', 'sankey'];
 const KINDS = DASH_CHART_KINDS;
 const AGGS = Object.keys(AGGREGATE_NAMES) as Aggregate[];
 const num = (s: string): number | undefined => (s.trim() !== '' && Number.isFinite(Number(s)) ? Number(s) : undefined);
@@ -128,6 +129,7 @@ export class DashboardUi {
     const base = { id: newTileId(), ...this.place(kind) };
     switch (kind) {
       case 'chart': {
+        if (chartKind === 'sankey') { await this.addSankey(res, base); return; }
         const got = await ask('Add Chart: what it shows', [
           { name: 'kind', label: 'Kind', value: chartKind, options: KINDS.map((k) => ({ value: k, label: CHART_NAMES[k] })) },
           { name: 'x', label: 'Across the bottom (x or labels)', value: res.names[0], options: [{ value: '', label: '(1, 2, 3…)' }, ...cols] },
@@ -138,6 +140,7 @@ export class DashboardUi {
           ...checks('y:', numeric, (n) => n === numeric.find((m) => m !== res.names[0])),
         ], { ok: 'Add', note: 'Tick the columns of numbers to chart. Scatter charts always show every row.' });
         if (!got) return;
+        if (got.kind === 'sankey') { await this.addSankey(res, base); return; }
         const ys = picked(got, 'y:');
         if (!ys.length) { this.host.flash('Tick at least one column of numbers.'); return; }
         const chart = chartOfColumns(res, got.kind as ChartKind, got.x || undefined, ys, newTileId());
@@ -193,10 +196,25 @@ export class DashboardUi {
     }
   }
 
+  /** A Sankey chart tile: which columns are its levels (left to right), and which says how much each row carries. */
+  private async addSankey(res: Resolved, base: Pick<Tile, 'id' | 'x' | 'y' | 'w' | 'h'>): Promise<void> {
+    const numeric = res.names.filter((_, i) => res.rows.some((r) => typeof res.sheet.value(r, res.range.c1 + i) === 'number'));
+    const value = numeric[numeric.length - 1];
+    const got = await ask('Add Sankey Chart', [
+      { name: 'value', label: 'How much each row carries', value: value ?? '', options: [{ value: '', label: 'Each row counts once' }, ...numeric.map((n) => ({ value: n, label: n }))] },
+      ...res.names.map((n) => ({ name: 'l:' + n, label: n, value: String(n !== value && !numeric.includes(n)), type: 'checkbox' as const })),
+    ], { ok: 'Add', note: 'Tick the columns to flow through, in the order they are in the table: each is a column of nodes, left to right. Click a node or band on the dashboard to filter the other tiles by it.' });
+    if (!got) return;
+    const levels = res.names.filter((n) => got['l:' + n] === 'true' && n !== got.value);
+    if (!levels.length) { this.host.flash('Tick at least one column to flow through.'); return; }
+    const chart = sankeyOfSource(res, levels, got.value || undefined, newTileId());
+    this.add({ ...base, kind: 'chart', chart, w: Math.min(12, this.dash!.cols), h: 6, title: `${levels.join(' → ')}` });
+  }
+
   clearFilters(): void {
     const d = this.dash;
-    if (!d || !d.tiles.some((t) => t.kind === 'slicer' && t.selected?.length)) return;
-    this.set({ ...d, tiles: d.tiles.map((t) => (t.kind === 'slicer' ? { ...t, selected: undefined } : t)) }, 'Clear filters');
+    if (!d || !filtered(d)) return;
+    this.set(unfiltered(d), 'Clear filters');
   }
 
   /** Right-click on the dashboard: the tile's commands, or adding tiles. */
@@ -205,7 +223,7 @@ export class DashboardUi {
     const add: MenuItem[] = (Object.keys(TILE_NAMES) as TileKind[]).map((k) => [`Add ${TILE_NAMES[k]}…`, () => void this.addTile(k)] as MenuItem);
     if (!t) { popupMenu(x, y, [...add, null, ['Clear All Filters', () => this.clearFilters()], ['Dashboard Settings', () => this.focusPanel()]]); return; }
     const items: MenuItem[] = [];
-    if (t.kind === 'chart') items.push(...this.chartItems(t), null);
+    if (t.kind === 'chart') items.push(['Clear Chart Filter', () => this.update(t.id, { pick: undefined } as Partial<ChartTile>, 'Clear chart filter'), !!t.pick?.length], ...this.chartItems(t), null);
     if (t.kind === 'slicer') items.push(['Clear This Slicer', () => this.update(t.id, { selected: undefined } as Partial<SlicerTile>, 'Clear slicer'), !!t.selected?.length], null);
     items.push(
       ['Settings…', () => this.focusPanel()],
@@ -232,6 +250,14 @@ export class DashboardUi {
     };
   }
 
+  /** The names of a chart tile's levels (its series' header cells), for describing what it picked. */
+  private levelNames(t: ChartTile): string[] {
+    return t.chart.series.map((s) => {
+      const got = s.x ? readRef(this.wb, s.x, this.wb.sheet) : null;
+      return got && got.range.r1 > 0 ? got.sheet.shownText(got.range.r1 - 1, got.range.c1) : '';
+    });
+  }
+
   focusPanel(): void {
     document.querySelector<HTMLElement>('#cell-body input, #cell-body select, #cell-body textarea')?.focus();
   }
@@ -245,7 +271,7 @@ export class DashboardUi {
     const head = (s: string) => Object.assign(document.createElement('h4'), { textContent: s, className: 'cp-head' });
     const note = (s: string, cls = 'muted small') => Object.assign(document.createElement('p'), { textContent: s, className: cls });
     if (!t) {
-      out.push(note('Click a tile to change it; drag tiles to move them and their corner to resize them. Slicer buttons filter every tile fed by the same table.'));
+      out.push(note('Click a tile to change it; drag tiles to move them and their corner to resize them. Slicer buttons, and clicking a bar, slice or Sankey band, filter every tile fed by the same table.'));
       out.push(head('Dashboard'));
       out.push(row('Columns', numberBox(d.cols, (v) => v && this.set({ ...d, cols: Math.max(2, Math.min(24, Math.round(v))), tiles: d.tiles.map((x) => ({ ...x, w: Math.min(x.w, Math.max(2, Math.round(v))), x: Math.min(x.x, Math.max(0, Math.round(v) - x.w)) })) }, 'Dashboard columns'))));
       out.push(row('Row height', numberBox(d.rowH, (v) => v && this.set({ ...d, rowH: Math.max(20, v) }, 'Dashboard row height'), '', 'px')));
@@ -256,10 +282,12 @@ export class DashboardUi {
       btns.className = 'cp-buttons';
       for (const k of Object.keys(TILE_NAMES) as TileKind[]) btns.append(button(TILE_NAMES[k], () => void this.addTile(k)));
       out.push(btns);
-      const filtered = d.tiles.filter((x): x is SlicerTile => x.kind === 'slicer' && !!x.selected?.length);
-      if (filtered.length) {
+      if (filtered(d)) {
         out.push(head('Filters on'));
-        for (const s of filtered) out.push(note(`${s.column}: ${s.selected!.join(', ')}`, 'cp-value'));
+        for (const x of d.tiles) {
+          if (x.kind === 'slicer' && x.selected?.length) out.push(note(`${x.column}: ${x.selected.join(', ')}`, 'cp-value'));
+          if (x.kind === 'chart' && x.pick?.length) out.push(note(pickText(x, this.levelNames(x)), 'cp-value'));
+        }
         out.push(rowOf(button('Clear all filters', () => this.clearFilters())));
       }
       return out;
@@ -287,10 +315,11 @@ export class DashboardUi {
         this.bindChart(t.id);
         // the tile sets the chart's size, background and border, so those rows go
         const tileSets = new Set(['Size', 'Background', 'Border']);
-        if (t.chart.kind !== 'scatter') {
+        if (t.chart.kind !== 'scatter' && t.chart.kind !== 'sankey') {
           out.push(row('Same labels', select([['', 'One bar or point per row'], ...(['average', 'sum', 'count', 'median', 'min', 'max'] as Aggregate[]).map((a): [string, string] => [a, `${AGGREGATE_NAMES[a]} of each`])], t.group ?? '', (v) => this.update(t.id, { group: (v as Aggregate) || undefined } as Partial<ChartTile>, 'Combine rows'))));
           if (t.group === 'average' || t.group === 'median') out.push(note('Turn on error bars to show the standard deviation of each label.'));
         }
+        if (t.pick?.length) out.push(note(`Filtering by ${pickText(t, this.levelNames(t))}`, 'cp-value'), rowOf(button('Clear chart filter', () => this.update(t.id, { pick: undefined } as Partial<ChartTile>, 'Clear chart filter'))));
         out.push(...this.host.charts.panel(t.chart).slice(1).filter((el) => !tileSets.has(el.querySelector(':scope > span')?.textContent ?? '')));
         break;
       }

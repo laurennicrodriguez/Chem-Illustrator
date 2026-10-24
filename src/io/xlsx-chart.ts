@@ -176,6 +176,9 @@ function serXml(c: Chart, s: Series, i: number, d: SeriesData | undefined, kind:
 /** The chart part of a chart, with a copy of its numbers. */
 export function chartXml(c: Chart, data: SeriesData[]): string {
   if (isChartEx(c.kind)) return chartExXml(c, data);
+  // Excel has no Sankey chart: it gets bars of the same cells, a bar for each level of each row,
+  // and the Sankey comes back from our own copy when the file is opened here (sameChartData)
+  if (c.kind === 'sankey') return chartXml({ ...c, kind: 'bar', legend: c.series.length > 1 ? 'right' : 'none' }, data);
   const sizePt = (c.fontSize ?? 12) * 0.75;
   const all = (k: SerKind) => c.series.map((s, i) => serXml(c, s, i, data[i], k)).join('');
   const grouping = c.stacked ? 'stacked' : c.kind === 'column' || c.kind === 'bar' ? 'clustered' : 'standard';

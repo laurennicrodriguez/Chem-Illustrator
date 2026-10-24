@@ -1,5 +1,7 @@
 // Charts of sheet data, as Excel makes them: scatter (x–y), line, column, bar, area, pie, combo
-// (columns and lines, with a second value axis), histogram, box and whisker, bubble and radar.
+// (columns and lines, with a second value axis), histogram, box and whisker, bubble and radar;
+// and a Sankey chart (as PowerBI makes one), whose series are its levels: each series' labels
+// are one column of categories, and its numbers (the same column for every level) how much flows.
 // Each series reads its numbers from cells, so the chart follows the sheet as it changes. A
 // scatter series can carry a fitted line (with its equation and R²) and error bars, for kinetics,
 // calibration curves and the like. Data in rows hidden by a filter is left out, as Excel does by
@@ -12,7 +14,7 @@ import type { Value } from './values';
 import { isError } from './values';
 import type { FitKind } from './fit';
 
-export type ChartKind = 'scatter' | 'line' | 'column' | 'bar' | 'area' | 'pie' | 'combo' | 'histogram' | 'box' | 'bubble' | 'radar';
+export type ChartKind = 'scatter' | 'line' | 'column' | 'bar' | 'area' | 'pie' | 'combo' | 'histogram' | 'box' | 'bubble' | 'radar' | 'sankey';
 export type MarkerShape = 'circle' | 'square' | 'diamond' | 'triangle' | 'cross' | 'none';
 
 export interface SeriesFit {
@@ -175,6 +177,7 @@ export const MARKERS: MarkerShape[] = ['circle', 'square', 'diamond', 'triangle'
 export const CHART_NAMES: Record<ChartKind, string> = {
   scatter: 'Scatter (x–y)', line: 'Line', column: 'Column', bar: 'Bar', area: 'Area', pie: 'Pie',
   combo: 'Combo (columns and lines)', histogram: 'Histogram', box: 'Box and whisker', bubble: 'Bubble', radar: 'Radar',
+  sankey: 'Sankey (flows)',
 };
 
 let nextChartId = 1;
@@ -185,7 +188,8 @@ export const newChartId = (): number => nextChartId++;
 
 /** Do two charts chart the same cells the same way (so our own copy of a chart can stand in for Excel's)? */
 export function sameChartData(a: Chart, b: Chart): boolean {
-  const kindOf = (k: ChartKind) => (k === 'bar' ? 'column' : k);
+  // Excel has no Sankey chart: it is given bars of the same cells (xlsx-chart.ts)
+  const kindOf = (k: ChartKind) => (k === 'bar' || k === 'sankey' ? 'column' : k);
   if (kindOf(a.kind) !== kindOf(b.kind) || a.series.length !== b.series.length) return false;
   const norm = (t: string | undefined) => (t ?? '').replace(/^=/, '').replace(/'/g, '').toUpperCase();
   return a.series.every((s, i) => norm(s.y) === norm(b.series[i].y) && norm(s.x) === norm(b.series[i].x) && norm(s.size) === norm(b.series[i].size) && !!s.fit === !!b.series[i].fit && (s.fit?.kind ?? '') === (b.series[i].fit?.kind ?? ''));
@@ -230,6 +234,13 @@ export function refValues(wb: Workbook, text: string | undefined, home: Sheet, s
   return out;
 }
 
+/**
+ * What a click on a part of a chart picks (on a dashboard): a category at a level (the level is
+ * the series whose labels it is; bars and slices are level 0), or one at each of two levels (a
+ * Sankey band, from one level to the next).
+ */
+export type ChartPick = { level: number; value: string }[];
+
 /** A series made ready to draw. */
 export interface SeriesData {
   name: string;
@@ -248,7 +259,8 @@ export interface SeriesData {
 }
 
 const toNum = (v: Value): number => (typeof v === 'number' && Number.isFinite(v) ? v : NaN);
-const toLabel = (v: Value): string => (v === null || isError(v) ? '' : typeof v === 'number' ? String(Number(v.toPrecision(10))) : String(v));
+/** A cell as a category label on a chart (what a click on a bar, slice or Sankey node picks). */
+export const toLabel = (v: Value): string => (v === null || isError(v) ? '' : typeof v === 'number' ? String(Number(v.toPrecision(10))) : String(v));
 
 /** The series of a chart with their numbers read from the sheets. */
 export function chartData(wb: Workbook, home: Sheet, chart: Chart, leaveOut?: Map<Sheet, Set<number>>): SeriesData[] {
@@ -294,6 +306,7 @@ export function chartData(wb: Workbook, home: Sheet, chart: Chart, leaveOut?: Ma
  * first column of text gives the categories.
  */
 export function chartFromRange(sheet: Sheet, r: Range, kind: ChartKind): Chart {
+  if (kind === 'sankey') return sankeyFromRange(sheet, r);
   const isNum = (row: number, col: number) => typeof sheet.value(row, col) === 'number';
   const isText = (row: number, col: number) => typeof sheet.value(row, col) === 'string' && sheet.value(row, col) !== '';
   let header = false;
@@ -330,6 +343,38 @@ export function chartFromRange(sheet: Sheet, r: Range, kind: ChartKind): Chart {
     w: 480,
     h: 290,
   };
+}
+
+/**
+ * A Sankey chart of a block of cells: the last column of numbers (if any) says how much each row
+ * carries, and every other column is a level, left to right (a column of numbers before it, a
+ * ring size say, is a level too); without one, each row counts once.
+ */
+export function sankeyOfColumns(sheetName: string, header: number | null, first: number, last: number, levels: number[], value: number | null): Chart {
+  const ref = (c: number, r1: number, r2: number) => refText(sheetName, { r1, c1: c, r2, c2: c });
+  const y = ref(value ?? levels[0], first, last);
+  return {
+    id: nextChartId++,
+    kind: 'sankey',
+    series: levels.map((c) => ({ ...(header !== null ? { name: ref(c, header, header) } : {}), x: ref(c, first, last), y })),
+    x: { grid: false }, y: { grid: false },
+    legend: 'none',
+    at: { row: header ?? first, col: Math.max(...levels, value ?? 0) + 2, dx: 0, dy: 0 },
+    w: 560, h: 340,
+  };
+}
+
+function sankeyFromRange(sheet: Sheet, r: Range): Chart {
+  const filled = (row: number, col: number) => { const v = sheet.value(row, col); return v !== null && v !== ''; };
+  const header = r.r2 > r.r1 && [...Array(r.c2 - r.c1 + 1).keys()].every((i) => typeof sheet.value(r.r1, r.c1 + i) === 'string' && filled(r.r1, r.c1 + i)) ? r.r1 : null;
+  const first = header !== null ? r.r1 + 1 : r.r1;
+  let value: number | null = null;
+  for (let c = r.c2; c >= r.c1 && value === null; c--) if (columnIsNumbers(sheet, c, first, r.r2)) value = c;
+  // one column only: it is the one level
+  if (value === r.c1 && r.c2 === r.c1) value = null;
+  const levels: number[] = [];
+  for (let c = r.c1; c <= r.c2; c++) if (c !== value) levels.push(c);
+  return { ...sankeyOfColumns(sheet.name, header, first, r.r2, levels, value), at: { row: r.r1, col: r.c2 + 2, dx: 0, dy: 0 } };
 }
 
 /** A chart with every formula reference passed through a change (rows inserted, a sheet renamed). */

@@ -1,14 +1,15 @@
 // A dashboard sheet on screen: its tiles on a grid, each drawn from the workbook's tables with
 // the slicers applied. Tiles are moved by dragging and resized by their corner, snapping to the
-// grid; clicking slicer buttons filters every tile fed by the same table.
+// grid; clicking slicer buttons, or a bar, slice or Sankey node or band of a chart, filters every
+// tile fed by the same table (the chart clicked shows what it picked, the rest faded).
 
 import type { Sheet, Workbook, Structure } from '../sheet/workbook';
 import {
   Dashboard, Tile, KpiTile, TableTile, SlicerTile, GalleryTile, TextTile, ChartTile,
-  resolveSource, slicerMask, shownRows, kpiValue, distinctValues, columnOf, slicerText, AGGREGATE_NAMES, sourceName, groupSeries,
+  resolveSource, filterMask, joinMasks, pickMask, shownRows, kpiValue, distinctValues, columnOf, slicerText, AGGREGATE_NAMES, sourceName, groupSeries,
 } from '../sheet/dashboard';
 import { chartData } from '../sheet/chart';
-import { drawChart } from '../render/chart-draw';
+import { drawChart, partAt, samePick, type ChartHits } from '../render/chart-draw';
 import { formatValue } from '../sheet/numfmt';
 import { isError } from '../sheet/values';
 
@@ -30,7 +31,7 @@ export interface DashHost {
   key(e: KeyboardEvent): boolean;
 }
 
-type Drag = { id: number; how: 'move' | 'size'; x0: number; y0: number; orig: Tile; pointer: number; moved: boolean; el: HTMLElement };
+type Drag = { id: number; how: 'move' | 'size'; x0: number; y0: number; orig: Tile; pointer: number; moved: boolean; el: HTMLElement; target: EventTarget | null };
 
 export class DashboardView {
   readonly el: HTMLDivElement;
@@ -122,8 +123,9 @@ export class DashboardView {
     this.el.style.background = d.background ?? '';
     const bottom = Math.max(4, ...d.tiles.map((t) => t.y + t.h));
     this.page.style.height = `${g.gap + bottom * (g.rowH + g.gap) + 40}px`;
-    const mask = slicerMask(wb, d);
     const els = d.tiles.map((t) => {
+      // each tile is filtered by the slicers and by every chart's pick but its own
+      const mask = filterMask(wb, d, t.id);
       const el = document.createElement('div');
       el.className = `dash-tile dash-tile-${t.kind}${t.id === this.picked ? ' picked' : ''}`;
       el.dataset.id = String(t.id);
@@ -184,10 +186,33 @@ export class DashboardView {
     const dpr = window.devicePixelRatio || 1;
     c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
     c.style.width = `${w}px`; c.style.height = `${h}px`;
+    c.classList.add('dash-pickable');
     const ctx = c.getContext('2d')!;
     ctx.setTransform(dpr * z, 0, 0, dpr * z, 0, 0);
-    drawChart(ctx, chart, groupSeries(chartData(wb, wb.sheet, chart, mask), chart.kind, t.group), chart.w, chart.h);
+    const data = (m: Map<Sheet, Set<number>>) => groupSeries(chartData(wb, wb.sheet, chart, m), chart.kind, t.group);
+    // its own pick shows as a highlight over everything else it shows
+    const lit = t.pick?.length ? data(joinMasks(mask, pickMask(wb, this.dashboard!, undefined, t.id))) : undefined;
+    const hits = drawChart(ctx, chart, data(mask), chart.w, chart.h, lit);
+    this.hits.set(c, { tile: t.id, hits });
     body.append(c);
+  }
+
+  /** Where each chart tile drew its parts (for clicks on them). */
+  private hits = new WeakMap<HTMLCanvasElement, { tile: number; hits: ChartHits }>();
+
+  /**
+   * A click on a chart: its bar, slice or Sankey node or band filters the other tiles; clicking it
+   * again, or clicking away from the chart's parts, shows everything again.
+   */
+  private chartClick(canvas: HTMLCanvasElement, e: PointerEvent): void {
+    const got = this.hits.get(canvas);
+    const t = got && this.dashboard?.tiles.find((x) => x.id === got.tile);
+    if (!got || !t || t.kind !== 'chart') return;
+    const r = canvas.getBoundingClientRect(), z = this.host.zoom;
+    const pick = partAt(got.hits, (e.clientX - r.left) / z, (e.clientY - r.top) / z);
+    if (!pick && !t.pick) return;
+    const next = pick && !samePick(pick, t.pick) ? pick : undefined;
+    this.update(t.id, { pick: next } as Partial<ChartTile>, next ? 'Filter by chart' : 'Clear chart filter');
   }
 
   private kpiTile(t: KpiTile, head: HTMLElement, body: HTMLElement, mask: Map<Sheet, Set<number>>): void {
@@ -370,7 +395,7 @@ export class DashboardView {
     this.el.focus({ preventScroll: true });
     this.pick(t.id);
     el.setPointerCapture(e.pointerId);
-    this.drag = { id: t.id, how, x0: e.clientX, y0: e.clientY, orig: t, pointer: e.pointerId, moved: false, el };
+    this.drag = { id: t.id, how, x0: e.clientX, y0: e.clientY, orig: t, pointer: e.pointerId, moved: false, el, target: e.target };
   }
 
   /** Where a dragged tile would land, in grid squares. */
@@ -398,7 +423,8 @@ export class DashboardView {
     const d = this.drag;
     if (!d || e.pointerId !== d.pointer) return;
     this.drag = null;
-    if (!d.moved) return;
+    // a click (not a drag) on a chart picks the part under it
+    if (!d.moved) { if (d.target instanceof HTMLCanvasElement && d.target.classList.contains('dash-pickable')) this.chartClick(d.target, e); return; }
     const t = this.dropped(d, e);
     if (t.x !== d.orig.x || t.y !== d.orig.y || t.w !== d.orig.w || t.h !== d.orig.h) this.update(d.id, { x: t.x, y: t.y, w: t.w, h: t.h }, d.how === 'move' ? 'Move tile' : 'Resize tile');
     else this.render();
