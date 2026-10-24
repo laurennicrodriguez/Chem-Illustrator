@@ -1342,14 +1342,14 @@ export class Editor {
       const b = doc.bonds.get(h.id)!;
       const side = fuseSide(doc, b, n, p);
       const pts = fusedRing(doc.atoms.get(b.a1)!, doc.atoms.get(b.a2)!, n, side);
-      ids = placeRing(doc, pts, { aromatic, shiftPhase: shift, existing: [b.a1, b.a2], scale: b.s });
+      ids = placeRing(doc, pts, { aromatic, shiftPhase: shift, existing: [b.a1, b.a2], scale: b.s, like: b });
     } else if (h && h.kind === 'atom') {
       let a = doc.atoms.get(h.id)!;
       const L = bondLength(doc, a);
       const deg = doc.degree(a.id);
       if (alt || deg >= 3) a = sprout(doc, a.id);
       const dir = ringDir(doc, a.id);
-      ids = placeRing(doc, ringOnAtom(a, dir, n, L), { aromatic, shiftPhase: shift, existing: [a.id], scale: a.s });
+      ids = placeRing(doc, ringOnAtom(a, dir, n, L), { aromatic, shiftPhase: shift, existing: [a.id], scale: a.s, like: a });
     } else {
       const L = doc.style.bondLength;
       ids = placeRing(doc, freeRing(p, n, L, towards), { aromatic, shiftPhase: shift });
@@ -1756,7 +1756,7 @@ export class Editor {
         else if (h && h.kind === 'atom') {
           const a = doc.atoms.get(h.id)!;
           const dir = norm(fromAngle(snapAngle(angleOf(sub(p, a)))));
-          const ids = placeRing(doc, ringOnAtom(a, dir, t.size, bondLength(doc, a)), { aromatic: t.aromatic, shiftPhase: d.shift, existing: [a.id], scale: a.s });
+          const ids = placeRing(doc, ringOnAtom(a, dir, t.size, bondLength(doc, a)), { aromatic: t.aromatic, shiftPhase: d.shift, existing: [a.id], scale: a.s, like: a });
           if (d.ctrl && t.aromatic) circleRing(doc, ids.slice(0, t.size));
           this.lastEdited = ids[0];
         } else this.ringClick(null, d.start, t.size, t.aromatic, false, d.shift, p, d.ctrl);
@@ -3705,7 +3705,7 @@ export class Editor {
       if (act === 'chair' || act === 'chair-2') { fuseChair(doc, id, act === 'chair-2'); return; }
       const side = fuseSide(doc, b, n, this.pointer);
       const pts = fusedRing(doc.atoms.get(b.a1)!, doc.atoms.get(b.a2)!, n, side);
-      const ids = placeRing(doc, pts, { aromatic: act === 'benzene' || act === 'cyclopentadiene', existing: [b.a1, b.a2], scale: b.s });
+      const ids = placeRing(doc, pts, { aromatic: act === 'benzene' || act === 'cyclopentadiene', existing: [b.a1, b.a2], scale: b.s, like: b });
       // a and z leave the highlight on the bond, so the other key fuses on its other side (a z
       // gives indene); 3 to 8 move it to the new ring's far bond (on a five-ring, the one on the
       // first atom's side), ready to change the ring there: both as the cheat sheet's examples need
