@@ -1,6 +1,7 @@
-// SmartArt-style diagrams (Insert ▸ Diagram): a list, process, cycle, hierarchy, relationship,
-// matrix or pyramid drawn from lines of text, one item per line and Tab (or two spaces) for each
-// level below. Everything is drawn as ordinary library shapes (with their text inside them) and
+// SmartArt-style diagrams (Insert ▸ Diagram): a list, process, timeline, cycle, hierarchy,
+// relationship, matrix or pyramid drawn from lines of text, one item per line and Tab (or two
+// spaces) for each level below. Some take more from a line, as Visio's templates do: a swimlane
+// flowchart's "Lane: step", and a Gantt chart's or dated timeline's "Task: Feb – Apr 2026". Everything is drawn as ordinary library shapes (with their text inside them) and
 // connectors, inside an invisible frame that keeps the text and the look; changing either draws
 // it again. PowerPoint and Word files get the shapes as one group, so they can be moved, resized
 // and retyped there as well.
@@ -24,6 +25,7 @@ import { followPins, hasPins } from '../chem/pins';
 import { gluePoint, shapeBox } from '../objects';
 import { geoDef, HEX_CELL, sectorBox, sectorId, sliceId, textArea } from './geo';
 import { findIcons, isIconId, ICON_PREFIX } from './icons';
+import { schedule, scaleTicks, splitWhen, type Span } from './schedule';
 
 // ---------------------------------------------------------------- the data
 
@@ -50,7 +52,7 @@ export interface DiagramData {
   figs?: Record<string, { w: number; h: number }>;
 }
 
-export type DiagramCategory = 'List' | 'Process' | 'Cycle' | 'Hierarchy' | 'Relationship' | 'Matrix' | 'Pyramid';
+export type DiagramCategory = 'List' | 'Process' | 'Timeline' | 'Cycle' | 'Hierarchy' | 'Relationship' | 'Matrix' | 'Pyramid';
 
 export interface DiagramLayout {
   id: string;
@@ -63,7 +65,7 @@ export interface DiagramLayout {
   size: [number, number];
 }
 
-export const DIAGRAM_CATEGORIES: DiagramCategory[] = ['List', 'Process', 'Cycle', 'Hierarchy', 'Relationship', 'Matrix', 'Pyramid'];
+export const DIAGRAM_CATEGORIES: DiagramCategory[] = ['List', 'Process', 'Timeline', 'Cycle', 'Hierarchy', 'Relationship', 'Matrix', 'Pyramid'];
 
 const STEPS = 'Starting material\nReaction\nWork-up\nPurification\nAnalysis';
 
@@ -79,7 +81,10 @@ export const DIAGRAM_LAYOUTS: DiagramLayout[] = [
   { id: 'steps', name: 'Staircase', category: 'Process', blurb: 'Steps rising from left to right.', sample: 'Hit\nLead\nCandidate\nDrug', size: [480, 300] },
   { id: 'arch', name: 'Bending process', category: 'Process', blurb: 'Circles along a band that bends over one and under the next; lines below an item are its caption, on the open side. A line of just [] is a circle with no words, for a structure.', sample: 'Metal\n\tIridium and rhodium\nLigands\n\tPhosphines\nAdditives\nSolvent\n\tEthers', size: [600, 260] },
   { id: 'arrow-circles', name: 'Circles on an arrow', category: 'Process', blurb: 'Circles along a broad arrow; lines below an item are its caption, above and below in turn.', sample: 'Step 1\n\tMost reactive\nStep 2\n\tLess reactive\nStep 3\n\tLeast reactive', size: [560, 240] },
-  { id: 'timeline', name: 'Timeline', category: 'Process', blurb: 'Points along a line, labelled above and below in turn.', sample: '1828\n\tWöhler: urea\n1856\n\tPerkin: mauveine\n1912\n\tGrignard\n1990\n\tCorey', size: [560, 240] },
+  { id: 'swimlane', name: 'Swimlane flowchart', category: 'Process', blurb: 'Steps in order, left to right, each in the lane of who (or what) does it, joined by arrows (a cross-functional flowchart). Write a step as Lane: step; a step without a lane stays in the lane before. A step ending in ? is a decision; Start and End are drawn as such.', sample: 'Chemist: Start\nChemist: Run the reaction\nAnalyst: Crude NMR\nAnalyst: Pure enough?\nChemist: Column\nAnalyst: Full characterisation\nChemist: End', size: [620, 300] },
+  { id: 'timeline', name: 'Timeline', category: 'Timeline', blurb: 'Points along a line, labelled above and below in turn.', sample: '1828\n\tWöhler: urea\n1856\n\tPerkin: mauveine\n1912\n\tGrignard\n1990\n\tCorey', size: [560, 240] },
+  { id: 'dated-timeline', name: 'Timeline with dates', category: 'Timeline', blurb: 'Milestones and spans of time placed by their dates along a line, as in Visio. Write each as Words: Mar 2026 (a milestone) or Words: Jan – Jun 2026 (a span); days (14 Mar 2026, 2026-03-14), quarters (Q2 2026) and steps (Week 3) work too.', sample: 'Funding starts: Sep 2025\nLiterature review: Sep – Nov 2025\nLigand synthesis: Oct 2025 – Feb 2026\nCatalyst screening: Jan – May 2026\nCandidacy exam: Mar 2026\nPaper submitted: Jul 2026', size: [620, 300] },
+  { id: 'gantt', name: 'Gantt chart', category: 'Timeline', blurb: 'A row for each task with a bar over its dates, under a scale of months (or days, or weeks). Write each task as Task: Feb – Apr 2026, a milestone as Task: Jul 2026; indent tasks under a heading to make it a summary bar over them.', sample: 'Synthesis\n\tLigands: Jan – Mar 2026\n\tComplexes: Mar – Apr 2026\nScreening: Apr – Jun 2026\nKinetics: May – Jul 2026\nPaper submitted: Aug 2026', size: [620, 300] },
   { id: 'equation', name: 'Equation', category: 'Process', blurb: 'Items joined by plus signs, with an arrow to the last.', sample: 'Aryl halide\nBoronic acid\nBiaryl', size: [520, 160] },
   { id: 'cycle', name: 'Basic cycle', category: 'Cycle', blurb: 'Circles round a loop, joined by curved arrows.', sample: 'Oxidative addition\nTransmetalation\nReductive elimination', size: [380, 380] },
   { id: 'ring', name: 'Segmented ring', category: 'Cycle', blurb: 'A ring cut into a segment for each item. Indent the others under a first item to put it in the middle.', sample: 'Electrochemical\nPhotoredox\nZincke type\nChan–Lam coupling', size: [380, 380] },
@@ -198,6 +203,8 @@ export interface PartShape {
   fitW?: number;
   /** The size of the structure put in it (DiagramData.figs): it takes the top of the text area, the words go underneath. */
   fig?: { w: number; h: number };
+  /** The biggest its text is made (points), when fitting it (a Gantt chart's rows, which have room across to spare). */
+  most?: number;
 }
 
 /** A line or arrow of a diagram, from the diagram's top left; `from`/`to` stick it to shapes (index, side). */
@@ -210,6 +217,8 @@ export interface PartLine {
   from?: [number, number];
   to?: [number, number];
   tone: number;
+  /** A thin pale line (a Gantt chart's grid). */
+  faint?: boolean;
 }
 
 export interface DiagramLaid { shapes: PartShape[]; lines: PartLine[]; tones: number }
@@ -243,7 +252,7 @@ function lay(d: DiagramData): DiagramLaid {
 /** The shape showing each item's words (where a structure for the item goes), by the item's line. */
 function itemShapes(laid: DiagramLaid): Map<number, PartShape> {
   const out = new Map<number, PartShape>();
-  for (const p of laid.shapes) if (p.head && (p.role === 'item' || p.role === 'label') && !out.has(p.head.n)) out.set(p.head.n, p);
+  for (const p of laid.shapes) if (p.head && p.head.n > 0 && (p.role === 'item' || p.role === 'label') && !out.has(p.head.n)) out.set(p.head.n, p);
   return out;
 }
 
@@ -447,6 +456,140 @@ function layOut(d: DiagramData): DiagramLaid {
       });
       return out(n);
     }
+    case 'swimlane': {
+      // the steps in order, each in its lane; a lane named on its own line ("Analyst:") keeps its place
+      const lanes: string[] = [];
+      const steps: { it: DiagramItem; lane: number; words: string }[] = [];
+      let lane = -1;
+      for (const it of items) {
+        const m = laneSplit(it.text);
+        if (m) {
+          lane = lanes.indexOf(m.lane);
+          if (lane < 0) { lane = lanes.length; lanes.push(m.lane); }
+          if (!m.words) continue;
+        } else if (lane < 0) { lane = 0; lanes.push(''); }
+        steps.push({ it, lane, words: m ? m.words : it.text });
+      }
+      const L = lanes.length;
+      if (!L) return out(1);
+      // a heading down the left for each named lane, then a band across for its steps
+      const named = lanes.some(Boolean);
+      const hw = named ? Math.min(0.18 * w, Math.max(0.1 * w, 60)) : 0;
+      const laneH = h / L;
+      lanes.forEach((name, i) => {
+        shapes.push({ geo: 'rect', box: R(hw, i * laneH, w - hw, laneH), role: 'sub', tone: i });
+        if (named) shapes.push({ geo: 'rect', box: R(0, i * laneH, hw, laneH), role: 'item', head: note(name), tone: i, group: 'lanes' });
+      });
+      // a column for each step, so the flow reads left to right
+      const colW = (w - hw) / Math.max(1, steps.length);
+      const any = steps.some((x) => x.it.kids.length);
+      const bw = colW * 0.74, bh = Math.min(laneH * 0.7, bw * (any ? 1 : 0.62));
+      const index: number[] = [];
+      steps.forEach((x, k) => {
+        const cx = hw + (k + 0.5) * colW, cy = (x.lane + 0.5) * laneH;
+        const said = shownText(x.words).trim();
+        const decision = /\?$/.test(said);
+        const geo = decision ? 'fcDecision' : /^(start|begin|end|finish|stop)$/i.test(said) ? 'fcTerminator' : box;
+        const sh = decision ? Math.min(laneH * 0.9, bh * 1.4) : bh;
+        index.push(shapes.length);
+        shapes.push({ geo, box: R(cx - bw / 2, cy - sh / 2, bw, sh), role: 'item', head: { ...x.it, text: x.words }, lines: kidsOf(x.it), tone: x.lane });
+      });
+      // arrows from each step to the next: straight along a lane, elbowed across to another
+      for (let k = 0; k + 1 < steps.length; k++) {
+        const across = steps[k].lane !== steps[k + 1].lane;
+        lines.push({ tail: { x: 0, y: 0 }, head: { x: 0, y: 0 }, arrow: true, ...(across ? { elbow: true } : {}), from: [index[k], 1], to: [index[k + 1], 3], tone: steps[k].lane });
+      }
+      return out(L);
+    }
+    case 'gantt': {
+      // a row for every line; a line with no when of its own spans the lines under it (a summary)
+      const rows = items.flatMap(withKids);
+      const said = rows.map((it) => splitWhen(it.text));
+      const { spans, scale } = schedule(said.map((x) => x?.when ?? null));
+      const row = new Map(rows.map((it, i) => [it, i]));
+      const spanOf = (i: number): (Span & { summary?: boolean }) | null => {
+        if (spans[i]) return spans[i];
+        const under = withKids(rows[i]).slice(1).map((k) => spans[row.get(k)!]).filter((x): x is Span => !!x);
+        if (!under.length) return null;
+        return { start: Math.min(...under.map((x) => x.start)), end: Math.max(...under.map((x) => x.end)), milestone: false, summary: true };
+      };
+      const toneOf = new Map(items.flatMap((it, i) => withKids(it).map((k) => [k, i] as const)));
+      const lw = Math.min(0.32 * w, Math.max(0.2 * w, 80));
+      const head = scale ? Math.min(0.12 * h, Math.max(14, h / (rows.length + 2))) : 0;
+      const rh = (h - head) / rows.length;
+      const indent = Math.min(12, 0.04 * w);
+      const x0 = lw + g, x1 = w - 1;
+      const X = (v: number) => (scale ? x0 + ((v - scale.min) / (scale.max - scale.min)) * (x1 - x0) : x0);
+      if (scale) {
+        // the scale across the top, and a pale line down from each mark
+        const ticks = scaleTicks(scale, (x1 - x0) / 34);
+        ticks.forEach((t, k) => {
+          const x = X(t.at), next = k + 1 < ticks.length ? X(ticks[k + 1].at) : x1;
+          lines.push({ tail: { x, y: head }, head: { x, y: h }, tone: 0, faint: true });
+          if (next - x > 4) shapes.push({ geo: 'rect', box: R(x, 0, next - x, head), role: 'label', head: note(t.label), tone: 0, group: 'ticks', align: 'left', valign: 'bottom' });
+        });
+      }
+      rows.forEach((it, i) => {
+        const y = head + i * rh, tone = toneOf.get(it) ?? 0;
+        const x = Math.min(it.depth * indent, lw / 2);
+        shapes.push({ geo: 'rect', box: R(x, y, lw - x, rh), role: 'label', head: { ...it, text: said[i]?.label ?? it.text }, tone, align: 'left', most: Math.max(6, rh * 0.34) });
+        const s = spanOf(i);
+        if (!s) return;
+        if (s.milestone) {
+          const dm = Math.min(rh * 0.7, 18);
+          shapes.push({ geo: 'diamond', box: R(Math.min(Math.max(X(s.start) - dm / 2, x0), x1 - dm), y + (rh - dm) / 2, dm, dm), role: 'item', tone });
+          return;
+        }
+        const bh = s.summary ? rh * 0.28 : rh * 0.62;
+        shapes.push({ geo: s.summary ? 'rect' : box, box: R(X(s.start), y + (rh - bh) / 2, Math.max(1, X(s.end) - X(s.start)), bh), role: s.summary ? 'band' : 'item', tone });
+      });
+      return out(items.length);
+    }
+    case 'dated-timeline': {
+      const said = items.map((it) => splitWhen(it.text));
+      const { spans, scale } = schedule(said.map((x) => x?.when ?? null));
+      // with no dates to go by, points spaced evenly
+      if (!scale) return layOut({ ...d, layout: 'timeline' });
+      const axis = 0.46 * h;
+      const X = (v: number) => g + ((v - scale.min) / (scale.max - scale.min)) * (w - 2 * g);
+      lines.push({ tail: { x: 0, y: axis }, head: { x: w, y: axis }, arrow: true, tone: 0 });
+      // the scale under the line
+      const ticks = scaleTicks(scale, w / 60);
+      const th = Math.min(0.08 * h, 16), dm = Math.min(14, 0.06 * h);
+      const below = axis + Math.max(th * 0.4, dm / 2 + 1);
+      ticks.forEach((t, k) => {
+        const x = X(t.at), next = k + 1 < ticks.length ? X(ticks[k + 1].at) : w;
+        lines.push({ tail: { x, y: axis }, head: { x, y: axis + th * 0.4 }, tone: 0 });
+        if (next - x > 4) shapes.push({ geo: 'rect', box: R(x, below, Math.min(next - x, w - x), th), role: 'label', head: note(t.label), tone: 0, group: 'ticks', align: 'left', valign: 'top' });
+      });
+      // spans as bars above the line, in as many tracks as they need not to overlap
+      const bars = items.map((it, i) => ({ it, s: spans[i], i })).filter((x) => x.s && !x.s.milestone).sort((a, b) => a.s!.start - b.s!.start);
+      const ends: number[] = [];
+      const track = bars.map((b) => { let k = ends.findIndex((e) => e <= b.s!.start + 1e-9); if (k < 0) { k = ends.length; ends.push(0); } ends[k] = b.s!.end; return k; });
+      const tracks = Math.max(1, ends.length);
+      const bh = Math.min((axis - g) / tracks - g / 2, 0.16 * h);
+      bars.forEach((b, k) => {
+        const y = axis - g / 2 - (track[k] + 1) * (bh + g / 2);
+        const a = X(b.s!.start);
+        shapes.push({ geo: box, box: R(a, y, Math.max(2, Math.min(X(b.s!.end), w) - a), bh), role: 'item', head: { ...b.it, text: said[b.i]!.label }, lines: kidsOf(b.it), tone: b.i, group: 'bars', most: Math.max(6, bh * 0.42) });
+      });
+      // milestones on the line, labelled under the scale in two rows, with a line down to each
+      const marks = items.map((it, i) => ({ it, s: spans[i], i })).filter((x) => x.s?.milestone).sort((a, b) => a.s!.start - b.s!.start);
+      const top = below + th + g / 2, lh = (h - top) / 2 - g / 4;
+      const lwide = Math.min(0.32 * w, (2 * w) / Math.max(2, marks.length + 1));
+      marks.forEach((m, k) => {
+        const x = X(m.s!.start);
+        shapes.push({ geo: 'diamond', box: R(Math.min(Math.max(0, x - dm / 2), w - dm), axis - dm / 2, dm, dm), role: 'item', tone: m.i });
+        const y = top + (k % 2) * (lh + g / 4);
+        lines.push({ tail: { x, y: axis + dm / 2 }, head: { x, y }, tone: m.i, faint: true });
+        const lx = Math.min(Math.max(0, x - lwide / 2), w - lwide);
+        shapes.push({ geo: 'rect', box: R(lx, y, lwide, lh), role: 'label', head: { ...m.it, text: said[m.i]!.label }, lines: kidsOf(m.it), tone: m.i, valign: 'top', most: Math.max(6, Math.min(lh * 0.32, 0.055 * h)) });
+      });
+      // lines with no date: listed under the bars' track, so nothing written is lost
+      const loose = items.filter((_, i) => !spans[i]);
+      if (loose.length) shapes.push({ geo: 'rect', box: R(0, 0, w, Math.max(4, g * 3)), role: 'label', lines: loose.flatMap(withKids), tone: 0, align: 'left', valign: 'top' });
+      return out(n);
+    }
     case 'equation': {
       const k = 0.45;
       const s = Math.min(h, (w - (n - 1) * 2 * g) / (n + k * (n - 1)));
@@ -637,6 +780,33 @@ function layOut(d: DiagramData): DiagramLaid {
 }
 
 /** The middle of a radial diagram (or a matrix) and the items round it. */
+/** A text-only item (a lane's heading, a mark on a scale): no line of the text of its own. */
+const note = (text: string): DiagramItem => ({ text, kids: [], n: 0, depth: 0 });
+
+const LANE = /^([^:]{1,40}?)\s*:(?:\s+(.*))?$/;
+
+/** A swimlane step's lane and words, from "Lane: words" (null when it names no lane). */
+export function laneSplit(text: string): { lane: string; words: string } | null {
+  const m = LANE.exec(text.trim());
+  return m && m[1].trim() ? { lane: m[1].trim(), words: (m[2] ?? '').trim() } : null;
+}
+
+/**
+ * A line of a layout's text split into what its shape shows and what it keeps besides: a
+ * swimlane step's lane in front ("Chemist: "), a task's dates after (": Feb – Apr").
+ */
+function lineSplit(layout: string, text: string, level: number): { pre: string; words: string; post: string } {
+  if (layout === 'swimlane' && level === 0) {
+    const m = laneSplit(text);
+    if (m?.words) return { pre: text.slice(0, text.lastIndexOf(m.words)), words: m.words, post: '' };
+  }
+  if (layout === 'gantt' || layout === 'dated-timeline') {
+    const m = splitWhen(text);
+    if (m) return { pre: '', words: m.label, post: text.slice(text.indexOf(m.label) + m.label.length) };
+  }
+  return { pre: '', words: text, post: '' };
+}
+
 function hubAndOuter(items: DiagramItem[]): { hub: DiagramItem; outer: DiagramItem[] } {
   if (items.length === 1) return { hub: { ...items[0], kids: [] }, outer: items[0].kids };
   return { hub: { ...items[0], kids: [] }, outer: [...items[0].kids, ...items.slice(1)] };
@@ -780,14 +950,16 @@ function sizes(d: DiagramData, laid: DiagramLaid): Map<PartShape, { size: number
   }
   // shapes holding their item and its lines: the item at the main size, its lines a little smaller
   const mixed = (p: PartShape) => !!p.head && !!p.lines?.length;
-  const main = d.size ?? fitSize(groups.get('items') ?? [], max, (s) => s);
+  // a group's text no bigger than the smallest cap of its shapes
+  const cap = (ps: PartShape[]) => Math.min(max, ...ps.map((p) => p.most ?? Infinity));
+  const main = d.size ?? fitSize(groups.get('items') ?? [], cap(groups.get('items') ?? []), (s) => s);
   for (const [k, ps] of groups) {
     if (k === 'lines') {
-      const s = d.size ? d.size * 0.85 : fitSize(ps, Math.max(6, main * 0.85));
+      const s = d.size ? d.size * 0.85 : fitSize(ps, Math.max(6, Math.min(main * 0.85, cap(ps))));
       for (const p of ps) out.set(p, { size: s, head: null });
       continue;
     }
-    const head = k === 'items' ? main : d.size ?? fitSize(ps, max, (s) => s);
+    const head = k === 'items' ? main : d.size ?? fitSize(ps, cap(ps), (s) => s);
     // with lines under the item in the same shape, those lines shrink first, down to 0.6 of the item
     for (const p of ps) {
       if (!mixed(p)) { out.set(p, { size: head, head }); continue; }
@@ -839,7 +1011,7 @@ export function diagramParts(d: DiagramData): { shapes: Omit<Shape, 'id'>[]; lin
     const lk = looks(d, p, c, laid.tones > 1 ? p.tone / (laid.tones - 1) : 0);
     const s = sz.get(p);
     const text = s ? textOf(p, s.size, lk.ink, s.head) : null;
-    const held = [...(p.head ? [p.head] : []), ...(p.lines ?? [])].map((x) => x.n);
+    const held = [...(p.head ? [p.head] : []), ...(p.lines ?? [])].map((x) => x.n).filter((n) => n > 0);
     const sh: Omit<Shape, 'id'> = {
       kind: 'geo', geo: p.geo, ...p.box,
       filled: !!lk.fill, color: lk.line ?? lk.fill ?? '#000000', lineWidth: lk.line ? lk.lw : 0,
@@ -858,8 +1030,8 @@ export function diagramParts(d: DiagramData): { shapes: Omit<Shape, 'id'>[]; lin
   const lw = Math.max(1, Math.min(3, Math.min(d.w, d.h) / 160));
   const lines = laid.lines.map((l) => {
     const c = toneColour(d, l.tone, laid.tones);
-    const ink = d.colours === 'mono' ? '#000000' : d.colours === 'outline' || d.colours === 'light' ? c : l.arrow ? tint(c, 0.35) : tint(c, 0.25);
-    const width = l.arrow ? lw * 1.6 : lw;
+    const ink = l.faint ? '#d9d9d9' : d.colours === 'mono' ? '#000000' : d.colours === 'outline' || d.colours === 'light' ? c : l.arrow ? tint(c, 0.35) : tint(c, 0.25);
+    const width = l.faint ? lw * 0.5 : l.arrow ? lw * 1.6 : lw;
     const a: Omit<Arrow, 'id'> & { fromIndex?: number; toIndex?: number } = {
       tail: l.tail, head: l.head, headStyle: l.arrow ? 'full' : 'none', tailStyle: 'none', headType: 'solid', line: 'solid', noGo: false, equilibrium: false,
       sweep: l.sweep ?? 0, headLength: width * 5, headWidth: width * 2, color: ink, lineWidth: width,
@@ -945,7 +1117,10 @@ export function textFromShapes(doc: Doc, frame: Shape): string {
       const was = lines[n - 1];
       if (was === undefined) return;
       const now = paras[i].trim();
-      if (now && now !== shownText(lineParts(was).text)) text = setItemText(text, n, now);
+      // a step's lane and a task's dates aren't in its shape, and stay
+      const p = lineParts(was);
+      const part = lineSplit(d.layout, p.text, p.level);
+      if (now && now !== shownText(part.words)) text = setItemText(text, n, part.pre + now + part.post);
     });
   }
   return text;

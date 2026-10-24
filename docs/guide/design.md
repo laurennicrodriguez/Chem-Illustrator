@@ -78,12 +78,13 @@ Insert a PNG or JPEG (a logo, say), select it, and click **Remove white…** in 
 
 **Insert** ▸ **Diagram…** (a **Diagram** button on the Design, Slides and Document ribbons) draws a diagram from lines of text, as PowerPoint's SmartArt does. Type one item per line; press <kbd>Tab</kbd> to move a line a level down (under the line above it) and <kbd>Shift+Tab</kbd> to move it back up. The picture on the right shows how it will look as you type.
 
-There are 23 layouts in seven kinds:
+There are 26 layouts in eight kinds:
 
 | Kind | Layouts |
 |---|---|
 | List | Block list, vertical bullet list, horizontal bullet list, honeycomb (hexagons fitted together), icon list |
-| Process | Basic process, chevron process, vertical process, staircase, bending process (circles along a band that bends over one and under the next), circles on an arrow, timeline, equation (A + B → C) |
+| Process | Basic process, chevron process, vertical process, staircase, bending process (circles along a band that bends over one and under the next), circles on an arrow, swimlane flowchart, equation (A + B → C) |
+| Timeline | Timeline (points spaced evenly), timeline with dates, Gantt chart |
 | Cycle | Basic cycle (circles joined by curved arrows), segmented ring, radial |
 | Hierarchy | Hierarchy (top down) and horizontal hierarchy (left to right) |
 | Relationship | Venn, target |
@@ -93,6 +94,14 @@ There are 23 layouts in seven kinds:
 Lines under an item show as bullets in its shape (or under it, in the list and chevron layouts). Formulas get their subscripts as you type them (CO2, ArB(OH)2), and `_` and `^` make other sub- and superscripts. In the icon list each item gets an icon that matches its words; put an icon's name in square brackets in front to choose it yourself, for example `[flask-round-bottom] Synthesis`.
 
 Each layout takes as many items as you type. In the bending process and circles on an arrow, the lines under an item are its caption, outside its circle. A line of just `[]` is an item with no words, a place for a structure.
+
+Three layouts take more from each line, as Visio's templates do:
+
+- **Swimlane flowchart** (a cross-functional flowchart): write each step as `Lane: step`, for example `Analyst: Crude NMR`. Each lane is a band with its name down the left, and the steps run left to right in the order you write them, each in its lane, joined by arrows (elbowed where they cross to another lane). A step without a lane stays in the lane of the step before; a line of just `Lane:` sets a lane's place before its first step. A step ending in `?` is drawn as a decision diamond, and steps called **Start** or **End** as start and end shapes.
+- **Gantt chart:** write each task as `Task: Feb – Apr 2026`, and a milestone as `Task: Jul 2026`. Each task gets a row with a bar over its dates, under a scale of months; a milestone is a diamond. Indent tasks under a heading with no dates and the heading gets a thin summary bar across them all.
+- **Timeline with dates:** the same lines, placed by their dates along a line: spans of time as bars above it (stacked where they overlap), milestones as diamonds on it with their names below.
+
+Dates can be months (`Mar`, `March 2026`, `2026-03`), quarters (`Q2 2026`), days (`14 Mar 2026`, `Mar 14`, `2026-03-14`) or numbered steps (`Week 3`, `Day 10`, `Week 1 – 4`). A range runs from the start of the first to the end of the last, written with `–`, `-` or `to` between. A date without a year takes the year of the one before it, and a range that would run backwards (`Nov – Feb`) runs into the next year. Words typed into a step's or task's shape go back into the text, keeping its lane and dates.
 
 Below the text, choose the colours (the accent colour, shades of it, colourful, light, outline only, black and white for journals, or greys), the accent colour itself (from the drawing's colours, your palettes, or **More colours…** for any colour), rounded corners and a shadow. The text is made as big as fits, the same size in every shape; type a size to fix it.
 
