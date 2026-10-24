@@ -161,6 +161,7 @@ import { SettingsWindow } from './ui/settings-window';
 import { fileTypesPage, FILE_TYPES } from './ui/file-types-page';
 import { watchRibbons, fitRibbons, setRibbonCollapsed, ribbonCollapsed } from './ui/ribbon-fit';
 import { placeTitleBar, titleBarPlace } from './ui/title-bar';
+import { canScaleUi, setUiScale, stepUiScale, uiScale, UI_SCALES } from './ui/ui-scale';
 import { FeedbackDialog } from './ui/feedback-dialog';
 import { addRecent, removeRecent, recentLabel } from './recent';
 import { NameReader, captionName, attachmentAtoms, cxNotes } from './chem/names';
@@ -4289,7 +4290,7 @@ window.addEventListener('keydown', (e) => {
 
 /** Menu commands that work the same whatever shows. */
 const ANY_TAB = new Set(['new-from-template', 'check-accessibility', 'format-painter', 'insert-symbol', 'edit-palettes', 'preferences', 'export-settings', 'import-settings', 'customize-ribbon', 'toolbox-main', 'toolbox-structure', 'toolbox-arrange', 'toolbox-templates', 'toolbox-colours', 'toolbox-highlight', 'toolbox-custom', 'fold-side', 'customize-toolbox', 'lock-toolboxes', 'reset-toolboxes', 'new', 'new-slides', 'new-design', 'new-sheet', 'new-document', 'open', 'save', 'save-as', 'autosave', 'version-history', 'recover-work', 'keep-options', 'close-tab', 'next-tab', 'prev-tab', 'undo', 'redo',
-  'drawing-style', 'navigation-settings', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'title-bar-in-menu', 'collapse-ribbon', 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
+  'drawing-style', 'navigation-settings', 'dark-page', 'dark-colours', 'alignment-guides', 'hotkeys', 'typing-spelling', 'mode-colours', 'dev-tools', 'scroll-bars', 'title-bar-in-menu', 'collapse-ribbon', 'ui-scale-in', 'ui-scale-out', 'ui-scale-reset', ...UI_SCALES.map((v) => `ui-scale-${Math.round(v * 100)}`), 'text-bar-docked', 'text-bar-floating', 'text-bar-hidden', 'group-tips', 'show-stereo', 'clipboard-formats', 'split-view', 'command-search', 'next-region', 'prev-region', 'print',
   'help', 'about', 'user-guide', 'help-here', 'send-feedback', 'report-problem', 'check-updates']);
 
 // ---------------------------------------------------------------- accessibility (Review > Check Accessibility, Alt Text…)
@@ -4768,6 +4769,10 @@ const COMMANDS: Record<string, () => unknown> = {
   'show-stereo': () => previewStereo(!renderer.previewStereo),
   'scroll-bars': () => { showScrollBars(!scrollbars.shown); storeSettings(); },
   'collapse-ribbon': () => { setRibbonCollapsed(!ribbonCollapsed()); storeSettings(); },
+  'ui-scale-in': () => sizeInterface(stepUiScale(uiScale(), 1)),
+  'ui-scale-out': () => sizeInterface(stepUiScale(uiScale(), -1)),
+  'ui-scale-reset': () => sizeInterface(1),
+  ...Object.fromEntries(UI_SCALES.map((v) => [`ui-scale-${Math.round(v * 100)}`, () => sizeInterface(v)])),
   'title-bar-in-menu': () => { void placeTitleBar(titleBarPlace() === 'app' ? 'system' : 'app'); storeSettings(); },
   'page-setup': () => void pageSetup(),
   'text-bar-docked': () => { placeTextBar('docked'); storeSettings(); },
@@ -5905,6 +5910,7 @@ function currentSettings(): Settings {
     scrollBars: scrollbars.shown,
     titleBar: titleBarPlace(),
     ribbonCollapsed: ribbonCollapsed(),
+    uiScale: uiScale(),
     textBar: CaptionEditor.barPlace,
     page: defaultPage,
     welcomed,
@@ -6110,6 +6116,7 @@ function applySettings(s: Settings): void {
   setOrient(s.orient, false);
   void placeTitleBar(s.titleBar);
   setRibbonCollapsed(s.ribbonCollapsed);
+  void setUiScale(s.uiScale);
   defaultPage = s.page;
   welcomed = s.welcomed;
   // the drawing open at start (empty and never saved) takes the default page
@@ -8150,6 +8157,13 @@ async function pageSetup(): Promise<void> {
   editor.changed();
   renderer.repaintAll();
   editor.requestScene();
+}
+
+/** View > Interface Size: the whole window bigger or smaller, saved for next time. */
+function sizeInterface(v: number): void {
+  if (!canScaleUi()) { flash('In the web version, use your browser\'s zoom (in its menu) to make the whole page bigger or smaller.', 5000); return; }
+  void setUiScale(v).then(() => flash(`Interface size ${Math.round(uiScale() * 100)}% (Ctrl+Alt+= larger, Ctrl+Alt+- smaller, Ctrl+Alt+0 normal)`, 2500));
+  storeSettings();
 }
 
 /** View > Text Formatting Bar: along the top of the drawing, floating by the text, or hidden. */

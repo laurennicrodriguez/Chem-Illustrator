@@ -162,6 +162,21 @@
     <button role="menuitemcheckbox" aria-checked="false" data-cmd="collapse-ribbon" title="Show the ribbon's tabs only, for more room; click a tab to use its buttons (Ctrl+F1, or double-click a tab)"><span>Collapse the Ribbon</span><kbd>Ctrl+F1</kbd></button>
     <button role="menuitem" data-cmd="customize-ribbon" title="Put the ribbon's tabs and groups in your order, rename or hide them, and make groups of your own commands (Slides, Documents, Sheets and Designs)">Customize the Ribbon…</button>
     <button role="menuitemcheckbox" aria-checked="true" data-cmd="title-bar-in-menu" class="desktop-only" hidden title="Desktop app: the window's minimise, maximise and close buttons at the right of this menu bar, in place of the system's title bar, to give the work a row more room. Drag an empty part of the menu bar to move the window"><span>Title Bar in Menu Row</span></button>
+    <div class="submenu desktop-only" hidden>
+    <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false" title="Desktop app: make the whole window (menus, ribbons, toolboxes, panels) bigger or smaller. The drawing's own zoom is separate">Interface Size <span class="muted" data-ui-scale-now>100%</span></button>
+    <div class="menu sub" role="menu" hidden>
+    <button role="menuitem" data-cmd="ui-scale-in">Larger</button>
+    <button role="menuitem" data-cmd="ui-scale-out">Smaller</button>
+    <button role="menuitem" data-cmd="ui-scale-reset">Normal (100%)</button>
+    <hr />
+    <button role="menuitemradio" aria-checked="false" data-cmd="ui-scale-80"><span>80%</span></button>
+    <button role="menuitemradio" aria-checked="false" data-cmd="ui-scale-90"><span>90%</span></button>
+    <button role="menuitemradio" aria-checked="true" data-cmd="ui-scale-100"><span>100%</span></button>
+    <button role="menuitemradio" aria-checked="false" data-cmd="ui-scale-110"><span>110%</span></button>
+    <button role="menuitemradio" aria-checked="false" data-cmd="ui-scale-125"><span>125%</span></button>
+    <button role="menuitemradio" aria-checked="false" data-cmd="ui-scale-150"><span>150%</span></button>
+    </div>
+    </div>
     <button role="menuitemcheckbox" aria-checked="true" data-cmd="scroll-bars" title="Scroll bars along the bottom and right of the drawing, showing where you are"><span>Scroll Bars</span></button>
     <div class="submenu">
     <button role="menuitem" class="has-sub" aria-haspopup="menu" aria-expanded="false">Text Formatting Bar</button>

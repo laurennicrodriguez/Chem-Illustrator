@@ -24,6 +24,7 @@ import { CITE_PRESETS, DEFAULT_STYLE, cleanOptions, type CiteFormat } from './do
 import { DEFAULT_KEEP, parseKeepPrefs, type KeepPrefs } from './keep/prefs';
 import { parseThemes, type SlideTemplate } from './deck/templates';
 import { parseRecent } from './text/symbols';
+import { clampUiScale } from './ui/ui-scale';
 
 export interface Settings {
   /** Changes to ChemDraw's default keys. */
@@ -72,6 +73,8 @@ export interface Settings {
   titleBar: 'app' | 'system';
   /** The ribbons show their tabs only, until a tab is clicked (View > Collapse the Ribbon, Ctrl+F1). */
   ribbonCollapsed: boolean;
+  /** The size of the whole interface, 1 for normal (View > Interface Size, Ctrl+Alt+= / Ctrl+Alt+-). */
+  uiScale: number;
   /** The page new drawings start on (File > Page Setup's default); null for no page. */
   page: { name?: string; w: number; h: number; grow: boolean } | null;
   /** The welcome card has been closed (it shows once, on a first empty drawing). */
@@ -176,7 +179,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   hotkeys: {}, keepHotspotOnBond: true, fixedLength: true, fixedAngles: true, devTools: false, showRoles: true,
   chemTyping: true, stereoItalic: true, boldNumbers: false, autoLinks: true, linkCtrlClick: true, spellCheck: true, replacements: DEFAULT_TYPING.replacements, dictionary: [],
-  modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, ribbonCollapsed: false, titleBar: typeof navigator !== 'undefined' && /Mac/.test(navigator.platform || navigator.userAgent) ? 'system' : 'app', page: { name: 'letter', w: 540, h: 720, grow: true }, welcomed: false, textBar: 'docked', groupTips: true,
+  modeColours: DEFAULT_MODE_COLOURS, nicknames: {}, templates: [], splitWidth: 0.38, scrollBars: true, ribbonCollapsed: false, uiScale: 1, titleBar: typeof navigator !== 'undefined' && /Mac/.test(navigator.platform || navigator.userAgent) ? 'system' : 'app', page: { name: 'letter', w: 540, h: 720, grow: true }, welcomed: false, textBar: 'docked', groupTips: true,
   citeStyle: DEFAULT_STYLE, citeOptions: {}, methylStyle: 'Me', axialStyle: 'RaSa', circledCharges: false, textToAtom: true, groupClick: 'group', groupOutline: true, rerouteArrows: true, superscriptR: true, linkSide: 'keep', slideTemplate: null, slideThemes: [], askWholeDrawing: true, palettes: [], toolboxes: defaultToolboxes(), ribbons: {},
   myStyles: [], modeStyles: {}, darkPage: false, darkPalette: 'Graphite', darkPalettes: [],
   guides: { drawing: false, slides: true, design: true },
@@ -212,6 +215,7 @@ export function parseSettings(text: string | null | undefined): Settings {
     if (typeof p.w === 'number' && typeof p.h === 'number' && p.w > 10 && p.h > 10) s.page = { w: p.w, h: p.h, grow: p.grow !== false, ...(typeof p.name === 'string' ? { name: p.name } : {}) };
   }
   if (r.titleBar === 'app' || r.titleBar === 'system') s.titleBar = r.titleBar;
+  if (typeof r.uiScale === 'number') s.uiScale = clampUiScale(r.uiScale);
   if (r.updateChannel === 'stable' || r.updateChannel === 'latest') s.updateChannel = r.updateChannel;
   if (typeof r.textBar === 'string' && ['docked', 'floating', 'hidden'].includes(r.textBar)) s.textBar = r.textBar as Settings['textBar'];
   if (typeof r.linkSide === 'string' && ['keep', 'below', 'above', 'left', 'right'].includes(r.linkSide)) s.linkSide = r.linkSide as Settings['linkSide'];
