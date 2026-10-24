@@ -5,7 +5,7 @@
 
 import { xml, hex6, kid, kids, type Package } from './ooxml';
 import type { Chart, ChartAxis, ChartKind, Series, SeriesData, SeriesFit, ErrorBars, MarkerShape, Bins, BoxOptions } from '../sheet/chart';
-import { seenChartId, isChartEx, comboAs, onSecondAxis } from '../sheet/chart';
+import { seenChartId, isChartEx, isLevelled, comboAs, onSecondAxis } from '../sheet/chart';
 import type { FitKind } from '../sheet/fit';
 import { textRuns } from '../render/chart-draw';
 
@@ -176,9 +176,10 @@ function serXml(c: Chart, s: Series, i: number, d: SeriesData | undefined, kind:
 /** The chart part of a chart, with a copy of its numbers. */
 export function chartXml(c: Chart, data: SeriesData[]): string {
   if (isChartEx(c.kind)) return chartExXml(c, data);
-  // Excel has no Sankey chart: it gets bars of the same cells, a bar for each level of each row,
-  // and the Sankey comes back from our own copy when the file is opened here (sameChartData)
-  if (c.kind === 'sankey') return chartXml({ ...c, kind: 'bar', legend: c.series.length > 1 ? 'right' : 'none' }, data);
+  // Excel has no Sankey chart or decomposition tree, and its treemap can't be drilled into: they get
+  // bars of the same cells, a bar for each level of each row, and come back from our own copy when
+  // the file is opened here (sameChartData)
+  if (isLevelled(c.kind)) { const { path: _path, ...rest } = c; return chartXml({ ...rest, kind: 'bar', legend: c.series.length > 1 ? 'right' : 'none' }, data); }
   const sizePt = (c.fontSize ?? 12) * 0.75;
   const all = (k: SerKind) => c.series.map((s, i) => serXml(c, s, i, data[i], k)).join('');
   const grouping = c.stacked ? 'stacked' : c.kind === 'column' || c.kind === 'bar' ? 'clustered' : 'standard';

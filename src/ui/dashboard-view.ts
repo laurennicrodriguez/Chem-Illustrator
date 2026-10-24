@@ -9,7 +9,7 @@ import {
   resolveSource, filterMask, joinMasks, pickMask, shownRows, kpiValue, distinctValues, columnOf, slicerText, AGGREGATE_NAMES, sourceName, groupSeries,
 } from '../sheet/dashboard';
 import { chartData } from '../sheet/chart';
-import { drawChart, partAt, samePick, type ChartHits } from '../render/chart-draw';
+import { drawChart, partHit, samePick, type ChartHits } from '../render/chart-draw';
 import { formatValue } from '../sheet/numfmt';
 import { isError } from '../sheet/values';
 
@@ -141,7 +141,7 @@ export class DashboardView {
       size.title = 'Drag to resize';
       el.append(head, body, size);
       el.addEventListener('pointerdown', (e) => this.onDown(e, t, el, (e.target as HTMLElement) === size ? 'size' : 'move'));
-      el.addEventListener('dblclick', (e) => { if (!(e.target as HTMLElement).closest('button')) this.host.open(t); });
+      el.addEventListener('dblclick', (e) => { if (!(e.target as HTMLElement).closest('button') && !this.onTreemap(e)) this.host.open(t); });
       el.addEventListener('contextmenu', (e) => { e.preventDefault(); this.pick(t.id); this.host.contextMenu(e.clientX, e.clientY); });
       try {
         this.fill(t, head, body, mask, g);
@@ -200,19 +200,55 @@ export class DashboardView {
   /** Where each chart tile drew its parts (for clicks on them). */
   private hits = new WeakMap<HTMLCanvasElement, { tile: number; hits: ChartHits }>();
 
-  /**
-   * A click on a chart: its bar, slice or Sankey node or band filters the other tiles; clicking it
-   * again, or clicking away from the chart's parts, shows everything again.
-   */
-  private chartClick(canvas: HTMLCanvasElement, e: PointerEvent): void {
+  /** The chart tile a canvas draws, and the part of it under the pointer. */
+  private chartPart(canvas: HTMLCanvasElement, e: MouseEvent): { t: ChartTile; part: ReturnType<typeof partHit> } | null {
     const got = this.hits.get(canvas);
     const t = got && this.dashboard?.tiles.find((x) => x.id === got.tile);
-    if (!got || !t || t.kind !== 'chart') return;
+    if (!got || !t || t.kind !== 'chart') return null;
     const r = canvas.getBoundingClientRect(), z = this.host.zoom;
-    const pick = partAt(got.hits, (e.clientX - r.left) / z, (e.clientY - r.top) / z);
+    return { t, part: partHit(got.hits, (e.clientX - r.left) / z, (e.clientY - r.top) / z) };
+  }
+
+  /**
+   * A click on a chart: its bar, slice, Sankey node or band, or treemap box filters the other
+   * tiles; clicking it again, or clicking away from the chart's parts, shows everything again. A
+   * decomposition tree's node is expanded (or closed up) and filters by what it stands for; a
+   * treemap's trail of categories drills back up.
+   */
+  private chartClick(canvas: HTMLCanvasElement, e: PointerEvent): void {
+    const got = this.chartPart(canvas, e);
+    if (!got) return;
+    const { t, part } = got;
+    // a second click on the same treemap box drills into it, putting back the pick the first changed
+    // (the tile is drawn afresh after each click, so the browser's own double-click never comes)
+    const last = this.lastClick, now = e.timeStamp;
+    this.lastClick = { tile: t.id, at: now, x: e.clientX, y: e.clientY, before: t.pick };
+    if (t.chart.kind === 'treemap' && part?.drill?.length && last && last.tile === t.id && now - last.at < 450 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 6) {
+      this.lastClick = null;
+      this.update(t.id, { chart: { ...t.chart, path: part.drill }, pick: last.before } as Partial<ChartTile>, 'Drill down');
+      return;
+    }
+    if (part?.drill && (t.chart.kind === 'decomp' || !part.pick.length)) {
+      const path = part.drill.length ? part.drill : undefined;
+      const pick = t.chart.kind === 'decomp' && path ? path.map((value, level) => ({ level, value })) : t.pick;
+      const { path: _was, ...chart } = t.chart;
+      this.update(t.id, { chart: path ? { ...chart, path } : chart, pick } as Partial<ChartTile>, t.chart.kind === 'decomp' ? (path ? 'Expand tree' : 'Close up tree') : 'Drill up');
+      return;
+    }
+    const pick = part?.pick.length ? part.pick : null;
     if (!pick && !t.pick) return;
     const next = pick && !samePick(pick, t.pick) ? pick : undefined;
     this.update(t.id, { pick: next } as Partial<ChartTile>, next ? 'Filter by chart' : 'Clear chart filter');
+  }
+
+  /** The last click on a chart tile (a second one soon after on a treemap's box drills into it). */
+  private lastClick: { tile: number; at: number; x: number; y: number; before: ChartTile['pick'] } | null = null;
+
+  /** Is a double-click on a treemap (which drills into the box, not open the tile's settings)? */
+  private onTreemap(e: MouseEvent): boolean {
+    const canvas = e.target;
+    if (!(canvas instanceof HTMLCanvasElement) || !canvas.classList.contains('dash-pickable')) return false;
+    return this.chartPart(canvas, e)?.t.chart.kind === 'treemap';
   }
 
   private kpiTile(t: KpiTile, head: HTMLElement, body: HTMLElement, mask: Map<Sheet, Set<number>>): void {

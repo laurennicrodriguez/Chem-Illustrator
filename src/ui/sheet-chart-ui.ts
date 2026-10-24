@@ -10,7 +10,7 @@ import type { Sheet } from '../sheet/workbook';
 import { Range, colName, parseCellRef } from '../sheet/refs';
 import {
   Chart, ChartKind, ChartAxis, Series, SeriesFit, ErrorBars, MarkerShape, CHART_NAMES, CHART_PALETTES, MARKERS,
-  chartFromRange, chartData, readRef, refText, isXY, comboAs, onSecondAxis, Bins, BoxOptions,
+  chartFromRange, chartData, readRef, refText, isXY, isLevelled, comboAs, onSecondAxis, Bins, BoxOptions,
 } from '../sheet/chart';
 import { FIT_NAMES, FitKind, fitEquation, r2Text, fitNumber } from '../sheet/fit';
 import { histogram } from '../sheet/chart-stats';
@@ -432,8 +432,16 @@ export class SheetCharts {
     out.push(row('Border', check(c.border !== false, (v) => this.patch((x) => clean({ ...x, border: v ? undefined : false }), 'Chart border'))));
     if (!this.ownData) out.push(row('Hidden rows', check(!!c.showHidden, (v) => this.patch((x) => clean({ ...x, showHidden: v || undefined }), 'Chart hidden rows'), 'Chart them too (off: a filtered table charts what shows)')));
 
-    // a Sankey chart has no axes, and its series are its levels
-    const sankey = c.kind === 'sankey';
+    // a treemap is drilled into, and a decomposition tree expanded, by clicking it once it is picked
+    if (c.kind === 'treemap' || c.kind === 'decomp') {
+      const tree = c.kind === 'decomp';
+      out.push(row(tree ? 'Expanded' : 'Drilled into', note(c.path?.length ? c.path.join(' › ') : tree ? 'The first level only' : 'The whole', 'cp-value'),
+        c.path?.length ? button(tree ? 'Close up' : 'Back to the whole', () => this.patch((x) => clean({ ...x, path: undefined }), tree ? 'Close up tree' : 'Drill up')) : null));
+      out.push(note(tree ? 'Click a node of the chart to split it by the next level; click it again to close it up.' : 'Click a box of the chart to drill into it, and the trail over it to go back up.'));
+    }
+
+    // a Sankey chart, treemap or decomposition tree has no axes, and its series are its levels
+    const sankey = isLevelled(c.kind);
     if (c.kind !== 'pie' && !sankey) {
       const axis = (p: 'x' | 'y' | 'y2', name: string) => {
         const a = c[p] ?? {};

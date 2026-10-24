@@ -250,6 +250,15 @@ All five are saved as Excel's own chart types. Histograms and box charts use the
 
 **Sankey** on the Insert tab shows rows flowing from one column of categories to the next: aromatic or not, then ring size, then heterocycle class, say. Select the block of cells: the last column of numbers says how much each row carries (leave it out and each row counts once), and every other column is a level, left to right. Each category is a node as tall as all the rows through it, and the bands between nodes are as wide as the rows they carry. A blank cell ends a row's flow at that level. In the panel, each level's **Categories** can be changed, or a level removed. Excel has no Sankey chart, so it gets a bar chart of the same cells; open the file here again and it is a Sankey once more.
 
+### Treemaps and decomposition trees
+
+**Treemap** and **Decomp. tree** on the Insert tab break the same kind of block of cells down: the last column of numbers says how much each row carries (leave it out and each row counts once), and every other column is a level, from the first to the last. A blank cell ends a row there: it counts in the categories before it, and in none after.
+
+- **Treemap:** a box for each category of the first level, as big as the rows in it, holding a box for each of its categories at the next level, in shades of its colour. Pick the chart, then click a box to **drill into** it: the chart shows just what is under that category, with a trail over it (**All › Aromatic**) to click back up.
+- **Decomposition tree:** the total, then the first level's categories as bars, each as long as its share. Pick the chart, then click a node to **expand** it: its rows are split by the next level in a new column, with lines from it to its parts. Click an expanded node to close it up again, or the total to close everything.
+
+The chart's panel says what it is drilled into or expanded to, with a button to go back to the whole. Excel has no decomposition tree, and its treemap can't be drilled into, so both get a bar chart of the same cells; open the file here again and they are as they were, drilled and expanded the same.
+
 In the chart panel, each series of a scatter chart has **Sticks** (peaks drawn up or down from zero, as in a mass spectrum) and **Show x (m/z)** to label each peak with its value. You can use these for any spectrum you put in a sheet.
 
 ## Isotope patterns
@@ -275,7 +284,7 @@ A dashboard is a page of tiles that summarise a table: useful for a catalyst scr
 
 | Tile | What it shows |
 |---|---|
-| **Chart** | A chart of a table's columns. **Same labels** combines rows with the same label (average, sum, count…), for one bar per ligand rather than one per reaction. A **Sankey** chart asks which columns to flow through and which says how much each row carries |
+| **Chart** | A chart of a table's columns. **Same labels** combines rows with the same label (average, sum, count…), for one bar per ligand rather than one per reaction. A **Sankey** chart, **treemap** or **decomposition tree** asks which columns are its levels and which says how much each row carries |
 | **Number** | One headline number (KPI): average, sum, median, smallest, largest, standard deviation, or a count; or any formula. A **Target** colours it green or red, and you choose whether higher is better |
 | **Table** | Chosen columns, sortable by clicking a heading; structures are drawn |
 | **Slicer** | A button for each value of a column (catalyst, solvent…). Clicking buttons filters every tile fed by the same table |
@@ -287,7 +296,8 @@ Each new tile asks which table or block of cells to read. For a gallery, the str
 - **Move and resize:** drag a tile, or drag its bottom-right corner. Tiles snap to a grid. With a tile picked, the arrow keys move it, Shift+arrows resize it and Delete removes it.
 - **Settings:** click a tile for its settings in the right-hand panel; click an empty spot, or **Dashboard Settings**, for the dashboard's columns, row height, gap and background.
 - **Slicers:** click more buttons to pick several, and click a picked one again to drop it. Several slicers apply together. The ✕ on a slicer, or **Clear Filters**, shows everything again.
-- **Clicking a chart:** click a bar, a pie slice, or a Sankey node or band, and every other tile fed by the same table shows only the rows it stands for, as a slicer would (a band stands for the rows running between its two nodes). The chart clicked shows what was picked, with the rest faded. Click it again, or click the chart away from its bars, to show everything again; **Clear Chart Filter** (right-click) and **Clear Filters** do too. The panel lists what each chart is filtering by.
+- **Clicking a chart:** click a bar, a pie slice, a Sankey node or band, or a treemap's box, and every other tile fed by the same table shows only the rows it stands for, as a slicer would (a band stands for the rows running between its two nodes). The chart clicked shows what was picked, with the rest faded. Click it again, or click the chart away from its bars, to show everything again; **Clear Chart Filter** (right-click) and **Clear Filters** do too. The panel lists what each chart is filtering by.
+- **Treemaps and decomposition trees:** double-click a treemap's box to drill into it, and click the trail over it to go back up. Click a decomposition tree's node to expand it: it also filters the other tiles by that node, as PowerBI's does. Click it again to close it up.
 
 ## Links
 

@@ -3,9 +3,10 @@
 // 100%; the caller scales the canvas. Titles take simple sub- and superscripts: k_{obs}, s^{−1}.
 
 import type { Chart, ChartAxis, ChartPick, SeriesData, MarkerShape } from '../sheet/chart';
-import { niceTicks, logTicks, CHART_PALETTES, isXY, comboAs, onSecondAxis } from '../sheet/chart';
+import { niceTicks, logTicks, CHART_PALETTES, isXY, isLevelled, comboAs, onSecondAxis } from '../sheet/chart';
 import { histogram, boxGroups } from '../sheet/chart-stats';
 import { sankeyFlows } from '../sheet/sankey';
+import { hierarchy, nodeAt, validPath, squarify, type HierNode } from '../sheet/hierarchy';
 import { fitPoints, fitAt, fitEquation, r2Text, Fit, FitKind } from '../sheet/fit';
 import { cssFamily } from '../text/layout';
 import { formatValue, generalNumber } from '../sheet/numfmt';
@@ -26,31 +27,42 @@ export interface ChartHits {
   fitLabels: { series: number; box: Box }[];
   /** The fitted lines worked out, one per series (null where none). */
   fits: (Fit | null)[];
-  /** Bars, pie slices, and a Sankey chart's nodes and bands, with what a click on each picks. */
+  /** Bars, pie slices, a Sankey chart's nodes and bands, a treemap's boxes and a decomposition tree's nodes, with what a click on each picks. */
   parts?: ChartPart[];
 }
 
 export type { ChartPick };
 
-export type ChartPart =
+/**
+ * A part of a chart. `drill`, on a treemap or decomposition tree, is the chart's `path` a click on
+ * it leads to: a treemap drilled into a box's category (or back up, from its trail of categories),
+ * a decomposition tree's node expanded (or closed up again).
+ */
+export type ChartPart = (
   | { shape: 'box'; box: Box; pick: ChartPick }
   | { shape: 'slice'; cx: number; cy: number; r: number; a0: number; a1: number; pick: ChartPick }
   /** A band from x0 to x1, its top and bottom at each end, curving as drawn (sankeyCurve). */
-  | { shape: 'band'; x0: number; x1: number; top0: number; bottom0: number; top1: number; bottom1: number; pick: ChartPick };
+  | { shape: 'band'; x0: number; x1: number; top0: number; bottom0: number; top1: number; bottom1: number; pick: ChartPick }
+) & { drill?: string[] };
 
 /** The part of a chart at a point (in the chart's own pixels), and what clicking it picks. */
 export function partAt(hits: ChartHits, x: number, y: number): ChartPick | null {
+  return partHit(hits, x, y)?.pick ?? null;
+}
+
+/** The part of a chart at a point (in the chart's own pixels). */
+export function partHit(hits: ChartHits, x: number, y: number): ChartPart | null {
   const parts = hits.parts ?? [];
   // nodes and bars over bands
   for (let k = parts.length - 1; k >= 0; k--) {
     const p = parts[k];
-    if (p.shape === 'box') { if (x >= p.box.x && x <= p.box.x + p.box.w && y >= p.box.y && y <= p.box.y + p.box.h) return p.pick; continue; }
+    if (p.shape === 'box') { if (x >= p.box.x && x <= p.box.x + p.box.w && y >= p.box.y && y <= p.box.y + p.box.h) return p; continue; }
     if (p.shape === 'slice') {
       const dx = x - p.cx, dy = y - p.cy;
       if (Math.hypot(dx, dy) > p.r) continue;
       let a = Math.atan2(dy, dx);
       while (a < p.a0) a += 2 * Math.PI;
-      if (a <= p.a1) return p.pick;
+      if (a <= p.a1) return p;
       continue;
     }
     if (x < p.x0 || x > p.x1 || p.x1 <= p.x0) continue;
@@ -59,7 +71,7 @@ export function partAt(hits: ChartHits, x: number, y: number): ChartPick | null 
     for (let i = 0; i < 30; i++) { const m = (lo + hi) / 2; if (sankeyCurve(p.x0, p.x1, m).x < x) lo = m; else hi = m; }
     const e = sankeyCurve(p.x0, p.x1, lo).e;
     const top = p.top0 + (p.top1 - p.top0) * e, bottom = p.bottom0 + (p.bottom1 - p.bottom0) * e;
-    if (y >= top && y <= bottom) return p.pick;
+    if (y >= top && y <= bottom) return p;
   }
   return null;
 }
@@ -328,7 +340,7 @@ export function drawChart(ctx: Ctx, chart: Chart, data0: SeriesData[], w: number
   if (kind === 'pie') {
     const pal = (CHART_PALETTES[chart.palette ?? 'office'] ?? CHART_PALETTES.office).colors;
     (data[0]?.cats ?? []).forEach((c, i) => legend.push({ name: c || String(i + 1), color: pal[i % pal.length], kind: 'box' }));
-  } else if (kind !== 'sankey') {
+  } else if (!isLevelled(kind)) {
     data.forEach((d, i) => {
       const s = chart.series[i];
       const lineLike = kind === 'scatter' || kind === 'line' || kind === 'bubble' || (kind === 'radar' && !chart.filled) || (kind === 'combo' && comboAs(s, i) === 'line');
@@ -372,6 +384,8 @@ export function drawChart(ctx: Ctx, chart: Chart, data0: SeriesData[], w: number
 
   if (kind === 'pie') return drawPie(ctx, chart, data, { x: left, y: top, w: Math.max(1, right - left), h: Math.max(1, bottom - top) }, fs, family, lit);
   if (kind === 'sankey') return drawSankey(ctx, chart, data, { x: left, y: top, w: Math.max(1, right - left), h: Math.max(1, bottom - top) }, opt, lit);
+  if (kind === 'treemap') return drawTreemap(ctx, chart, data, { x: left, y: top, w: Math.max(1, right - left), h: Math.max(1, bottom - top) }, opt, lit);
+  if (kind === 'decomp') return drawDecomp(ctx, chart, data, { x: left, y: top, w: Math.max(1, right - left), h: Math.max(1, bottom - top) }, opt, lit);
   if (kind === 'radar') return drawRadar(ctx, chart, data, { x: left, y: top, w: Math.max(1, right - left), h: Math.max(1, bottom - top) }, opt);
 
   // value ranges
@@ -833,6 +847,23 @@ function withAlpha(hex: string, a: number): string {
   return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
 }
 
+/** A colour mixed with white (`t` of the way to white). */
+function lighter(hex: string, t: number): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const f = (c: number) => Math.round(c + (255 - c) * t).toString(16).padStart(2, '0');
+  return `#${f(n >> 16)}${f((n >> 8) & 255)}${f(n & 255)}`;
+}
+
+/** Text cut short with an ellipsis to fit a width ('' when not even the first letter fits). */
+function fitText(ctx: Ctx, s: string, width: number, o: TextOpts): string {
+  if (measure(ctx, s, o) <= width) return s;
+  let lo = 0, hi = s.length;
+  while (lo < hi) { const m = Math.ceil((lo + hi) / 2); if (measure(ctx, s.slice(0, m) + '…', o) <= width) lo = m; else hi = m - 1; }
+  return lo ? s.slice(0, lo) + '…' : '';
+}
+
 /** A darker shade of a colour (a box's mean marker, against its own fill). */
 function darker(hex: string): string {
   const m = /^#([0-9a-f]{6})$/i.exec(hex);
@@ -1023,6 +1054,172 @@ function drawSankey(ctx: Ctx, chart: Chart, data: SeriesData[], area: Box, opt: 
       const last = i === L - 1 && L > 1;
       text(ctx, `${n.label} (${generalNumber(n.value)})`, last ? p.x - 4 : p.x + nodeW + 4, p.y + p.h / 2 + tickFs * 0.35, opt(tickFs, { align: last ? 'right' : 'left' }));
     }
+  });
+  return out();
+}
+
+/** The categories of a path as a pick (a category at each level from the first). */
+const pathPick = (path: readonly string[]): ChartPick => path.map((value, level) => ({ level, value }));
+
+/** Is a node of the whole still there (any of it) once a pick is applied? */
+const litHas = (lit: HierNode | null, node: HierNode): boolean => !lit || (nodeAt(lit, node.path)?.value ?? 0) > 0;
+
+/**
+ * A treemap: the categories of the level it is drilled to (the first, undrilled) as boxes as big
+ * as the rows in them, each holding the next level's categories as smaller boxes in shades of its
+ * colour. Drilled in, a trail of categories over it ("All › Aromatic") leads back up.
+ */
+function drawTreemap(ctx: Ctx, chart: Chart, data: SeriesData[], area: Box, opt: (size: number, more?: Partial<TextOpts>) => TextOpts, lit?: SeriesData[]): ChartHits {
+  const fs = chart.fontSize ?? 12, small = fs * 0.92;
+  const parts: ChartPart[] = [];
+  const out = (): ChartHits => ({ plot: area, fitLabels: [], fits: [], parts });
+  const root = hierarchy(data);
+  if (!root.value) return out();
+  const path = validPath(root, chart.path);
+  const at = nodeAt(root, path)!;
+  const litRoot = lit ? hierarchy(lit) : null;
+  const pal = (CHART_PALETTES[chart.palette ?? 'office'] ?? CHART_PALETTES.office).colors;
+  let top = area.y;
+  // the trail back up: each category but the last leads back to it
+  if (path.length) {
+    const crumbs = ['All', ...path];
+    let x = area.x;
+    const y = top + small;
+    crumbs.forEach((c, i) => {
+      const last = i === crumbs.length - 1;
+      const cw = text(ctx, c, x, y, opt(small, { bold: last, color: last ? TEXT : '#2f5597' }));
+      if (!last) {
+        parts.push({ shape: 'box', box: { x, y: top, w: cw, h: small * 1.4 }, pick: [], drill: path.slice(0, i) });
+        x += cw + text(ctx, ' › ', x + cw, y, opt(small, { color: '#8c8c8c' }));
+      }
+    });
+    top += small * 1.8;
+  }
+  const box = { x: area.x, y: top, w: area.w, h: Math.max(1, area.y + area.h - top) };
+  /** A box's words: its category, and its amount under it where there's room. */
+  const label = (n: HierNode, r: Box, bold: boolean) => {
+    if (r.w < small * 1.5 || r.h < small * 1.3) return;
+    const o = opt(small, { color: '#ffffff', bold });
+    const name = fitText(ctx, n.label, r.w - 8, o);
+    if (!name) return;
+    text(ctx, name, r.x + 4, r.y + small + 2, o);
+    if (r.h >= small * 2.7) text(ctx, generalNumber(n.value), r.x + 4, r.y + small * 2.2 + 2, opt(small * 0.9, { color: '#ffffff' }));
+  };
+  // nothing below the category drilled to: it fills the box
+  const groups = at.children.length ? at.children : [at];
+  const rects = squarify(groups.map((g) => g.value), box);
+  groups.forEach((g, k) => {
+    const r = { x: rects[k].x + 1, y: rects[k].y + 1, w: rects[k].w - 2, h: rects[k].h - 2 };
+    if (r.w < 1 || r.h < 1) return;
+    const colour = pal[k % pal.length];
+    const head = small * 1.6;
+    const nested = g !== at && g.children.length > 0 && r.h > head + small * 1.5 && r.w > small * 3;
+    ctx.fillStyle = litHas(litRoot, g) ? colour : withAlpha(colour, 0.3);
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    const drill = g !== at && g.children.length ? g.path : undefined;
+    if (!nested) {
+      label(g, r, false);
+      parts.push({ shape: 'box', box: r, pick: pathPick(g.path), ...(drill ? { drill } : {}) });
+      return;
+    }
+    // a band across its top with its category, then its own categories in shades of its colour
+    const hb = { x: r.x, y: r.y, w: r.w, h: head };
+    const o = opt(small, { color: '#ffffff', bold: true });
+    const name = fitText(ctx, `${g.label} (${generalNumber(g.value)})`, r.w - 8, o) || fitText(ctx, g.label, r.w - 8, o);
+    if (name) text(ctx, name, r.x + 4, r.y + small * 1.15, o);
+    const inner = { x: r.x + 2, y: r.y + head, w: r.w - 4, h: r.h - head - 2 };
+    const kids = squarify(g.children.map((c) => c.value), inner);
+    g.children.forEach((c, m) => {
+      const kr = { x: kids[m].x + 0.75, y: kids[m].y + 0.75, w: kids[m].w - 1.5, h: kids[m].h - 1.5 };
+      if (kr.w < 1 || kr.h < 1) return;
+      const shade = lighter(colour, Math.min(0.45, 0.12 + (m % 5) * 0.07));
+      ctx.fillStyle = litHas(litRoot, c) ? shade : withAlpha(shade, 0.3);
+      ctx.fillRect(kr.x, kr.y, kr.w, kr.h);
+      label(c, kr, false);
+      // a click inside drills into the box it is in (into it, if it goes further down)
+      parts.push({ shape: 'box', box: kr, pick: pathPick(c.path), drill: g.path });
+    });
+    parts.push({ shape: 'box', box: hb, pick: pathPick(g.path), drill: g.path });
+  });
+  return out();
+}
+
+/**
+ * A decomposition tree, as PowerBI draws one: the total, then a column for each level the tree is
+ * expanded to, each node a bar as long as its share of the node it splits, with lines from the
+ * node expanded to the nodes it splits into. Clicking a node expands it; clicking it again closes
+ * it up.
+ */
+function drawDecomp(ctx: Ctx, chart: Chart, data: SeriesData[], area: Box, opt: (size: number, more?: Partial<TextOpts>) => TextOpts, lit?: SeriesData[]): ChartHits {
+  const fs = chart.fontSize ?? 12, small = fs * 0.92;
+  const parts: ChartPart[] = [];
+  const out = (): ChartHits => ({ plot: area, fitLabels: [], fits: [], parts });
+  const L = data.length;
+  const root = hierarchy(data);
+  if (!L || !root.value) return out();
+  // the last level has nothing under it to expand
+  const path = validPath(root, chart.path).slice(0, L - 1);
+  const litRoot = lit ? hierarchy(lit) : null;
+  const pal = (CHART_PALETTES[chart.palette ?? 'office'] ?? CHART_PALETTES.office).colors;
+  const colour = pal[0];
+  // the columns: the total, then what each node expanded splits into
+  const cols: HierNode[][] = [[root]];
+  for (let i = 0; i <= path.length && i < L; i++) cols.push(nodeAt(root, path.slice(0, i))!.children);
+  const colW = area.w / Math.max(cols.length, 3);
+  const barW = Math.max(20, colW - 30);
+  const nodeH = small * 2.7;
+  // each column's name over it
+  const named = data.some((d, i) => d.name && d.name !== `Series ${i + 1}`);
+  const headH = small * 1.8;
+  cols.forEach((_, i) => {
+    const name = i === 0 ? 'Total' : named ? data[i - 1].name : `Level ${i}`;
+    text(ctx, fitText(ctx, name, colW - 6, opt(small, { bold: true })), area.x + i * colW, area.y + small, opt(small, { bold: true, color: '#595959' }));
+  });
+  const top = area.y + headH, h = Math.max(nodeH, area.y + area.h - top);
+  const fits = Math.max(1, Math.floor(h / nodeH));
+  /** Where each column's expanded node's bar is (the lines to the next column start there). */
+  let from: { x: number; y: number } | null = null;
+  cols.forEach((col, i) => {
+    const x = area.x + i * colW;
+    const parent = i === 0 ? null : nodeAt(root, path.slice(0, i - 1))!;
+    // more than fit: the largest, and a note of how many more
+    const shown = col.length > fits ? col.slice(0, Math.max(1, fits - 1)) : col;
+    const rows = shown.length + (shown.length < col.length ? 1 : 0);
+    // centred on the node it splits, as far as the column allows
+    const want = from ? from.y - (rows * nodeH) / 2 : top + (h - rows * nodeH) / 2;
+    const y0 = Math.max(top, Math.min(want, top + h - rows * nodeH));
+    let next: { x: number; y: number } | null = null;
+    shown.forEach((n, k) => {
+      const y = y0 + k * nodeH;
+      const barY = y + small * 1.45, barH = Math.max(5, small * 0.8);
+      const open = i > 0 && path[i - 1] === n.label;
+      const on = litHas(litRoot, n);
+      if (from) {
+        ctx.strokeStyle = open ? '#7f7f7f' : '#c9c9c9'; ctx.lineWidth = open ? 1.5 : 1; ctx.setLineDash([]);
+        const xm = (from.x + x) / 2, yy = barY + barH / 2;
+        ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.bezierCurveTo(xm, from.y, xm, yy, x - 2, yy); ctx.stroke();
+      }
+      const share = parent ? n.value / (parent.value || 1) : 1;
+      ctx.fillStyle = '#ededed';
+      ctx.fillRect(x, barY, barW, barH);
+      const c = i === 0 || open ? darker(colour) : colour;
+      ctx.fillStyle = on ? c : withAlpha(c, 0.3);
+      ctx.fillRect(x, barY, Math.max(1, barW * share), barH);
+      const amount = generalNumber(n.value);
+      const vo = opt(small, { align: 'right', color: on ? TEXT : '#a6a6a6' });
+      const aw = measure(ctx, amount, vo);
+      text(ctx, amount, x + barW, y + small * 1.05, vo);
+      const lo = opt(small, { bold: open || i === 0, color: on ? TEXT : '#a6a6a6' });
+      text(ctx, fitText(ctx, i === 0 ? 'Total' : n.label, barW - aw - 6, lo), x, y + small * 1.05, lo);
+      if (open) next = { x: x + barW, y: barY + barH / 2 };
+      if (i === 0) next = { x: x + barW, y: barY + barH / 2 };
+      // what a click does: the total closes everything up; a node expands (or closes up, open)
+      const expandable = i > 0 && i < L;
+      const drill = i === 0 ? [] : open ? path.slice(0, i - 1) : expandable ? n.path : undefined;
+      parts.push({ shape: 'box', box: { x, y, w: barW, h: nodeH }, pick: pathPick(n.path), ...(drill ? { drill } : {}) });
+    });
+    if (shown.length < col.length) text(ctx, `+${col.length - shown.length} more`, x, y0 + shown.length * nodeH + small * 1.1, opt(small * 0.9, { color: '#8c8c8c' }));
+    from = next;
   });
   return out();
 }

@@ -5,7 +5,7 @@
 // PowerPoint files as their own charts, with the workbook embedded for their Edit Data.
 
 import { Workbook, type Sheet } from './workbook';
-import { Chart, ChartKind, SeriesData, chartData, chartFromRange, newChartId, mapChartRefs, isXY } from './chart';
+import { Chart, ChartKind, SeriesData, chartData, chartFromRange, newChartId, mapChartRefs, isXY, isLevelled } from './chart';
 import { MAX_COLS } from './refs';
 import { renameSheetInFormula } from './formula';
 
@@ -91,7 +91,7 @@ export function sampleCells(kind: ChartKind): string[][] {
       ['PdCl₂', '41', '410'],
     ];
   }
-  if (kind === 'sankey') {
+  if (isLevelled(kind)) {
     return [
       ['Ring', 'Size', 'Heterocycle', 'Drugs'],
       ['Aromatic', '6-membered', 'Pyridine', '54'], ['Aromatic', '6-membered', 'Pyrimidine', '13'], ['Aromatic', '5-membered', 'Imidazole', '15'],
@@ -125,7 +125,7 @@ export function newChartBox(kind: ChartKind, w = 360, h = 216): ChartBox {
   chart.h = Math.round(h * PX_PER_PT);
   if (kind === 'histogram') chart.y = { ...chart.y, title: 'Count' };
   else if (kind === 'combo') { chart.y = { ...chart.y, title: 'Yield (%)' }; chart.y2 = { title: 'TON' }; }
-  else if (kind !== 'pie' && !isXY(kind) && kind !== 'radar' && kind !== 'sankey' && !chart.y.title) chart.y = { ...chart.y, title: '%' };
+  else if (kind !== 'pie' && !isXY(kind) && kind !== 'radar' && !isLevelled(kind) && !chart.y.title) chart.y = { ...chart.y, title: '%' };
   return { chart, cells };
 }
 

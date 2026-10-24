@@ -1,15 +1,15 @@
 // Dashboards: a sheet of tiles (charts, headline numbers, tables, slicers, galleries of
 // structures, notes) laid out on a grid and fed by the workbook's tables. Clicking values in a
 // slicer filters every tile fed by the same table, as PowerBI's slicers do, and so does clicking a
-// bar, a slice or a Sankey node or band of a chart (the chart itself shows what was picked); the
-// cells themselves are never changed.
+// bar, a slice, a Sankey node or band, a treemap's box or a decomposition tree's node (the chart
+// itself shows what was picked); the cells themselves are never changed.
 
 import type { Sheet, Workbook } from './workbook';
 import type { Range } from './refs';
 import { inRange } from './refs';
 import type { Value } from './values';
 import { isError } from './values';
-import { Chart, ChartPick, SeriesData, readRef, refText, mapChartRefs, sankeyOfColumns, toLabel } from './chart';
+import { Chart, ChartPick, SeriesData, readRef, refText, mapChartRefs, levelsOfColumns, toLabel } from './chart';
 import { adjustFormula, renameSheetInFormula, SheetChange } from './formula';
 
 /** Where a tile's rows come from: a table by name (it grows with the table), or a block of cells with a header row. */
@@ -325,11 +325,14 @@ export function chartOfColumns(res: Resolved, kind: Chart['kind'], x: string | u
   };
 }
 
-/** A Sankey chart of a source: its level columns left to right, and a column of amounts (unset: each row counts once). */
-export function sankeyOfSource(res: Resolved, levels: string[], value: string | undefined, id: number): Chart {
+/**
+ * A chart of levels (Sankey, treemap or decomposition tree) of a source: its level columns left to
+ * right, and a column of amounts (unset: each row counts once).
+ */
+export function levelsOfSource(res: Resolved, levels: string[], value: string | undefined, id: number, kind: Chart['kind'] = 'sankey'): Chart {
   const first = res.range.r1 + 1, last = Math.max(first, res.rows[res.rows.length - 1] ?? first);
   const cols = levels.map((n) => columnOf(res, n)).filter((c): c is number => c !== null);
-  return { ...sankeyOfColumns(res.sheet.name, res.range.r1, first, last, cols, columnOf(res, value)), id, w: 480, h: 290 };
+  return { ...levelsOfColumns(res.sheet.name, res.range.r1, first, last, cols, columnOf(res, value), kind), id, w: 480, h: 290 };
 }
 
 // ---------------------------------------------------------------- keeping references right

@@ -14,7 +14,7 @@ import { chartBoxData } from '../render/chart-box-paint';
 import type { Range } from '../sheet/refs';
 
 const KINDS = Object.keys(CHART_NAMES) as ChartKind[];
-const KIND_ICONS: Record<ChartKind, string> = { scatter: '⁘', line: '⟋', column: '▥', bar: '☰', area: '◭', pie: '◔', combo: '◧', histogram: '▇', box: '⊟', bubble: '◯', radar: '✳', sankey: '⫘' };
+const KIND_ICONS: Record<ChartKind, string> = { scatter: '⁘', line: '⟋', column: '▥', bar: '☰', area: '◭', pie: '◔', combo: '◧', histogram: '▇', box: '⊟', bubble: '◯', radar: '✳', sankey: '⫘', treemap: '▦', decomp: '⊢' };
 
 /** What the window gave back: the chart changed, the chart to be deleted, or nothing (Cancel). */
 export type ChartEdit = ChartBox | 'delete' | null;

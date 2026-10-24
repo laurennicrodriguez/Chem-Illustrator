@@ -15,7 +15,7 @@ import { chemPieces, showsChem } from '../sheet/cell-text';
 import { DEFAULT_COL_W, DEFAULT_ROW_H, STRUCTURE_SCALE, STRUCTURE_PAD, MAX_AUTO_ROW, structureHeight, structurePlace } from '../sheet/layout';
 import { formulaRefs, normalizeFormula } from '../sheet/formula';
 import { Chart, chartData } from '../sheet/chart';
-import { drawChart, ChartHits, Box } from '../render/chart-draw';
+import { drawChart, partHit, ChartHits, Box } from '../render/chart-draw';
 import { DashboardView } from './dashboard-view';
 import { newDashboard, Tile } from '../sheet/dashboard';
 import { Validation, passes, invalidCells } from '../sheet/validation';
@@ -174,7 +174,7 @@ type Drag =
   | { kind: 'point'; pointer: number; start: Cursor }
   | { kind: 'split'; pointer: number; axis: 'row' | 'col' }
   | { kind: 'break'; pointer: number; axis: 'row' | 'col'; from: number }
-  | { kind: 'chart'; pointer: number; id: number; how: 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | 'label'; series?: number; x0: number; y0: number; orig: Chart; moved: boolean }
+  | { kind: 'chart'; pointer: number; id: number; how: 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | 'label'; series?: number; x0: number; y0: number; orig: Chart; moved: boolean; picked?: boolean }
   | { kind: 'object'; pointer: number; id: number; how: Handle; x0: number; y0: number; orig: SheetObject; moved: boolean };
 
 type Handle = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw' | 'start' | 'end';
@@ -877,6 +877,18 @@ export class SheetView {
       return { chart: c, how: 'move' };
     }
     return null;
+  }
+
+  /** A click on a treemap's box (or its trail back up), or a decomposition tree's node: drill or expand to where it leads. */
+  private chartPartClick(c: Chart, x: number, y: number): void {
+    const hits = this.chartCache.get(c.id)?.hits;
+    if (!hits) return;
+    const b = this.chartBox(c);
+    const part = partHit(hits, (x - b.x) / this.zoom, (y - b.y) / this.zoom);
+    if (!part?.drill) return;
+    const { path: _was, ...rest } = c;
+    const tree = c.kind === 'decomp';
+    this.replaceChart(part.drill.length ? { ...rest, path: part.drill } : rest, tree ? 'Expand tree' : part.drill.length > (c.path?.length ?? 0) ? 'Drill down' : 'Drill up');
   }
 
   private dragChart(d: Extract<Drag, { kind: 'chart' }>, x: number, y: number): void {
@@ -2974,8 +2986,10 @@ export class SheetView {
       this.commitEdit();
       this.scroller.focus({ preventScroll: true });
       this.scroller.setPointerCapture(e.pointerId);
+      // a click on a treemap or decomposition tree already picked drills into it or expands it
+      const picked = onChart.chart.id === this.chartSel;
       this.pickChart(onChart.chart.id);
-      this.drag = { kind: 'chart', pointer: e.pointerId, id: onChart.chart.id, how: onChart.how, series: onChart.series, x0: x, y0: y, orig: onChart.chart, moved: false };
+      this.drag = { kind: 'chart', pointer: e.pointerId, id: onChart.chart.id, how: onChart.how, series: onChart.series, x0: x, y0: y, orig: onChart.chart, moved: false, picked };
       return;
     }
     if (this.chartSel !== null) this.pickChart(null);
@@ -3212,6 +3226,7 @@ export class SheetView {
       const p = this.chartPreview;
       this.chartPreview = null;
       if (p && d.moved) this.replaceChart(p, d.how === 'move' ? 'Move chart' : d.how === 'label' ? 'Move equation' : 'Resize chart');
+      else if (!d.moved && d.picked && d.how === 'move' && (d.orig.kind === 'treemap' || d.orig.kind === 'decomp')) this.chartPartClick(d.orig, d.x0, d.y0);
       this.render();
       return;
     }

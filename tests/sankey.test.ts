@@ -11,7 +11,7 @@ import { newTable } from '../src/sheet/table-styles';
 import { chartData, chartFromRange, CHART_NAMES, type SeriesData } from '../src/sheet/chart';
 import { sankeyFlows } from '../src/sheet/sankey';
 import {
-  Dashboard, KpiTile, ChartTile, newDashboard, resolveSource, kpiValue, filterMask, pickMask, unfiltered, filtered, sankeyOfSource, chartOfColumns, groupSeries,
+  Dashboard, KpiTile, ChartTile, newDashboard, resolveSource, kpiValue, filterMask, pickMask, unfiltered, filtered, levelsOfSource, chartOfColumns, groupSeries,
 } from '../src/sheet/dashboard';
 import { drawChart, partAt } from '../src/render/chart-draw';
 import { VectorContext } from '../src/render/vector';
@@ -106,7 +106,7 @@ describe('picking parts of dashboard charts', () => {
   const kpi = (): KpiTile => ({ id: 201, kind: 'kpi', x: 0, y: 0, w: 3, h: 2, source: { table: 'Drugs1' }, column: 'Drugs', agg: 'sum' });
   const flowTile = (wb: Workbook, pick?: ChartTile['pick']): ChartTile => {
     const res = resolveSource(wb, { table: 'Drugs1' })!;
-    return { id: 202, kind: 'chart', x: 3, y: 0, w: 9, h: 6, chart: sankeyOfSource(res, ['Aromaticity', 'Ring size', 'Heterocycle'], 'Drugs', 300), ...(pick ? { pick } : {}) };
+    return { id: 202, kind: 'chart', x: 3, y: 0, w: 9, h: 6, chart: levelsOfSource(res, ['Aromaticity', 'Ring size', 'Heterocycle'], 'Drugs', 300), ...(pick ? { pick } : {}) };
   };
   const dash = (...tiles: Dashboard['tiles']): Dashboard => ({ ...newDashboard(), tiles });
 
