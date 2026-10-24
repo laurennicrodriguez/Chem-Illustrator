@@ -5,6 +5,7 @@
 // published descriptions ([MS-CFB], [MS-OLEDS]) and the Office Open XML standard.
 
 import { cfbClass, cfbStreams, isCfb, writeCfb } from './cfb';
+import { isCdx } from './cdx';
 import { dataUrl, fromDataUrl } from '../render/images';
 import type { Embedded } from '../document/document';
 
@@ -64,6 +65,23 @@ export function readEmbedded(prog: string, bytes: Uint8Array, path: string, relT
   const inside = pkg ? null : fileInside(e);
   if (inside && e.prog === 'Package') e.name = inside.name;
   return icon ? { ...e, icon: true } : e;
+}
+
+/** Whether an object is ChemDraw's (by the program name Word keeps with it). */
+export function isChemDraw(e: Pick<Embedded, 'prog'> | string): boolean {
+  return /^ChemDraw/i.test(typeof e === 'string' ? e : e.prog);
+}
+
+/** The CDX drawing inside a ChemDraw object's part (the CDX itself, or a compound file holding it); null when there is none. */
+export function chemdrawCdx(bin: Uint8Array): Uint8Array | null {
+  try {
+    if (isCdx(bin)) return bin;
+    if (!isCfb(bin)) return null;
+    const streams = cfbStreams(bin);
+    return [...streams.values()].find(isCdx) ?? streams.get('CONTENTS') ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** The part to write in a Word file: its bytes, the relationship type and content type. */

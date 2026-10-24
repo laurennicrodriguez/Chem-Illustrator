@@ -145,6 +145,8 @@ export interface Settings {
   updateChannel: UpdateChannel;
   /** Names the name reader can't read are looked up on PubChem (Edit > Settings). */
   pubchemNames: boolean;
+  /** Redraw ChemDraw objects in Word files here as the file opens (off: keep them as they came until opened to be changed). */
+  convertChemDraw: boolean;
   /** The Windows app has offered to open the chemistry file types (once, at its first start). */
   fileTypesOffered: boolean;
   /** The Windows app has registered its drawings as objects Word can send back to edit (once, at its first start). */
@@ -180,7 +182,7 @@ export const DEFAULT_SETTINGS: Settings = {
   docPins: [],
   docRuler: false,
   sheetFormulaBar: true,
-  updateCheck: true, updateChannel: 'latest', pubchemNames: true, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], recentSymbols: [], highlightLooks: [], quickParts: [], docDesign: null,
+  updateCheck: true, updateChannel: 'latest', pubchemNames: true, convertChemDraw: false, fileTypesOffered: false, wordObjectsOffered: false, reviewName: '', skipVersion: null, recentFiles: [], recentSymbols: [], highlightLooks: [], quickParts: [], docDesign: null,
   slideRuler: false,
   slideGrid: false,
   rulerUnits: typeof navigator !== 'undefined' && /^[a-z]{2,3}-(US|LR|MM)\b/i.test(navigator.language) ? 'in' : 'cm',
@@ -200,7 +202,7 @@ export function parseSettings(text: string | null | undefined): Settings {
   if (!raw || typeof raw !== 'object') return s;
   const r = raw as Record<string, unknown>;
   if (r.hotkeys && typeof r.hotkeys === 'object' && !Array.isArray(r.hotkeys)) s.hotkeys = r.hotkeys as KeyOverrides;
-  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'stereoItalic', 'boldNumbers', 'autoLinks', 'linkCtrlClick', 'spellCheck', 'scrollBars', 'ribbonCollapsed', 'welcomed', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'groupOutline', 'rerouteArrows', 'superscriptR', 'updateCheck', 'pubchemNames', 'fileTypesOffered', 'wordObjectsOffered'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
+  for (const k of ['keepHotspotOnBond', 'fixedLength', 'fixedAngles', 'devTools', 'showRoles', 'chemTyping', 'stereoItalic', 'boldNumbers', 'autoLinks', 'linkCtrlClick', 'spellCheck', 'scrollBars', 'ribbonCollapsed', 'welcomed', 'groupTips', 'askWholeDrawing', 'darkPage', 'circledCharges', 'textToAtom', 'groupOutline', 'rerouteArrows', 'superscriptR', 'updateCheck', 'pubchemNames', 'convertChemDraw', 'fileTypesOffered', 'wordObjectsOffered'] as const) if (typeof r[k] === 'boolean') s[k] = r[k] as boolean;
   s.orient = parseOrient(r.orient);
   if (r.page === null) s.page = null;
   else if (r.page && typeof r.page === 'object') {

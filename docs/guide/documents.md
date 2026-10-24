@@ -150,7 +150,7 @@ Double-click the object (or right-click ▸ **Open Object**) to open the file in
 
 To embed cells from Excel, copy them in Excel and choose **Edit** ▸ **Paste as Object** (or right-click ▸ Paste as Object) in the Windows app, as Word's Paste Special does.
 
-Objects are saved in Word files as Word's own embedded objects, so double-clicking one in Word opens it in its program too (Office files as Word keeps them; other files as Windows packages). Objects in Word files you open here are kept as they are and saved back unchanged; ChemDraw objects still become structures. Objects stay in line with the text.
+Objects are saved in Word files as Word's own embedded objects, so double-clicking one in Word opens it in its program too (Office files as Word keeps them; other files as Windows packages). Objects in Word files you open here are kept as they are and saved back unchanged. ChemDraw objects are kept the same way, with the look they had in Word, until you double-click one (or right-click ▸ **Edit Drawing**): then it becomes a structure here that you can change. To have every ChemDraw object redrawn here as the file opens instead, turn on **Settings ▸ General ▸ Redraw ChemDraw objects in Word files as they open**. Objects stay in line with the text.
 
 ## Captions and cross-references
 
@@ -397,7 +397,7 @@ Saving, printing and PDFs always use the pages of Print Layout, whatever view is
 - **Save** (Ctrl+S) writes a Word file (.docx). In Word, styles are Word's own, lists are Word lists, and captions, cross-references, compound numbers, page numbers, the table of contents, the table of figures, index entries, the index, marked citations and the table of authorities are Word fields, form fields are Word's legacy form fields, Restrict Editing is Word's own protection, and footnotes and endnotes are Word's own. Tracked changes and equations are Word's own too, so they keep working there.
 - Structures show as pictures in Word. Open the file here again and they are editable drawings, even after Word has saved it.
 - The free fonts that come with the app are saved inside the file when you use them.
-- Opening a Word file made in Word brings in its text, styles, lists, tables, pictures, captions and cross-references. ChemDraw drawings embedded in it become editable structures. Anything left out is listed in a note.
+- Opening a Word file made in Word brings in its text, styles, lists, tables, pictures, captions and cross-references. ChemDraw drawings embedded in it keep their look and become editable structures when you double-click them. Anything left out is listed in a note.
 - **File ▸ Save As…** can also write **Rich Text (.rtf)**, which every word processor opens, or **OpenDocument Text (.odt)** for LibreOffice and Google Docs. Both keep the text and its look, headings, lists, tables, pictures, footnotes and the page size. Structures go as pictures. Live fields, citations, comments and tracked changes are kept only as their text (the save note says so); save as .docx to keep everything.
 - **File ▸ Open** opens .rtf, .odt and old Word files (.doc, Word 97–2003) too. An old .doc brings in its text, formatting, headings, tables, links and footnotes; its pictures are left out (a note says so; open and save it in Word as .docx to keep them). Saving it again writes a .docx.
 - **File ▸ Export PDF…** saves the pages exactly as they look on screen, with sharp structures, text and equations.

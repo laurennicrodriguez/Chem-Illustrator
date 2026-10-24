@@ -13,6 +13,8 @@ import { listIndent, soleTable } from '../src/io/docx-write';
 import { cfbStreams, isCfb } from '../src/io/cfb';
 import { cdxmlToCdx, cdxToCdxml } from '../src/io/cdx';
 import { readCdxml } from '../src/io/cdxml';
+import { chemdrawCdx, isChemDraw } from '../src/io/ole-object';
+import { fromDataUrl } from '../src/render/images';
 import {
   COMPOUND, newDocument, runStyleOf, paraFromStyle, captionRuns, objectRun, documentPlainText, fieldTexts, type DocText,
 } from '../src/document/document';
@@ -396,7 +398,7 @@ describe('opening files made by Word', () => {
     expect(Object.values(doc.objects)[0]).toMatchObject({ kind: 'picture', w: 100, h: 50, px: { w: 2, h: 1 } });
   });
 
-  it('turns a ChemDraw object into a structure, and keeps other embedded objects whole with their pictures', async () => {
+  const chemdrawWord = () => {
     const cdx = cdxmlToCdx('<CDXML><page id="1"><fragment id="2"><n id="3" p="10 20"/><n id="4" p="24.4 20" Element="8"/><b id="5" B="3" E="4"/></fragment></page></CDXML>');
     const ole = makeCfb([['\u0001CompObj', new Uint8Array(40)], ['CONTENTS', cdx]]);
     const obj = (prog: string, rel: string) => `<w:p><w:r><w:object><v:shape style="width:60pt;height:30pt"><v:imagedata r:id="rIdE"/></v:shape><o:OLEObject Type="Embed" ProgID="${prog}" r:id="${rel}"/></w:object></w:r></w:p>`;
@@ -404,8 +406,28 @@ describe('opening files made by Word', () => {
       rels: [['rIdE', 'image', 'media/image1.png'], ['rIdO', 'oleObject', 'embeddings/oleObject1.bin'], ['rIdX', 'oleObject', 'embeddings/oleObject2.bin']],
       extra: { 'word/media/image1.png': PNG, 'word/embeddings/oleObject1.bin': ole, 'word/embeddings/oleObject2.bin': new Uint8Array(600) },
     });
+    return { cdx, ole, file };
+  };
+
+  it('keeps a ChemDraw object as it came (its picture and object) until it is opened to be changed', async () => {
+    const { cdx, ole, file } = chemdrawWord();
+    let asked = false;
+    const { doc } = await readDocx(file, { chemdraw: () => { asked = true; return null; }, drawingSize: () => ({ w: 30, h: 15 }) });
+    expect(asked).toBe(false);
+    const [chem, other] = Object.values(doc.objects);
+    expect(chem).toMatchObject({ kind: 'picture', w: 60, h: 30, embed: { prog: 'ChemDraw.Document.6.0', part: 'ole', ext: 'bin' } });
+    expect(other).toMatchObject({ kind: 'picture', embed: { prog: 'Excel.Sheet.12' } });
+    // the drawing to edit is still in it
+    expect(chem.kind === 'picture' && chem.embed && isChemDraw(chem.embed)).toBe(true);
+    expect(chem.kind === 'picture' && chem.embed && chemdrawCdx(fromDataUrl(chem.embed.data).bytes)).toEqual(cdx);
+    expect(chem.kind === 'picture' && chem.embed && fromDataUrl(chem.embed.data).bytes).toEqual(ole);
+  });
+
+  it('turns ChemDraw objects into structures as the file opens when asked, and keeps other embedded objects whole', async () => {
+    const { cdx, file } = chemdrawWord();
     let given: Uint8Array | null = null;
     const { doc, warnings } = await readDocx(file, {
+      convertChemDraw: true,
       chemdraw: (b) => { given = b; return readCdxml(cdxToCdxml(b)).doc.contents(); },
       drawingSize: () => ({ w: 30, h: 15 }),
     });

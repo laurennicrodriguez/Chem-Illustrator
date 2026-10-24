@@ -45,10 +45,11 @@ import { ask } from './ask';
 import { askEquation } from './equation-dialog';
 import { ReferencesDialog, chooseReferences } from './references-dialog';
 import { citeSuper, formatOf, type Reference } from '../document/references';
-import { dataUrl, imageSize } from '../render/images';
+import { dataUrl, fromDataUrl, imageSize } from '../render/images';
+import { shownSize } from '../document/doc-layout';
 import { editChart, chartPoints } from './chart-editor';
 import { pictureFormat } from './picture-dialog';
-import { embedFile, fileInside, objectKind, withFile } from '../io/ole-object';
+import { chemdrawCdx, embedFile, fileInside, isChemDraw, objectKind, withFile } from '../io/ole-object';
 import { showsContents, type ObjectPicture } from '../render/object-picture';
 import { newChartBox, sizedBox } from '../sheet/chart-box';
 import { chartBoxPng } from '../render/chart-box-paint';
@@ -119,6 +120,8 @@ export interface DocModeHost {
    * `changed` gets the file each time it is saved there. Resolves to a message when it can't.
    */
   openObjectFile?(file: { name: string; bytes: Uint8Array }, changed: (bytes: Uint8Array) => void): Promise<string | null>;
+  /** A ChemDraw drawing (CDX data) as a drawing in the document's style, with its own width in points; null when it can't be read. */
+  chemdrawDrawing?(cdx: Uint8Array, style: DocStyle): { contents: Contents; w: number } | null;
   /** Another program's object copied to the clipboard (Excel cells, for one), with its picture (the Windows app). */
   clipboardObject?(): Promise<{ embed: Embedded; picture: { bytes: Uint8Array; mime: string } | null } | null>;
   /** An empty ACS-style table as a drawing. */
@@ -1372,7 +1375,8 @@ export class DocumentMode {
       const po = this.file?.t.objects[picked];
       if (po?.kind === 'picture' && po.chart) cmd('Edit Chart…', 'edit-chart');
       if (po?.kind === 'picture' && po.embed) {
-        cmd('Open Object', 'open-object', `Open the ${objectKind(po.embed)} in its own program; save it there to change it here`);
+        if (isChemDraw(po.embed)) cmd('Edit Drawing', 'open-object', 'Turn the ChemDraw object into a drawing here and edit it (it is kept as it came until then)');
+        else cmd('Open Object', 'open-object', `Open the ${objectKind(po.embed)} in its own program; save it there to change it here`);
         item(po.embed.icon ? 'Show Contents' : 'Display as Icon', () => void this.embeddedIcon(picked, !po.embed?.icon), po.embed.icon ? 'Show what the object holds instead of its icon' : 'Show an icon with the file\'s name instead of what it holds');
       }
       if (po?.kind === 'picture' && !po.chart && !po.embed) cmd('Picture Format…', 'picture-format', 'Brightness, contrast, sharpen, recolour, transparency, Remove Background, crop to a shape or proportions');
@@ -3511,11 +3515,37 @@ export class DocumentMode {
     const f = this.file!;
     const o = f.t.objects[id];
     if (o?.kind !== 'picture' || !o.embed) return;
+    if (isChemDraw(o.embed) && this.chemdrawToDrawing(id)) { this.editFigure(id); return; }
     const file = fileInside(o.embed);
     if (!file) { this.host.flash(`This ${objectKind(o.embed)} can't be opened here; it is kept as it is, and Word opens it.`, 8000); return; }
     if (!this.host.openObjectFile) { this.host.flash('Objects open in their programs from the app.'); return; }
     const err = await this.host.openObjectFile(file, (bytes) => void this.objectSaved(f, id, file.name, bytes));
     if (err) this.host.flash(err, 8000);
+  }
+
+  /**
+   * A ChemDraw object from a Word file, kept as it came until now, made a drawing here at the
+   * size it was shown (one step to undo). False when its drawing can't be read.
+   */
+  private chemdrawToDrawing(id: number): boolean {
+    const f = this.file!;
+    const o = f.t.objects[id];
+    if (o?.kind !== 'picture' || !o.embed || !this.host.chemdrawDrawing) return false;
+    let got: { contents: Contents; w: number } | null = null;
+    try {
+      const cdx = chemdrawCdx(fromDataUrl(o.embed.data).bytes);
+      got = cdx ? this.host.chemdrawDrawing(cdx, f.t.drawingStyle) : null;
+    } catch {
+      got = null;
+    }
+    if (!got) { this.host.flash('The ChemDraw drawing in this object can\'t be read; it is kept as it is, and Word opens it.', 8000); return false; }
+    const textW = f.layout().textW;
+    const shown = shownSize({ w: o.w, h: o.h }, o.scale ?? 1, textW);
+    const natural = shownSize({ w: got.w, h: 0 }, 1, textW);
+    const scale = got.w > 0 && Math.abs(natural.w - shown.w) > 0.01 * shown.w ? Math.round((shown.w / got.w) * 1e4) / 1e4 : undefined;
+    const next: DocObject = { kind: 'drawing', contents: got.contents, ...(scale ? { scale } : {}), ...(o.look ? { look: o.look } : {}), ...(o.float ? { float: o.float } : {}), ...(o.alt ? { alt: o.alt } : {}) };
+    f.ed.update({ ...f.t, objects: { ...f.t.objects, [id]: next } } as DocText, 'Edit ChemDraw object');
+    return true;
   }
 
   /** An embedded object's file was saved in its program: take it back, with a new picture. */

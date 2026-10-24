@@ -5,7 +5,7 @@
 // picture, each table as made here (unless its text was changed in Word). Files from Word come
 // in with their text and its formatting (worked out through the named styles, as Word does),
 // lists, tables, pictures, captions and cross-references, page setup, header, footer and page
-// numbers; ChemDraw objects in them become structures that can be edited here. What has no
+// numbers; ChemDraw objects in them keep their look and become structures when opened. What has no
 // place here yet is noted in warnings (shown to the person, never refused). Citations and the
 // bibliography saved here come back live (the references are in our own part), and so do
 // Zotero's, Mendeley's and EndNote's (their items read into the references: live-cites.ts).
@@ -37,9 +37,7 @@ import {
 import { parseFieldInstr, type DocProps } from '../document/fields';
 import { shownSize } from '../document/doc-layout';
 import { coveringCell, layoutTable } from '../table';
-import { cfbStreams, isCfb } from './cfb';
-import { readEmbedded } from './ole-object';
-import { isCdx } from './cdx';
+import { chemdrawCdx, isChemDraw, readEmbedded } from './ole-object';
 import { cmtIds, cmtString, type CommentNote, type CommentThread } from '../document/comments';
 import { BIB_MARK, CHART_NAME, CITE_FIELD, WORD_HIGHLIGHTS, DOCX_REL, W14_NS, W15_NS, W16CID_NS, W16CEX_NS, fromWordDate, DRAWING_NAME, FORMULA_STYLE, MODEL_NS, TABLE_NAME, W_NS, type DocxModel } from './docx';
 import { cleanRef, type Reference } from '../document/references';
@@ -59,6 +57,12 @@ import { contentsAlt } from '../accessibility';
 export interface DocxReadDeps {
   /** A ChemDraw drawing (CDX data) as a drawing in the document's style; null when it can't be read. */
   chemdraw?(cdx: Uint8Array, style: DocStyle): Contents | null;
+  /**
+   * Turn ChemDraw objects into drawings as the file opens (redrawn here, in the document's
+   * drawing style). Otherwise they are kept as they came, with Word's picture of them, and
+   * become drawings only when opened to be changed.
+   */
+  convertChemDraw?: boolean;
   /** A drawing saved as CDXML (from inside a picture copied out of Chem Illustrator) in the document's style. */
   cdxml?(text: string, style: DocStyle): Contents | null;
   /** A drawing's own size in points (so it keeps the size it had in Word). */
@@ -1612,7 +1616,7 @@ class DocxReader {
     this.emitObject(ctx, { kind: 'picture', src: dataUrl(bytes, mime), w: round(shown.w), h: round(shown.h), px, ...more, ...(look ? { look } : {}), ...(float ? { float } : {}) }, r);
   }
 
-  /** Older (VML) pictures, and embedded objects with their picture: ChemDraw's become structures. */
+  /** Older (VML) pictures, and embedded objects with their picture (ChemDraw's too, until opened to be changed). */
   private vml(el: Element, r: RProps, ctx: Ctx, object: Element | null): void {
     const shape = Array.from(el.getElementsByTagNameNS('*', 'shape'))[0];
     const img = shape ? Array.from(shape.getElementsByTagNameNS('*', 'imagedata'))[0] : undefined;
@@ -1621,7 +1625,8 @@ class DocxReader {
     if (object) {
       const ole = Array.from(object.getElementsByTagNameNS('*', 'OLEObject'))[0];
       const prog = ole?.getAttribute('ProgID') ?? '';
-      if (/^ChemDraw/i.test(prog) && this.chemdraw(ole, shown, r, ctx)) return;
+      // a ChemDraw object is kept with Word's picture of it unless asked to redraw it here (or it has no picture)
+      if (isChemDraw(prog) && (this.deps.convertChemDraw || !img) && this.chemdraw(ole, shown, r, ctx)) return;
       // anything else is kept whole with its picture, and goes back into the Word file as it came
       embed = ole && img ? this.embedded(ole, prog) : null;
       if (ole && !embed) this.warn('ole');
@@ -1649,16 +1654,7 @@ class DocxReader {
     const path = this.relTarget(rAttr(ole, 'id'));
     const bin = path ? this.pkg.bytes(path) : null;
     if (!bin) return false;
-    let cdx: Uint8Array | null = null;
-    try {
-      if (isCdx(bin)) cdx = bin;
-      else if (isCfb(bin)) {
-        const streams = cfbStreams(bin);
-        cdx = [...streams.values()].find(isCdx) ?? streams.get('CONTENTS') ?? null;
-      }
-    } catch {
-      return false;
-    }
+    const cdx = chemdrawCdx(bin);
     if (!cdx) return false;
     let contents: Contents | null = null;
     try {
