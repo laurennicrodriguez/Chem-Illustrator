@@ -984,6 +984,7 @@ class CdxmlWriter {
     for (const f of new Set(this.fragOfAtom.values())) {
       const gs = kids(f).filter((g) => g.nodeName === 'graphic');
       const last = gs.map((g) => ['Oval', 'Orbital'].includes(g.getAttribute('GraphicType') ?? '')).lastIndexOf(true);
+      if (last < 0) continue;
       const low = gs.slice(0, last).filter((g) => g.getAttribute('GraphicType') === 'Symbol');
       if (!low.length) continue;
       const after = gs[last].nextSibling;

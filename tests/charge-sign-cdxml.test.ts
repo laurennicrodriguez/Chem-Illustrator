@@ -50,4 +50,16 @@ describe('charge signs in CDXML', () => {
     const out = writeCdxml(doc);
     expect(out.indexOf('SymbolType="Plus"')).toBeGreaterThan(out.indexOf('GraphicType="Orbital"'));
   });
+
+  it('saves a fragment with charge signs but no ring circle', () => {
+    // two signs and no circle or orbital used to crash the save ("reading 'nextSibling'")
+    const text = file('Chem Illustrator', '270.85 150.63 265.09 150.63')
+      .replace('<n id="88" p="274.83 131.94"/>', '<n id="88" p="274.83 131.94" Charge="1"/>')
+      .replace(circle, '<graphic id="103" GraphicType="Symbol" SymbolType="Plus" BoundingBox="274.83 126.18 274.83 131.94"><represent attribute="Charge" object="88"/></graphic>');
+    const { doc } = readCdxml(text);
+    const s = [...doc.shapes.values()].find((x) => x.symbol === 'Plus')!;
+    doc.edit('Move', () => doc.updateShape(s.id, { x1: s.x1 + 1, x2: s.x2 + 1 }));
+    const out = writeCdxml(doc);
+    expect(out.split('SymbolType="Plus"').length - 1).toBe(2);
+  });
 });
