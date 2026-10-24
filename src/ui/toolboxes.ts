@@ -5,7 +5,7 @@
 
 import { showContextMenu, topMenuEntry, type MenuItem } from './context-menu';
 import { commandIcon } from './command-icons';
-import { listToGrid, parseGrid, type Grid } from './toolbox-grid';
+import { listToGrid, parseGrid, withoutGone, type Grid } from './toolbox-grid';
 
 export type Dock = 'left' | 'right' | 'top' | 'bottom' | 'float';
 export const DOCKS: Dock[] = ['left', 'right', 'top', 'bottom', 'float'];
@@ -236,6 +236,28 @@ export function parseToolboxes(raw: unknown): ToolboxState {
 export function boxItems(st: ToolboxState, id: string, given: readonly string[] = []): string[] {
   if (id === 'custom') return st.custom;
   return st.items?.[id] ?? (isOwnBox(id) ? [] : [...given]);
+}
+
+/**
+ * The toolboxes without buttons, palettes and fly-out tools the app no longer has (a palette taken
+ * off the tool bar, a template hidden): kept in old settings, they would show as empty cells.
+ * `item` says whether a toolbox button is still there, `tool` whether a fly-out still has a tool.
+ */
+export function withoutGoneItems(st: ToolboxState, item: (k: string) => boolean, tool: (palette: string, name: string) => boolean): ToolboxState {
+  const keep = (k: string) => k === 'sep' || item(k);
+  const lists = (by: Record<string, string[]> | undefined, ok: (id: string, k: string) => boolean) =>
+    by && Object.fromEntries(Object.entries(by).map(([id, l]) => [id, l.filter((k) => ok(id, k))]));
+  const grids = (by: Record<string, Grid> | undefined, ok: (id: string, k: string) => boolean) =>
+    by && Object.fromEntries(Object.entries(by).map(([id, g]) => [id, withoutGone(g, (k) => ok(id, k))]));
+  // a fly-out left with nothing (its palette gone) goes back to what it comes with
+  const some = <T extends string[] | Grid>(by: Record<string, T> | undefined) =>
+    by && Object.fromEntries(Object.entries(by).filter(([, v]) => (Array.isArray(v) ? v : v.cells).some((k) => k)));
+  const out: ToolboxState = { ...st, custom: st.custom.filter(keep) };
+  if (st.items) out.items = lists(st.items, (_, k) => keep(k));
+  if (st.grids) out.grids = grids(st.grids, (_, k) => keep(k));
+  if (st.flyouts) out.flyouts = some(lists(st.flyouts, tool));
+  if (st.flyGrids) out.flyGrids = some(grids(st.flyGrids, tool));
+  return out;
 }
 
 /** A toolbox's buttons changed. */
