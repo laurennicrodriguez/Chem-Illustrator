@@ -2,6 +2,7 @@
 // pan. The editor changes the document and asks for a repaint; hover and drawing previews
 // only repaint the overlay layer.
 
+import { installPenAndTouch } from './touch';
 import { Doc, Atom, Bond, BondDisplay, PARTIAL, Arrow, Shape, Caption, isMetalAtom, applyBase, captionBase, stripBase, type StepRoles, type Justify, type HighlightStyle, type Entity } from '../model';
 import { CaptionEditor } from '../ui/caption-editor';
 import { followLink, linkTip } from '../ui/links-ui';
@@ -374,6 +375,8 @@ export class Editor {
 
   constructor(public doc: Doc, public r: Renderer, public host: HTMLElement) {
     const el = r.overlay;
+    // tablets: fingers pan and pinch, a long press opens the menu (before the editor's own listeners)
+    installPenAndTouch({ overlay: el, view: r.view, requestScene: (ts) => this.requestScene(ts) });
     el.addEventListener('pointerdown', (e) => this.onDown(e));
     // pressing on the text being typed keeps the keys going to it
     el.addEventListener('mousedown', (e) => { if (this.captionEd?.hit(this.docPoint(e))) e.preventDefault(); });
